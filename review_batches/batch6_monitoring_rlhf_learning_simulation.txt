@@ -1,0 +1,2797 @@
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform (Auralyn — HIPAA/FDA multi-tenant SaaS, NYC urgent care).
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Do not be gentle. Be precise.
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+SUMMARY TABLE
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+Likely theater/scaffolding:
+Highest ROI fixes:
+Needs cross-file review confirmation:
+
+BATCH-SPECIFIC FOCUS:
+Review these files for production safety, false claims of self-improvement, unsafe autonomous behavior, weak monitoring assumptions, poor validation logic, and inability to prove correctness.
+
+======================================================================
+CODE BELOW — BEGIN REVIEW
+======================================================================
+
+=== AURALYN CODE REVIEW — BATCH 6: Monitoring, RLHF, Learning, Simulation ===
+Files: monitoring services, drift detection, RLHF/weight tuning, eval harness, simulation engines, autonomous loops
+Review focus: production safety, false claims of self-improvement, unsafe autonomous behavior, weak monitoring assumptions, poor validation, inability to prove correctness
+
+=================================================================================
+FILE: server/monitoring/alertEngine.ts
+=================================================================================
+/**
+ * server/monitoring/alertEngine.ts — Clinical system anomaly alert worker
+ *
+ * FIXES (Code Review Issue #25 — alert silent failure paths):
+ *
+ *   1. SLA handler errors were swallowed via .catch(() => {}).
+ *      A failing SLA breach handler was completely invisible to operators.
+ *      Fixed: errors are now logged with full context. handleSLABreach failures
+ *      do not crash the interval but are never silently dropped.
+ *
+ *   2. Static dedup key (lastAlertKey) suppressed ALL subsequent anomaly alerts
+ *      after the first one, for as long as the anomaly pattern remained the same.
+ *      An ongoing incident (sustained anomaly set) would alert once, then go silent.
+ *      Fixed: time-windowed dedup — the same anomaly key is suppressed only for
+ *      ALERT_DEDUP_WINDOW_MS (default 5 minutes). After that window, a heartbeat
+ *      alert fires to confirm the anomaly is still active, not silently resolved.
+ *      A cleared anomaly also fires a "recovered" alert so operators know when
+ *      conditions normalize.
+ *
+ *   3. Alert count is now per-anomaly-key, not a monotonic global counter.
+ *      This allows rate-limiting per incident type independently.
+ */
+
+import { detectAnomaly }       from "./anomalyDetector";
+import { sendPhysicianAlert }  from "../alerts/physicianAlertService";
+import { checkSLABreach, handleSLABreach } from "../sre/slaEngine";
+
+// ── Dedup window configuration ────────────────────────────────────────────────
+
+const ALERT_DEDUP_WINDOW_MS = parseInt(
+  process.env.ALERT_DEDUP_WINDOW_MS ?? String(5 * 60 * 1000),
+  10
+);
+
+// ── Alert state ───────────────────────────────────────────────────────────────
+
+interface AlertRecord {
+  key:           string;
+  firstAlertAt:  number;
+  lastAlertAt:   number;
+  alertCount:    number;
+}
+
+let alertTimer: ReturnType<typeof setInterval> | null = null;
+const activeAlerts = new Map<string, AlertRecord>();
+let totalAlertCount = 0;
+
+// ── Core handler ──────────────────────────────────────────────────────────────
+
+async function handleAnomalies(): Promise<void> {
+  const { anomalies, metrics, severity } = detectAnomaly();
+
+  // ── SLA breach check — errors logged, never swallowed (Issue #25 FIX #1) ──
+  const breach = checkSLABreach(metrics);
+  if (breach) {
+    try {
+      await handleSLABreach(breach, metrics);
+    } catch (err: any) {
+      // FIX: was .catch(() => {}) — now surfaced for operator visibility
+      console.error(
+        "[AlertEngine] SLA breach handler failed for breach:", breach,
+        "—", err?.message ?? err
+      );
+    }
+  }
+
+  // ── Anomaly dedup + heartbeat (Issue #25 FIX #2) ─────────────────────────
+
+  if (anomalies.length === 0) {
+    // Check if previously active alerts should be cleared
+    if (activeAlerts.size > 0) {
+      for (const [key] of activeAlerts) {
+        // Fire a recovery alert for each cleared incident
+        sendPhysicianAlert({
+          caseId:   `system-recovery-${key.slice(0, 12)}`,
+          priority: "HIGH",
+          reason:   `Anomaly resolved: ${key} | all metrics now within thresholds`,
+        }).catch((e: any) => {
+          console.error("[AlertEngine] Recovery alert failed:", e?.message);
+        });
+      }
+      activeAlerts.clear();
+    }
+    return;
+  }
+
+  const key      = anomalies.slice().sort().join(",");
+  const now      = Date.now();
+  const existing = activeAlerts.get(key);
+  const priority = severity === "CRITICAL" ? "CRITICAL" : "HIGH";
+
+  if (existing) {
+    const timeSinceLastAlert = now - existing.lastAlertAt;
+
+    // Suppress if within dedup window — anomaly already alerted recently
+    if (timeSinceLastAlert < ALERT_DEDUP_WINDOW_MS) return;
+
+    // Heartbeat alert: anomaly still active after dedup window — re-alert
+    existing.lastAlertAt = now;
+    existing.alertCount  += 1;
+    totalAlertCount++;
+
+    await sendPhysicianAlert({
+      caseId:   `system-alert-${key.slice(0, 8)}-${existing.alertCount}`,
+      priority,
+      reason: [
+        `[ONGOING] System anomalies still active (${Math.round(timeSinceLastAlert / 60000)}m): ${anomalies.join(", ")}`,
+        `avgLatency=${metrics.avgLatency.toFixed(0)}ms`,
+        `errorRate=${(metrics.errorRate * 100).toFixed(2)}%`,
+        `p95=${metrics.p95Latency.toFixed(0)}ms`,
+        `requests=${metrics.totalRequests}`,
+        `firstSeen=${new Date(existing.firstAlertAt).toISOString()}`,
+      ].join(" | "),
+    }).catch((e: any) => {
+      console.error("[AlertEngine] Heartbeat alert send failed:", e?.message);
+    });
+
+  } else {
+    // New anomaly — first alert
+    totalAlertCount++;
+    const record: AlertRecord = {
+      key,
+      firstAlertAt: now,
+      lastAlertAt:  now,
+      alertCount:   1,
+    };
+    activeAlerts.set(key, record);
+
+    await sendPhysicianAlert({
+      caseId:   `system-alert-${key.slice(0, 8)}-1`,
+      priority,
+      reason: [
+        `System anomalies detected: ${anomalies.join(", ")}`,
+        `avgLatency=${metrics.avgLatency.toFixed(0)}ms`,
+        `errorRate=${(metrics.errorRate * 100).toFixed(2)}%`,
+        `p95=${metrics.p95Latency.toFixed(0)}ms`,
+        `requests=${metrics.totalRequests}`,
+      ].join(" | "),
+    }).catch((e: any) => {
+      console.error("[AlertEngine] Alert send failed:", e?.message);
+    });
+  }
+}
+
+// ── Control ───────────────────────────────────────────────────────────────────
+
+export function startAlertEngine(intervalMs = 10_000): void {
+  if (alertTimer) return;
+  alertTimer = setInterval(() => {
+    handleAnomalies().catch((e) =>
+      console.error("[AlertEngine] handleAnomalies error:", e?.message)
+    );
+  }, intervalMs);
+  alertTimer.unref();
+  console.log(`[AlertEngine] Anomaly alert worker started (${intervalMs / 1000}s interval, dedup=${ALERT_DEDUP_WINDOW_MS / 1000}s)`);
+}
+
+export function stopAlertEngine(): void {
+  if (alertTimer) {
+    clearInterval(alertTimer);
+    alertTimer = null;
+  }
+}
+
+export function getAlertCount(): number {
+  return totalAlertCount;
+}
+
+export function getActiveAlerts(): { key: string; firstAlertAt: string; lastAlertAt: string; count: number }[] {
+  return [...activeAlerts.values()].map(a => ({
+    key:          a.key,
+    firstAlertAt: new Date(a.firstAlertAt).toISOString(),
+    lastAlertAt:  new Date(a.lastAlertAt).toISOString(),
+    count:        a.alertCount,
+  }));
+}
+
+
+=================================================================================
+FILE: server/monitoring/alertRules.ts
+=================================================================================
+import { sendSlackAlert, sendWhatsAppAlert } from "./alerts";
+
+export interface AlertRule {
+  id: string;
+  expr: string;
+  target: "slack" | "whatsapp" | "both";
+  createdAt: string;
+}
+
+const rules: AlertRule[] = [];
+
+export function addRule(rule: Omit<AlertRule, "id" | "createdAt">): AlertRule {
+  const entry: AlertRule = {
+    ...rule,
+    id: `rule-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+  };
+  rules.push(entry);
+  return entry;
+}
+
+export function getAlertRules(): AlertRule[] {
+  return [...rules];
+}
+
+export function clearRules(): void {
+  rules.splice(0);
+}
+
+export function removeRule(id: string): boolean {
+  const idx = rules.findIndex(r => r.id === id);
+  if (idx === -1) return false;
+  rules.splice(idx, 1);
+  return true;
+}
+
+export async function evalRules(metrics: Record<string, number>): Promise<string[]> {
+  const fired: string[] = [];
+  for (const rule of rules) {
+    try {
+      const keys = Object.keys(metrics);
+      const vals = Object.values(metrics);
+      const fn = new Function(...keys, `return !!(${rule.expr});`);
+      if (fn(...vals)) {
+        if (rule.target === "slack" || rule.target === "both") {
+          await sendSlackAlert(`Alert rule fired: ${rule.expr}`);
+        }
+        if (rule.target === "whatsapp" || rule.target === "both") {
+          await sendWhatsAppAlert(`Alert rule fired: ${rule.expr}`);
+        }
+        fired.push(rule.id);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return fired;
+}
+
+
+=================================================================================
+FILE: server/monitoring/alertBus.ts
+=================================================================================
+import { EventEmitter } from "events";
+
+export type AlertSeverity = "info" | "warn" | "critical";
+
+export interface AlertEvent {
+  id:        string;
+  message:   string;
+  severity:  AlertSeverity;
+  source?:   string;
+  timestamp: string;
+}
+
+const MAX_BUFFER = 200;
+let _id = 0;
+const buffer: AlertEvent[] = [];
+
+export const alertBus = new EventEmitter();
+alertBus.setMaxListeners(50);
+
+export function emitAlert(
+  message: string,
+  severity: AlertSeverity = "info",
+  source?: string
+): AlertEvent {
+  const alert: AlertEvent = {
+    id:        `alert-${++_id}`,
+    message,
+    severity,
+    source,
+    timestamp: new Date().toISOString(),
+  };
+
+  buffer.push(alert);
+  if (buffer.length > MAX_BUFFER) buffer.shift();
+
+  alertBus.emit("alert",           alert);
+  alertBus.emit(`alert:${severity}`, alert);
+
+  if (severity === "critical") {
+    console.error(`🚨 [ALERT:CRITICAL] ${message}${source ? ` (${source})` : ""}`);
+  } else if (severity === "warn") {
+    console.warn(`⚠️  [ALERT:WARN] ${message}${source ? ` (${source})` : ""}`);
+  } else {
+    console.log(`ℹ️  [ALERT:INFO] ${message}${source ? ` (${source})` : ""}`);
+  }
+
+  return alert;
+}
+
+export function onAlert(cb: (alert: AlertEvent) => void): () => void {
+  alertBus.on("alert", cb);
+  return () => alertBus.off("alert", cb);
+}
+
+export function onAlertBySeverity(severity: AlertSeverity, cb: (alert: AlertEvent) => void): () => void {
+  alertBus.on(`alert:${severity}`, cb);
+  return () => alertBus.off(`alert:${severity}`, cb);
+}
+
+export function getRecentAlerts(n = 50): AlertEvent[] {
+  return buffer.slice(-n);
+}
+
+export function getAlertStats(): { total: number; bySeverity: Record<AlertSeverity, number> } {
+  const bySeverity = { info: 0, warn: 0, critical: 0 } as Record<AlertSeverity, number>;
+  for (const a of buffer) bySeverity[a.severity]++;
+  return { total: buffer.length, bySeverity };
+}
+
+export function clearAlerts(): void {
+  buffer.length = 0;
+}
+
+
+=================================================================================
+FILE: server/monitoring/anomalyDetector.ts
+=================================================================================
+import { getMetrics } from "./metricsStore";
+
+export interface AnomalyResult {
+  anomalies: string[];
+  metrics: ReturnType<typeof getMetrics>;
+  severity: "HEALTHY" | "DEGRADED" | "CRITICAL";
+  checkedAt: string;
+}
+
+export function detectAnomaly(metrics?: ReturnType<typeof getMetrics>): AnomalyResult {
+  const m = metrics ?? getMetrics();
+  const anomalies: string[] = [];
+
+  if (m.avgLatency > 2000) anomalies.push("HIGH_LATENCY");
+  if (m.p95Latency > 5000) anomalies.push("P95_LATENCY_CRITICAL");
+  if (m.errorRate > 0.1) anomalies.push("CRITICAL_ERROR_RATE");
+  else if (m.errorRate > 0.05) anomalies.push("HIGH_ERROR_RATE");
+  if (m.totalRequests > 0 && m.windowSize === 0) anomalies.push("METRICS_STALE");
+
+  const severity: AnomalyResult["severity"] =
+    anomalies.some(a => a.includes("CRITICAL")) ? "CRITICAL"
+    : anomalies.length > 0 ? "DEGRADED"
+    : "HEALTHY";
+
+  return { anomalies, metrics: m, severity, checkedAt: new Date().toISOString() };
+}
+
+
+=================================================================================
+FILE: server/monitoring/dataDrift.ts
+=================================================================================
+import { emitEvent } from "../controlTower/eventBus";
+
+interface DriftBaseline {
+  avgAge: number;
+  avgConfidence: number;
+  topComplaint: string;
+  sampleSize: number;
+  capturedAt: string;
+}
+
+interface PatientFlowSample {
+  ageYears?: number;
+  confidence?: number;
+  complaint?: string;
+}
+
+const MAX_SAMPLES = 500;
+let recentSamples: PatientFlowSample[] = [];
+let baseline: DriftBaseline | null = null;
+
+export function recordSample(sample: PatientFlowSample): void {
+  recentSamples.push(sample);
+  if (recentSamples.length > MAX_SAMPLES) recentSamples.shift();
+
+  if (!baseline && recentSamples.length >= 50) {
+    baseline = computeBaseline(recentSamples);
+    console.log("[DataDrift] Baseline established from first 50 samples:", baseline);
+  }
+}
+
+function computeBaseline(samples: PatientFlowSample[]): DriftBaseline {
+  const ages = samples.filter(s => s.ageYears !== undefined).map(s => s.ageYears!);
+  const confs = samples.filter(s => s.confidence !== undefined).map(s => s.confidence!);
+  const complaints = samples.filter(s => s.complaint).map(s => s.complaint!);
+
+  const complaintCounts: Record<string, number> = {};
+  for (const c of complaints) {
+    const key = c.toLowerCase().slice(0, 30);
+    complaintCounts[key] = (complaintCounts[key] ?? 0) + 1;
+  }
+  const topComplaint = Object.entries(complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
+
+  return {
+    avgAge: ages.length > 0 ? ages.reduce((a, b) => a + b, 0) / ages.length : 0,
+    avgConfidence: confs.length > 0 ? confs.reduce((a, b) => a + b, 0) / confs.length : 0,
+    topComplaint,
+    sampleSize: samples.length,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+export interface DriftReport {
+  drift: boolean;
+  dimensions: Array<{ name: string; delta: number; threshold: number; drifted: boolean; message: string }>;
+  summary: string;
+}
+
+export async function detectDrift(): Promise<DriftReport> {
+  if (!baseline || recentSamples.length < 20) {
+    return { drift: false, dimensions: [], summary: "Insufficient data for drift detection" };
+  }
+
+  const recent = recentSamples.slice(-100);
+  const recentStats = computeBaseline(recent);
+  const dimensions: DriftReport["dimensions"] = [];
+
+  const ageDelta = Math.abs(recentStats.avgAge - baseline.avgAge);
+  dimensions.push({
+    name: "patient_age",
+    delta: ageDelta,
+    threshold: 10,
+    drifted: ageDelta > 10,
+    message: ageDelta > 10
+      ? `Patient age distribution shifted by ${ageDelta.toFixed(1)} years (baseline: ${baseline.avgAge.toFixed(1)}, current: ${recentStats.avgAge.toFixed(1)})`
+      : `Age distribution stable (delta: ${ageDelta.toFixed(1)} years)`,
+  });
+
+  const confDelta = Math.abs(recentStats.avgConfidence - baseline.avgConfidence);
+  dimensions.push({
+    name: "model_confidence",
+    delta: confDelta,
+    threshold: 0.15,
+    drifted: confDelta > 0.15,
+    message: confDelta > 0.15
+      ? `Model confidence shifted by ${(confDelta * 100).toFixed(1)}% — possible input distribution change`
+      : `Confidence distribution stable (delta: ${(confDelta * 100).toFixed(1)}%)`,
+  });
+
+  const complaintDrifted = recentStats.topComplaint !== baseline.topComplaint;
+  dimensions.push({
+    name: "complaint_distribution",
+    delta: complaintDrifted ? 1 : 0,
+    threshold: 1,
+    drifted: complaintDrifted,
+    message: complaintDrifted
+      ? `Top complaint shifted from "${baseline.topComplaint}" to "${recentStats.topComplaint}"`
+      : `Complaint distribution stable (top: "${recentStats.topComplaint}")`,
+  });
+
+  const overallDrift = dimensions.some(d => d.drifted);
+
+  if (overallDrift) {
+    const driftedDims = dimensions.filter(d => d.drifted).map(d => d.name).join(", ");
+    emitEvent({
+      type: "DATA_DRIFT",
+      payload: {
+        message: `Data drift detected in: ${driftedDims}`,
+        severity: "HIGH",
+        dimensions: dimensions.filter(d => d.drifted),
+        baseline: { avgAge: baseline.avgAge, avgConfidence: baseline.avgConfidence },
+        current: { avgAge: recentStats.avgAge, avgConfidence: recentStats.avgConfidence },
+      },
+      timestamp: Date.now(),
+    });
+    console.warn(`[DataDrift] Drift detected in: ${driftedDims}`);
+  }
+
+  return {
+    drift: overallDrift,
+    dimensions,
+    summary: overallDrift
+      ? `Drift detected in: ${dimensions.filter(d => d.drifted).map(d => d.message).join("; ")}`
+      : "No significant data drift detected",
+  };
+}
+
+export function getBaselineSnapshot(): DriftBaseline | null {
+  return baseline;
+}
+
+export function getDriftSampleCount(): number {
+  return recentSamples.length;
+}
+
+export function resetBaseline(): void {
+  baseline = null;
+  recentSamples = [];
+  console.log("[DataDrift] Baseline and samples reset");
+}
+
+
+=================================================================================
+FILE: server/monitoring/predictiveEngine.ts
+=================================================================================
+import { db } from "../db";
+import { engineLogs } from "../../shared/schema";
+import { desc } from "drizzle-orm";
+
+export interface FailurePrediction {
+  errorRate: number;
+  topFailingEngines: Array<{ engine: string; errorCount: number; rate: number }>;
+  unstable: boolean;
+  recommendation: string;
+}
+
+export async function predictFailures(): Promise<FailurePrediction> {
+  try {
+    const logs = await db
+      .select()
+      .from(engineLogs)
+      .orderBy(desc(engineLogs.createdAt))
+      .limit(100);
+
+    if (logs.length === 0) {
+      return { errorRate: 0, topFailingEngines: [], unstable: false, recommendation: "No data yet." };
+    }
+
+    const errorCount = logs.filter(l => l.status === "error").length;
+    const errorRate = errorCount / logs.length;
+
+    const engineErrors: Record<string, { total: number; errors: number }> = {};
+    for (const log of logs) {
+      if (!engineErrors[log.engine]) engineErrors[log.engine] = { total: 0, errors: 0 };
+      engineErrors[log.engine].total++;
+      if (log.status === "error") engineErrors[log.engine].errors++;
+    }
+
+    const topFailingEngines = Object.entries(engineErrors)
+      .map(([engine, s]) => ({ engine, errorCount: s.errors, rate: Math.round((s.errors / s.total) * 100) / 100 }))
+      .filter(e => e.errorCount > 0)
+      .sort((a, b) => b.errorCount - a.errorCount)
+      .slice(0, 5);
+
+    const unstable = errorRate > 0.1;
+    if (unstable) {
+      console.warn(`[PredictiveEngine] System instability detected: ${Math.round(errorRate * 100)}% error rate`);
+    }
+
+    return {
+      errorRate: Math.round(errorRate * 1000) / 1000,
+      topFailingEngines,
+      unstable,
+      recommendation: unstable
+        ? `Instability detected (${Math.round(errorRate * 100)}% errors). Review: ${topFailingEngines.map(e => e.engine).join(", ")}`
+        : "System operating within normal parameters."
+    };
+  } catch (e) {
+    console.error("[PredictiveEngine] Error:", e);
+    return { errorRate: 0, topFailingEngines: [], unstable: false, recommendation: "Prediction unavailable." };
+  }
+}
+
+
+=================================================================================
+FILE: server/monitoring/systemAlerts.ts
+=================================================================================
+import { logIncident } from "./incidents";
+
+export type AlertSeverity = "INFO" | "WARN" | "HIGH" | "CRITICAL";
+
+export interface SystemAlert {
+  alertId: string;
+  severity: AlertSeverity;
+  message: string;
+  metric?: string;
+  value?: number;
+  threshold?: number;
+  triggeredAt: string;
+}
+
+const alertHistory: SystemAlert[] = [];
+
+const THRESHOLDS = {
+  latencyMs:    2000,
+  errorRate:    0.05,
+  erRate:       0.40,
+  memoryMb:     800,
+};
+
+export function checkSystemHealth(metrics: {
+  avgLatencyMs?: number;
+  errorRate?: number;
+  erRate?: number;
+  memoryMb?: number;
+  [key: string]: number | undefined;
+}): SystemAlert | null {
+  let severity: AlertSeverity | null = null;
+  let message = "";
+  let metric = "";
+  let value = 0;
+  let threshold = 0;
+
+  if ((metrics.avgLatencyMs ?? 0) > THRESHOLDS.latencyMs) {
+    severity  = "HIGH";
+    message   = `Latency spike detected: ${metrics.avgLatencyMs}ms (threshold ${THRESHOLDS.latencyMs}ms)`;
+    metric    = "avgLatencyMs";
+    value     = metrics.avgLatencyMs!;
+    threshold = THRESHOLDS.latencyMs;
+  } else if ((metrics.errorRate ?? 0) > THRESHOLDS.errorRate) {
+    severity  = "HIGH";
+    message   = `Error rate elevated: ${((metrics.errorRate ?? 0) * 100).toFixed(1)}% (threshold ${THRESHOLDS.errorRate * 100}%)`;
+    metric    = "errorRate";
+    value     = metrics.errorRate!;
+    threshold = THRESHOLDS.errorRate;
+  } else if ((metrics.erRate ?? 0) > THRESHOLDS.erRate) {
+    severity  = "WARN";
+    message   = `ER escalation rate elevated: ${((metrics.erRate ?? 0) * 100).toFixed(0)}%`;
+    metric    = "erRate";
+    value     = metrics.erRate!;
+    threshold = THRESHOLDS.erRate;
+  } else if ((metrics.memoryMb ?? 0) > THRESHOLDS.memoryMb) {
+    severity  = "WARN";
+    message   = `Memory pressure: ${metrics.memoryMb}MB`;
+    metric    = "memoryMb";
+    value     = metrics.memoryMb!;
+    threshold = THRESHOLDS.memoryMb;
+  }
+
+  if (!severity) return null;
+
+  const alert: SystemAlert = {
+    alertId: `ALT-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+    severity,
+    message,
+    metric,
+    value,
+    threshold,
+    triggeredAt: new Date().toISOString(),
+  };
+
+  alertHistory.push(alert);
+
+  if (severity === "HIGH" || severity === "CRITICAL") {
+    logIncident({ severity, category: "system_health", message, detail: alert });
+  }
+
+  return alert;
+}
+
+export function getAlertHistory(limit = 50): SystemAlert[] {
+  return alertHistory.slice(-limit).reverse();
+}
+
+export function getSystemAlertStats() {
+  const open  = alertHistory.filter((a) => a.severity === "HIGH" || a.severity === "CRITICAL").length;
+  return {
+    active: true,
+    total: alertHistory.length,
+    highOrCritical: open,
+    thresholds: THRESHOLDS,
+  };
+}
+
+
+=================================================================================
+FILE: server/monitoring/systemMonitor.ts
+=================================================================================
+import { db } from "../db";
+import { engineLogs } from "../../shared/schema";
+import { desc, eq, sql } from "drizzle-orm";
+import { bufferedInsert } from "../db/writeBuffer";
+
+export async function logEngineStatus(
+  engine: string,
+  status: "healthy" | "error" | "warning",
+  latencyMs: number,
+  error: string | null = null
+) {
+  try {
+    bufferedInsert({ engine, status, latencyMs, error, createdAt: new Date() });
+  } catch (e) {
+    console.error("[SystemMonitor] Failed to buffer engine status:", e);
+  }
+}
+
+export async function getSystemHealth(): Promise<Record<string, { healthy: number; error: number; warning: number; avgLatencyMs: number }>> {
+  try {
+    const logs = await db
+      .select()
+      .from(engineLogs)
+      .orderBy(desc(engineLogs.createdAt))
+      .limit(200);
+
+    const summary: Record<string, { healthy: number; error: number; warning: number; latencies: number[] }> = {};
+
+    for (const log of logs) {
+      if (!summary[log.engine]) {
+        summary[log.engine] = { healthy: 0, error: 0, warning: 0, latencies: [] };
+      }
+      if (log.status === "healthy") summary[log.engine].healthy++;
+      else if (log.status === "error") summary[log.engine].error++;
+      else summary[log.engine].warning++;
+      if (log.latencyMs) summary[log.engine].latencies.push(log.latencyMs);
+    }
+
+    return Object.fromEntries(
+      Object.entries(summary).map(([engine, s]) => [
+        engine,
+        {
+          healthy: s.healthy,
+          error: s.error,
+          warning: s.warning,
+          avgLatencyMs: s.latencies.length > 0
+            ? Math.round(s.latencies.reduce((a, b) => a + b, 0) / s.latencies.length)
+            : 0,
+        },
+      ])
+    );
+  } catch (e) {
+    console.error("[SystemMonitor] getSystemHealth error:", e);
+    return {};
+  }
+}
+
+export async function getRecentEngineLogs(limit = 50) {
+  try {
+    return await db.select().from(engineLogs).orderBy(desc(engineLogs.createdAt)).limit(limit);
+  } catch (e) {
+    console.error("[SystemMonitor] getRecentEngineLogs error:", e);
+    return [];
+  }
+}
+
+
+=================================================================================
+FILE: server/monitoring/vitalsMonitor.ts
+=================================================================================
+/**
+ * Vitals Monitor — Real-time vital signs alert evaluation.
+ * Companion to existing alertEngine.ts (system-level alerts).
+ * This module focuses on patient-level vitals triage.
+ */
+
+import { broadcastPatientUpdate } from "../realtime/patientStream";
+
+export interface VitalSigns {
+  hr?:         number;   // heart rate bpm
+  tempC?:      number;   // temperature Celsius
+  tempF?:      number;   // temperature Fahrenheit (converted if provided)
+  spo2?:       number;   // oxygen saturation %
+  systolicBP?: number;
+  diastolicBP?:number;
+  rr?:         number;   // respiratory rate
+}
+
+export interface VitalsAlert {
+  type:     string;
+  severity: "low" | "medium" | "high" | "critical";
+  value:    number;
+  unit:     string;
+  message:  string;
+}
+
+const THRESHOLDS = {
+  hr:          { low: 50, high: 100, critical: 130 },
+  tempC:       { low: 36.0, high: 38.0, critical: 39.5 },
+  spo2:        { low: 95, critical: 88 },
+  systolicBP:  { low: 90, high: 140, critical: 160 },
+  rr:          { low: 12, high: 20, critical: 30 },
+};
+
+export function evaluateVitals(vitals: VitalSigns): VitalsAlert[] {
+  const alerts: VitalsAlert[] = [];
+
+  // Temperature — normalise to Celsius
+  const tempC = vitals.tempC ?? (vitals.tempF ? (vitals.tempF - 32) * 5 / 9 : null);
+
+  if (vitals.hr !== undefined) {
+    if (vitals.hr >= THRESHOLDS.hr.critical) {
+      alerts.push({ type: "tachycardia", severity: "critical", value: vitals.hr, unit: "bpm", message: `Critical tachycardia: HR ${vitals.hr} bpm` });
+    } else if (vitals.hr > THRESHOLDS.hr.high) {
+      alerts.push({ type: "tachycardia", severity: "high", value: vitals.hr, unit: "bpm", message: `Tachycardia: HR ${vitals.hr} bpm` });
+    } else if (vitals.hr < THRESHOLDS.hr.low) {
+      alerts.push({ type: "bradycardia", severity: "medium", value: vitals.hr, unit: "bpm", message: `Bradycardia: HR ${vitals.hr} bpm` });
+    }
+  }
+
+  if (tempC !== null) {
+    if (tempC >= THRESHOLDS.tempC.critical) {
+      alerts.push({ type: "fever", severity: "critical", value: tempC, unit: "°C", message: `High fever: ${tempC.toFixed(1)}°C` });
+    } else if (tempC > THRESHOLDS.tempC.high) {
+      alerts.push({ type: "fever", severity: "medium", value: tempC, unit: "°C", message: `Fever: ${tempC.toFixed(1)}°C` });
+    }
+  }
+
+  if (vitals.spo2 !== undefined) {
+    if (vitals.spo2 < THRESHOLDS.spo2.critical) {
+      alerts.push({ type: "hypoxia", severity: "critical", value: vitals.spo2, unit: "%", message: `Critical hypoxia: SpO2 ${vitals.spo2}%` });
+    } else if (vitals.spo2 < THRESHOLDS.spo2.low) {
+      alerts.push({ type: "hypoxia", severity: "high", value: vitals.spo2, unit: "%", message: `Low oxygen: SpO2 ${vitals.spo2}%` });
+    }
+  }
+
+  if (vitals.systolicBP !== undefined) {
+    if (vitals.systolicBP < THRESHOLDS.systolicBP.low) {
+      alerts.push({ type: "hypotension", severity: "critical", value: vitals.systolicBP, unit: "mmHg", message: `Hypotension: SBP ${vitals.systolicBP} mmHg` });
+    } else if (vitals.systolicBP >= THRESHOLDS.systolicBP.critical) {
+      alerts.push({ type: "hypertension", severity: "high", value: vitals.systolicBP, unit: "mmHg", message: `Hypertensive: SBP ${vitals.systolicBP} mmHg` });
+    }
+  }
+
+  if (vitals.rr !== undefined) {
+    if (vitals.rr >= THRESHOLDS.rr.critical) {
+      alerts.push({ type: "tachypnea", severity: "critical", value: vitals.rr, unit: "bpm", message: `Critical tachypnea: RR ${vitals.rr}` });
+    } else if (vitals.rr > THRESHOLDS.rr.high) {
+      alerts.push({ type: "tachypnea", severity: "medium", value: vitals.rr, unit: "bpm", message: `Elevated RR: ${vitals.rr}` });
+    }
+  }
+
+  return alerts;
+}
+
+/** Evaluate vitals and push any critical alerts to WebSocket stream */
+export function evaluateAndBroadcast(patientId: string, vitals: VitalSigns): VitalsAlert[] {
+  const alerts = evaluateVitals(vitals);
+  const critical = alerts.filter((a) => a.severity === "critical");
+
+  if (critical.length > 0) {
+    broadcastPatientUpdate({ patientId, alerts: critical, source: "vitals_monitor" });
+  }
+
+  return alerts;
+}
+
+
+=================================================================================
+FILE: server/services/rlhfService.ts
+=================================================================================
+/**
+ * server/services/rlhfService.ts — RLHF feedback and proposal management
+ *
+ * FIXES (Code Review Issues #3, #4):
+ *   1. listFeedback/listProposals/generateProposals now accept optional clinicId
+ *      for tenant-scoped filtering (Issue #3).
+ *   2. reviewProposal() captures reviewer identity from the JWT (not caller body)
+ *      and no longer accepts "applied" as a valid status (Issue #4).
+ *   3. applyProposal() is a new admin-only method that transitions proposals to
+ *      "applied" with full applier identity capture (Issue #4).
+ */
+
+import { randomUUID } from "crypto";
+import type { RLHFFeedbackEvent, RLHFProposal } from "../types/clinical";
+
+// ── Identity capture types ────────────────────────────────────────────────────
+
+interface ReviewerInfo {
+  reviewerId:   string;
+  reviewerRole: string;
+  clinicId?:    string;
+  reviewedAt:   string;
+}
+
+interface ApplierInfo {
+  appliedById:   string;
+  appliedByRole: string;
+  clinicId?:     string;
+  appliedAt:     string;
+}
+
+// Extended internal types with identity + clinic fields
+interface AuditedFeedback extends RLHFFeedbackEvent {
+  clinicId?:    string;
+  physicianId?: string;
+}
+
+interface AuditedProposal extends RLHFProposal {
+  clinicId?:  string;
+  reviewer?:  ReviewerInfo;
+  applier?:   ApplierInfo;
+}
+
+// ── Service ───────────────────────────────────────────────────────────────────
+
+class RLHFService {
+  private readonly feedback:   AuditedFeedback[]  = [];
+  private readonly proposals:  AuditedProposal[]  = [];
+  private readonly minEvidence = 5;
+  private readonly maxDeltaPct = 0.02;
+
+  // ── Feedback ────────────────────────────────────────────────────────────────
+
+  addFeedback(event: Omit<AuditedFeedback, "id" | "createdAt">): AuditedFeedback {
+    const full: AuditedFeedback = {
+      ...event,
+      id:        randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    this.feedback.push(full);
+    return full;
+  }
+
+  listFeedback(clinicId?: string): AuditedFeedback[] {
+    if (!clinicId) return this.feedback;
+    return this.feedback.filter(f => !f.clinicId || f.clinicId === clinicId);
+  }
+
+  // ── Proposals ───────────────────────────────────────────────────────────────
+
+  generateProposals(clinicId?: string): AuditedProposal[] {
+    const scopedFeedback = clinicId
+      ? this.feedback.filter(f => !f.clinicId || f.clinicId === clinicId)
+      : this.feedback;
+
+    const grouped = new Map<string, AuditedFeedback[]>();
+    for (const item of scopedFeedback) {
+      const key = `${item.complaint}::${item.predictedDiagnosis ?? "unknown"}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), item]);
+    }
+
+    const created: AuditedProposal[] = [];
+
+    for (const [key, items] of grouped.entries()) {
+      if (items.length < this.minEvidence) continue;
+
+      const incorrect    = items.filter((i) => !i.physicianAgreement).length;
+      const safetyIssues = items.filter((i) => i.safetyIssue).length;
+      if (incorrect === 0 && safetyIssues === 0) continue;
+
+      const [complaint, predictedDiagnosis] = key.split("::");
+      const direction     = incorrect / items.length > 0.25 || safetyIssues > 0 ? -1 : 1;
+      const currentValue  = 1.0;
+      const proposedValue = Math.max(0.5, Math.min(1.5, currentValue + direction * this.maxDeltaPct));
+
+      const proposal: AuditedProposal = {
+        id:            randomUUID(),
+        complaint,
+        targetType:    "diagnosis_weight",
+        targetKey:     `${complaint}:${predictedDiagnosis}`,
+        currentValue,
+        proposedValue,
+        reason:        `Generated from ${items.length} feedback events; incorrect=${incorrect}, safetyIssues=${safetyIssues}`,
+        evidenceCount: items.length,
+        requiresPhysicianReview: true,
+        status:        "pending",
+        createdAt:     new Date().toISOString(),
+        clinicId,
+      };
+
+      this.proposals.push(proposal);
+      created.push(proposal);
+    }
+
+    return created;
+  }
+
+  listProposals(clinicId?: string): AuditedProposal[] {
+    if (!clinicId) return this.proposals;
+    return this.proposals.filter(p => !p.clinicId || p.clinicId === clinicId);
+  }
+
+  /**
+   * reviewProposal — physician approves or rejects a proposal.
+   * FIXED (Issue #4): "applied" removed — use applyProposal() for that transition.
+   * Reviewer identity captured from verified JWT, never from caller body.
+   */
+  reviewProposal(
+    id:           string,
+    status:       "approved" | "rejected",
+    reviewerInfo: ReviewerInfo,
+  ): AuditedProposal {
+    const proposal = this.proposals.find((p) => p.id === id);
+    if (!proposal) throw new Error(`RLHF proposal not found: ${id}`);
+
+    if (proposal.status !== "pending") {
+      throw new Error(
+        `Proposal ${id} is in '${proposal.status}' state — only pending proposals can be reviewed`
+      );
+    }
+
+    proposal.status   = status;
+    proposal.reviewer = reviewerInfo;
+    return proposal;
+  }
+
+  /**
+   * applyProposal — admin-only: mark an approved proposal as applied.
+   * FIXED (Issue #4): separate endpoint; only "approved" proposals can be applied;
+   * applier identity captured from verified JWT.
+   */
+  applyProposal(id: string, applierInfo: ApplierInfo): AuditedProposal {
+    const proposal = this.proposals.find((p) => p.id === id);
+    if (!proposal) throw new Error(`RLHF proposal not found: ${id}`);
+
+    if (proposal.status !== "approved") {
+      throw new Error(
+        `Proposal ${id} must be 'approved' before applying — current status: '${proposal.status}'`
+      );
+    }
+
+    proposal.status  = "applied";
+    proposal.applier = applierInfo;
+    return proposal;
+  }
+}
+
+export const rlhfService = new RLHFService();
+
+
+=================================================================================
+FILE: server/routes/rlhfRoutes.ts
+=================================================================================
+/**
+ * server/routes/rlhfRoutes.ts — RLHF control plane routes
+ *
+ * FIXES (Code Review Issues #3, #4):
+ *   Issue #3: All endpoints now require physician-level authentication via
+ *     requirePhysician middleware. Previously had zero auth on every route —
+ *     any network client could read/write feedback and change proposal status.
+ *   Issue #4: "applied" status is no longer caller-settable. The review endpoint
+ *     only accepts "approved" | "rejected". A separate privileged /apply endpoint
+ *     requires admin role AND captures the reviewer identity from the JWT payload
+ *     (not from the request body) to prevent self-attestation fraud.
+ */
+
+import express from "express";
+import { requirePhysician } from "../auth/requirePhysician";
+import { rbacService } from "../auth/rbacService";
+import { rlhfService } from "../services/rlhfService";
+
+const router = express.Router();
+
+// All RLHF routes require physician-level auth (Issue #3)
+router.use(requirePhysician);
+
+/**
+ * GET /api/rlhf/feedback
+ * List all physician feedback events — scoped to the authenticated physician's clinic.
+ */
+router.get("/feedback", (req, res) => {
+  const clinicId = req.physician!.clinicId;
+  res.json(rlhfService.listFeedback(clinicId));
+});
+
+/**
+ * POST /api/rlhf/feedback
+ * Submit a new physician feedback event.
+ * Reviewer identity injected from JWT — not accepted from request body.
+ */
+router.post("/feedback", (req, res) => {
+  try {
+    const physician = req.physician!;
+    const saved = rlhfService.addFeedback({
+      ...req.body,
+      // Stamp identity from the verified token — never from caller body
+      physicianId: physician.id,
+      clinicId:    physician.clinicId,
+    });
+    res.json(saved);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Could not save feedback",
+    });
+  }
+});
+
+/**
+ * GET /api/rlhf/proposals
+ * List all RLHF improvement proposals for the authenticated clinic.
+ */
+router.get("/proposals", (req, res) => {
+  const clinicId = req.physician!.clinicId;
+  res.json(rlhfService.listProposals(clinicId));
+});
+
+/**
+ * POST /api/rlhf/proposals/generate
+ * Generate improvement proposals from accumulated feedback.
+ * Requires physician+ access.
+ */
+router.post("/proposals/generate", (req, res) => {
+  const clinicId = req.physician!.clinicId;
+  const proposals = rlhfService.generateProposals(clinicId);
+  res.json({ created: proposals.length, proposals });
+});
+
+/**
+ * POST /api/rlhf/proposals/:id/review
+ * Physician approves or rejects a proposal.
+ *
+ * FIXED (Issue #4): "applied" is removed from the accepted status values.
+ * Approval/rejection is the physician's action. Actual application is a separate
+ * admin-gated step (/apply below) that requires explicit admin role + audit stamp.
+ */
+router.post("/proposals/:id/review", (req, res) => {
+  try {
+    const { status } = req.body;
+
+    // "applied" intentionally excluded — use /apply endpoint (admin-only)
+    if (!["approved", "rejected"].includes(status)) {
+      res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
+      return;
+    }
+
+    const physician = req.physician!;
+    const proposal  = rlhfService.reviewProposal(req.params.id, status, {
+      reviewerId:   physician.id,
+      reviewerRole: physician.role,
+      clinicId:     physician.clinicId,
+      reviewedAt:   new Date().toISOString(),
+    });
+
+    res.json(proposal);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Review failed",
+    });
+  }
+});
+
+/**
+ * POST /api/rlhf/proposals/:id/apply
+ * Admin-only: mark a previously-approved proposal as applied.
+ * Captures immutable reviewer identity from the token — not from the body.
+ *
+ * FIXED (Issue #4): "applied" transition is now:
+ *   1. Admin-role gated (not just physician)
+ *   2. Identity comes from verified token, not caller body
+ *   3. Can only be called on proposals already in "approved" state
+ */
+router.post("/proposals/:id/apply", (req, res) => {
+  const physician = req.physician!;
+
+  // Require admin role for the apply action
+  if (!rbacService.can(physician.role as any, "tenant:manage")) {
+    res.status(403).json({ error: "Admin role required to apply proposals" });
+    return;
+  }
+
+  try {
+    const proposal = rlhfService.applyProposal(req.params.id, {
+      appliedById:   physician.id,
+      appliedByRole: physician.role,
+      clinicId:      physician.clinicId,
+      appliedAt:     new Date().toISOString(),
+    });
+    res.json(proposal);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Apply failed",
+    });
+  }
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/eval/ragEvaluator.ts
+=================================================================================
+/**
+ * ragEvaluator.ts — RAGAS-style RAG evaluation harness
+ *
+ * FIX (Code Review Issue #25 — RAG pass-rate incorrect):
+ *   The passRate computation in getMetricsSummary() previously counted ALL rows
+ *   from the ragEvaluations table, not just rows where pass = true. This caused
+ *   the pass-rate metric to always equal 1.0 (total/total) regardless of actual
+ *   evaluation outcomes — making the monitoring dashboard falsely report perfect
+ *   quality health even when the majority of evaluations failed.
+ *
+ *   Fixed: passRows query now includes WHERE pass = true so the pass-rate
+ *   accurately reflects the fraction of evaluations that actually passed.
+ */
+
+import { db }            from "../db";
+import { ragEvaluations, type InsertRagEvaluation } from "@shared/schema";
+import { desc, avg, count, eq } from "drizzle-orm";
+
+// ── Word-overlap similarity (RAGAS approximation) ─────────────────────────────
+
+const EVAL_STOP_WORDS = new Set([
+  "the", "a", "an", "and", "or", "for", "in", "of", "to", "is", "are", "was",
+  "be", "by", "at", "on", "with", "this", "that", "it", "its", "from", "not",
+]);
+
+function tokenizeEval(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !EVAL_STOP_WORDS.has(w))
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  const intersection = [...a].filter((w) => b.has(w)).length;
+  const union        = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function overlapPrecision(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0) return 0;
+  const overlap = [...a].filter((w) => b.has(w)).length;
+  return overlap / a.size;
+}
+
+// ── Individual metrics ────────────────────────────────────────────────────────
+
+export function faithfulness(answer: string, contexts: string[]): number {
+  if (contexts.length === 0 || answer.length === 0) return 0;
+  const answerToks  = tokenizeEval(answer);
+  const contextToks = tokenizeEval(contexts.join(" "));
+  return overlapPrecision(answerToks, contextToks);
+}
+
+export function answerRelevancy(answer: string, question: string): number {
+  if (answer.length === 0 || question.length === 0) return 0;
+  const aToks = tokenizeEval(answer);
+  const qToks = tokenizeEval(question);
+  const recall    = overlapPrecision(qToks, aToks);
+  const precision = overlapPrecision(aToks, qToks);
+  return (recall + precision) / 2;
+}
+
+export function contextPrecision(contexts: string[], groundTruth: string): number {
+  if (contexts.length === 0 || groundTruth.length === 0) return 0;
+  const gtToks      = tokenizeEval(groundTruth);
+  const contextToks = tokenizeEval(contexts.join(" "));
+  return jaccardSimilarity(gtToks, contextToks);
+}
+
+// ── Full evaluation ───────────────────────────────────────────────────────────
+
+export interface RAGEvalInput {
+  question:        string;
+  answer:          string;
+  contexts:        string[];
+  groundTruth?:    string;
+  retrievalCount?: number;
+  cacheHit?:       boolean;
+}
+
+export interface RAGEvalResult {
+  faithfulness:     number;
+  answerRelevancy:  number;
+  contextPrecision: number;
+  overallScore:     number;
+  pass:             boolean;
+}
+
+const PASS_THRESHOLD = 0.6;
+
+export function evaluateRAG(input: RAGEvalInput): RAGEvalResult {
+  const f   = faithfulness(input.answer, input.contexts);
+  const ar  = answerRelevancy(input.answer, input.question);
+  const cp  = input.groundTruth ? contextPrecision(input.contexts, input.groundTruth) : ar;
+
+  const scores  = [f, ar, cp];
+  const harmMean = scores.some((s) => s === 0)
+    ? 0
+    : scores.length / scores.reduce((acc, s) => acc + 1 / s, 0);
+
+  return {
+    faithfulness:     Math.round(f        * 100) / 100,
+    answerRelevancy:  Math.round(ar       * 100) / 100,
+    contextPrecision: Math.round(cp       * 100) / 100,
+    overallScore:     Math.round(harmMean * 100) / 100,
+    pass:             harmMean >= PASS_THRESHOLD,
+  };
+}
+
+// ── Persist evaluation to DB ──────────────────────────────────────────────────
+
+export async function evaluateAndStore(input: RAGEvalInput): Promise<RAGEvalResult & { id?: number }> {
+  const result = evaluateRAG(input);
+
+  try {
+    const [row] = await db.insert(ragEvaluations).values({
+      question:         input.question,
+      answer:           input.answer,
+      faithfulness:     result.faithfulness,
+      answerRelevancy:  result.answerRelevancy,
+      contextPrecision: result.contextPrecision,
+      overallScore:     result.overallScore,
+      pass:             result.pass,
+      groundTruth:      input.groundTruth,
+      retrievalCount:   input.retrievalCount ?? input.contexts.length,
+      cacheHit:         input.cacheHit ?? false,
+    } satisfies InsertRagEvaluation).returning({ id: ragEvaluations.id });
+
+    return { ...result, id: row.id };
+  } catch {
+    return result;
+  }
+}
+
+// ── Aggregate metrics ─────────────────────────────────────────────────────────
+
+export async function getMetricsSummary(): Promise<{
+  totalEvaluations:    number;
+  avgFaithfulness:     number;
+  avgAnswerRelevancy:  number;
+  avgContextPrecision: number;
+  avgOverallScore:     number;
+  passRate:            number;
+}> {
+  try {
+    const rows = await db.select({
+      total:           count(),
+      avgFaith:        avg(ragEvaluations.faithfulness),
+      avgRelevancy:    avg(ragEvaluations.answerRelevancy),
+      avgCtxPrecision: avg(ragEvaluations.contextPrecision),
+      avgOverall:      avg(ragEvaluations.overallScore),
+    }).from(ragEvaluations);
+
+    const r     = rows[0];
+    const total = Number(r?.total ?? 0);
+
+    // FIXED (Issue #25): previously counted ALL rows — now filters by pass = true
+    const passRows = await db
+      .select({ n: count() })
+      .from(ragEvaluations)
+      .where(eq(ragEvaluations.pass, true));   // ← THE FIX
+
+    return {
+      totalEvaluations:    total,
+      avgFaithfulness:     Math.round(Number(r?.avgFaith        ?? 0) * 100) / 100,
+      avgAnswerRelevancy:  Math.round(Number(r?.avgRelevancy    ?? 0) * 100) / 100,
+      avgContextPrecision: Math.round(Number(r?.avgCtxPrecision ?? 0) * 100) / 100,
+      avgOverallScore:     Math.round(Number(r?.avgOverall      ?? 0) * 100) / 100,
+      passRate: total > 0 ? Math.round((Number(passRows[0]?.n ?? 0) / total) * 100) / 100 : 0,
+    };
+  } catch {
+    return { totalEvaluations: 0, avgFaithfulness: 0, avgAnswerRelevancy: 0, avgContextPrecision: 0, avgOverallScore: 0, passRate: 0 };
+  }
+}
+
+export async function getRecentEvaluations(limit = 20) {
+  try {
+    return await db.select().from(ragEvaluations)
+      .orderBy(desc(ragEvaluations.createdAt))
+      .limit(limit);
+  } catch {
+    return [];
+  }
+}
+
+
+=================================================================================
+FILE: server/agents/selfHealingLoop.ts
+=================================================================================
+// ── Self-Healing Loop ──────────────────────────────────────────────────────────
+//
+// Background loop (30-second interval) that:
+//   1. Reads all agent health scores from Redis.
+//   2. Adjusts routing weights for degraded agents.
+//   3. Logs agents whose score has fallen below zero (active harm risk).
+//
+// Timer is .unref()'d — does not block test process exit.
+// idempotent: calling startSelfHealingLoop() twice is safe.
+
+import { selfHealingEngine } from "./selfHealingEngine";
+import { weightAdapter }      from "./weightAdapter";
+import { logger }             from "../utils/logger";
+
+const LOOP_INTERVAL_MS = 30_000;
+
+let _timer: ReturnType<typeof setInterval> | null = null;
+
+export function startSelfHealingLoop(): void {
+  if (_timer) return;
+
+  _timer = setInterval(async () => {
+    try {
+      const agents = await selfHealingEngine.getAllAgentsHealth();
+
+      for (const a of agents) {
+        await weightAdapter.adjust(a.agent);
+
+        if (a.score < 0) {
+          logger.warn("[SelfHealingLoop] Agent degraded below zero", {
+            agent:       a.agent,
+            score:       a.score,
+            successRate: a.successRate,
+            timeouts:    a.timeouts,
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn("[SelfHealingLoop] cycle error", { err });
+    }
+  }, LOOP_INTERVAL_MS).unref();
+}
+
+export function stopSelfHealingLoop(): void {
+  if (_timer) {
+    clearInterval(_timer);
+    _timer = null;
+  }
+}
+
+
+=================================================================================
+FILE: server/agents/selfImprovementOrchestrator.ts
+=================================================================================
+import { sql } from "drizzle-orm";
+import { db }  from "../db";
+import { improvementCycleLog } from "../../shared/schema";
+import {
+  evaluateAndImprove,
+  applyImprovementAction,
+  countAppliedInWindow,
+  AUTO_APPROVE_PERMITTED,
+  type GovernedAction,
+} from "./selfImprove";
+import { auditStep } from "../audit/auditLogger";
+
+// ── Rate limit: max auto-approved changes per rolling window ─────────────────
+//
+// Even individually safe operational changes can destabilize the system in
+// aggregate. This is a hard cap enforced independently of per-action approval.
+const AUTO_APPROVE_RATE_LIMIT = {
+  maxChanges:  5,
+  windowHours: 24,
+};
+
+// ── Cycle lock — prevents concurrent cycles across processes ─────────────────
+const CYCLE_LOCK_ID = 91424019;
+
+// Per-process minimum gap complement: even if two calls arrive in the same
+// process before the first lock acquisition, the second waits for the promise.
+const MIN_CYCLE_GAP_MS = 30_000;
+let lastCycleAt = 0;
+
+// ── In-process serialisation: concurrent calls share the same cycle promise ──
+let cycleInProgress: Promise<OrchestrationResult> | null = null;
+
+// ── Result shape ─────────────────────────────────────────────────────────────
+export interface OrchestrationResult {
+  cycleId:       string;
+  proposedCount: number;
+  appliedCount:  number;
+  skippedCount:  number;
+  rateLimited:   number;
+  applied:       { id: string; agent: string; parameter: string; toValue: number | null }[];
+  skipped:       { id: string; agent: string; reason: string }[];
+  timestamp:     string;
+  // Backward-compat alias
+  cycleResult:   { proposed: number; applied: number; skipped: number };
+}
+
+// ── Public entry point ───────────────────────────────────────────────────────
+/**
+ * Runs one improvement cycle.
+ *
+ * Serialised — if a cycle is already in progress, concurrent callers join the
+ * existing promise rather than starting a second cycle.  This prevents double-
+ * application of the same fix when the scheduler fires faster than cycles
+ * complete.
+ */
+export async function runContinuousImprovement(): Promise<OrchestrationResult> {
+  if (cycleInProgress) {
+    console.warn("[SelfImproveOrchestrator] Cycle already in progress — joining");
+    return cycleInProgress;
+  }
+
+  cycleInProgress = _runCycle().finally(() => {
+    cycleInProgress = null;
+  });
+
+  return cycleInProgress;
+}
+
+// ── Internal cycle implementation ─────────────────────────────────────────────
+async function _runCycle(): Promise<OrchestrationResult> {
+  const now = Date.now();
+  if (now - lastCycleAt < MIN_CYCLE_GAP_MS) {
+    const cycleId   = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    return {
+      cycleId, timestamp,
+      proposedCount: 0, appliedCount: 0, skippedCount: 0, rateLimited: 0,
+      applied: [], skipped: [],
+      cycleResult: { proposed: 0, applied: 0, skipped: 0 },
+    };
+  }
+
+  // Acquire session-level advisory lock so only one process runs at a time
+  await db.execute(sql`SELECT pg_advisory_lock(${CYCLE_LOCK_ID})`);
+  lastCycleAt = Date.now();
+
+  const cycleId    = crypto.randomUUID();
+  const timestamp  = new Date().toISOString();
+  const start      = Date.now();
+  let   cycleError: string | undefined;
+
+  // Audit the cycle start — FDA needs to know when evaluations ran
+  await auditStep({
+    traceId:  `selfimprove-cycle-${cycleId}`,
+    step:     "improvement_cycle_started",
+    input:    { cycleId },
+    output:   null,
+    metadata: { timestamp },
+  });
+
+  const applied:  OrchestrationResult["applied"]  = [];
+  const skipped:  OrchestrationResult["skipped"]  = [];
+  let rateLimited = 0;
+  let autoAppliedThisCycle = 0;
+
+  let proposedActions: GovernedAction[] = [];
+
+  try {
+    // ── Rate limit pre-check ─────────────────────────────────────────────
+    const windowMs     = AUTO_APPROVE_RATE_LIMIT.windowHours * 3_600_000;
+    const recentApplied = await countAppliedInWindow(windowMs);
+    const remainingBudget = Math.max(0, AUTO_APPROVE_RATE_LIMIT.maxChanges - recentApplied);
+
+    if (remainingBudget === 0) {
+      console.warn(
+        `[SelfImproveOrchestrator] Auto-approve rate limit reached ` +
+        `(${recentApplied} changes in last ${AUTO_APPROVE_RATE_LIMIT.windowHours}h). ` +
+        `No auto-approvals this cycle.`
+      );
+    }
+
+    // ── Evaluate ──────────────────────────────────────────────────────────
+    proposedActions = await evaluateAndImprove();
+
+    for (const action of proposedActions) {
+      const idStr = String(action.id);
+
+      // ── Gate 1: Category policy ────────────────────────────────────────
+      // Clinical and security changes are NEVER auto-approved.
+      // This check is intentionally redundant with the autoApprove field —
+      // defence-in-depth: two independent checks at different code layers.
+      if (!AUTO_APPROVE_PERMITTED[action.category]) {
+        skipped.push({
+          id:     idStr,
+          agent:  action.agent,
+          reason: `Category "${action.category}" requires physician review — queued for pending_review`,
+        });
+        // Status is already `pending_review` from evaluateAndImprove()
+        continue;
+      }
+
+      // ── Gate 2: autoApprove field ──────────────────────────────────────
+      // Belt-and-suspenders: even if category check passed, the derived
+      // field must also be true.
+      if (!action.autoApprove) {
+        skipped.push({
+          id:     idStr,
+          agent:  action.agent,
+          reason: "autoApprove is false — queued for review",
+        });
+        continue;
+      }
+
+      // ── Gate 3: Rate limit ─────────────────────────────────────────────
+      if (autoAppliedThisCycle >= remainingBudget) {
+        rateLimited++;
+        skipped.push({
+          id:     idStr,
+          agent:  action.agent,
+          reason: `Rate limit: max ${AUTO_APPROVE_RATE_LIMIT.maxChanges} auto-approvals per ${AUTO_APPROVE_RATE_LIMIT.windowHours}h`,
+        });
+        continue;
+      }
+
+      // ── Apply with full audit trail ────────────────────────────────────
+      try {
+        const result = await applyImprovementAction(action.id, "auto-approved");
+        if (result.applied) {
+          applied.push({
+            id:        idStr,
+            agent:     action.agent,
+            parameter: action.parameter ?? "",
+            toValue:   action.toValue,
+          });
+          autoAppliedThisCycle++;
+        } else {
+          skipped.push({ id: idStr, agent: action.agent, reason: result.reason });
+        }
+      } catch (err) {
+        console.error(`[SelfImproveOrchestrator] Failed to apply action ${idStr}:`, err);
+        skipped.push({
+          id:     idStr,
+          agent:  action.agent,
+          reason: `Application error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+  } catch (err: any) {
+    cycleError = err?.message ?? String(err);
+    console.error("[SelfImproveOrchestrator] Evaluation error:", err);
+
+    await auditStep({
+      traceId:  `selfimprove-cycle-${cycleId}`,
+      step:     "improvement_cycle_evaluation_error",
+      input:    { cycleId },
+      output:   null,
+      metadata: { error: cycleError },
+    });
+  } finally {
+    // Always release the session lock and persist the cycle audit record
+    await db.execute(sql`SELECT pg_advisory_unlock(${CYCLE_LOCK_ID})`).catch(() => {});
+
+    await db
+      .insert(improvementCycleLog)
+      .values({
+        actionsProposed: proposedActions.length,
+        actionsApplied:  applied.length,
+        actionsRejected: skipped.length,
+        durationMs:      Date.now() - start,
+        error:           cycleError ?? null,
+      })
+      .catch((err) => console.error("[SelfImproveOrchestrator] cycle log write failed:", err));
+  }
+
+  const result: OrchestrationResult = {
+    cycleId,
+    timestamp,
+    proposedCount: proposedActions.length,
+    appliedCount:  applied.length,
+    skippedCount:  skipped.length,
+    rateLimited,
+    applied,
+    skipped,
+    cycleResult: {
+      proposed: proposedActions.length,
+      applied:  applied.length,
+      skipped:  skipped.length,
+    },
+  };
+
+  // Audit cycle completion — persists the governance summary for FDA review
+  await auditStep({
+    traceId:  `selfimprove-cycle-${cycleId}`,
+    step:     "improvement_cycle_completed",
+    input:    { cycleId, proposedCount: result.proposedCount },
+    output:   { appliedCount: result.appliedCount, skippedCount: result.skippedCount, rateLimited },
+    metadata: { applied, skipped },
+  });
+
+  return result;
+}
+
+
+=================================================================================
+FILE: server/agents/selfImprove.ts
+=================================================================================
+import { eq, and, inArray, desc, gte, count } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import {
+  agentThresholdRecords,
+  improvementActions,
+  improvementReviews,
+  type ImprovementAction as DbImprovementAction,
+  type InsertImprovementAction,
+} from "../../shared/schema";
+import { getAgentStats } from "./tracking";
+import { publish } from "./eventBus";
+import { auditStep } from "../audit/auditLogger";
+
+// ── Lifecycle constants ──────────────────────────────────────────────────────
+export const ACTION_STATUSES = ["proposed", "pending_review", "approved", "applied", "rejected", "failed"] as const;
+export type ActionStatus = typeof ACTION_STATUSES[number];
+
+// Per-action advisory lock base.  We XOR the action id so each row gets a
+// unique lock slot without hard-coding values.
+const ACTION_LOCK_BASE = 91424030;
+
+// ── Category firewall ────────────────────────────────────────────────────────
+/**
+ * ChangeCategory governs whether a parameter adjustment is auto-approvable.
+ *
+ * clinical  — touches patient safety pathways (never auto-approve)
+ * security  — touches auth / audit controls (never auto-approve)
+ * performance — touches latency / accuracy knobs (never auto-approve — needs review)
+ * operational — retry limits, timeouts, alerting (may auto-approve per AUTO_APPROVE_PERMITTED)
+ */
+export type ChangeCategory = "clinical" | "security" | "performance" | "operational";
+
+export const AUTO_APPROVE_PERMITTED: Record<ChangeCategory, boolean> = {
+  operational:  true,
+  performance:  false,
+  clinical:     false,
+  security:     false,
+};
+
+interface ThresholdBounds {
+  min:      number;
+  max:      number;
+  step:     number;
+  category: ChangeCategory;
+}
+
+/**
+ * Per-parameter bounds and category classification.
+ *
+ * - `max` is a hard ceiling: proposals that would exceed it are silently skipped.
+ * - `step` is the increment applied each evaluation cycle.
+ * - `category` determines auto-approve eligibility via AUTO_APPROVE_PERMITTED.
+ *
+ * Add new parameters here — never compute bounds at runtime from untrusted inputs.
+ */
+export const THRESHOLD_BOUNDS: Record<string, ThresholdBounds> = {
+  conservatism:   { min: 0.0,  max: 0.9,    step: 0.1,    category: "performance" },
+  retryLimit:     { min: 1,    max: 5,       step: 1,      category: "operational" },
+  timeoutMs:      { min: 1000, max: 30_000,  step: 1_000,  category: "operational" },
+  riskThreshold:  { min: 0.3,  max: 0.9,    step: 0.05,   category: "clinical"    },
+};
+
+// ── GovernedAction: DB row extended with runtime governance metadata ──────────
+export interface GovernedAction extends DbImprovementAction {
+  category:    ChangeCategory;
+  autoApprove: boolean;
+}
+
+// ── Legacy compat type (used by payerIntelligenceRoutes / metaOrchestrator) ──
+export interface ImprovementAction {
+  agent:     string;
+  action:    string;
+  reason:    string;
+  timestamp: string;
+  metric:    { successRate: number; runs: number };
+}
+
+// ── In-memory threshold cache ────────────────────────────────────────────────
+// Bounded at MAX_AGENT_THRESHOLD_ENTRIES to prevent unbounded growth if new
+// agents are dynamically registered.  The DB is always the source of truth;
+// this cache is an optimisation and is refreshed on upsert.
+const MAX_AGENT_THRESHOLD_ENTRIES = 100;
+const _thresholdMap = new Map<string, Map<string, number>>();
+
+/**
+ * Seeds the in-memory threshold cache from DB at startup.
+ * Must be awaited before the first evaluateAndImprove() call if you want
+ * cache hits on the first cycle.
+ */
+export async function seedThresholdsFromDb(): Promise<void> {
+  const rows = await db.select().from(agentThresholdRecords);
+  for (const row of rows) {
+    if (_thresholdMap.size >= MAX_AGENT_THRESHOLD_ENTRIES) {
+      console.warn("[SelfImprove] threshold cache at capacity — skipping remaining rows");
+      break;
+    }
+    if (!_thresholdMap.has(row.agent)) _thresholdMap.set(row.agent, new Map());
+    _thresholdMap.get(row.agent)!.set(row.parameter, row.currentValue);
+  }
+}
+
+function _getCachedThreshold(agent: string, parameter: string): number | undefined {
+  return _thresholdMap.get(agent)?.get(parameter);
+}
+
+async function _getThresholdFromDb(agent: string, parameter: string): Promise<number> {
+  const rows = await db
+    .select({ currentValue: agentThresholdRecords.currentValue })
+    .from(agentThresholdRecords)
+    .where(and(eq(agentThresholdRecords.agent, agent), eq(agentThresholdRecords.parameter, parameter)))
+    .limit(1);
+  return rows[0]?.currentValue ?? 0;
+}
+
+async function _persistThreshold(
+  agent:     string,
+  parameter: string,
+  value:     number,
+  updatedBy: string,
+  tx?: Parameters<Parameters<typeof db.transaction>[0]>[0]
+): Promise<void> {
+  const orm = tx ?? db;
+  await (orm as typeof db)
+    .insert(agentThresholdRecords)
+    .values({ agent, parameter, currentValue: value, updatedBy })
+    .onConflictDoUpdate({
+      target: [agentThresholdRecords.agent, agentThresholdRecords.parameter],
+      set:    { currentValue: value, updatedAt: new Date(), updatedBy },
+    });
+
+  if (!_thresholdMap.has(agent)) {
+    if (_thresholdMap.size >= MAX_AGENT_THRESHOLD_ENTRIES) return;
+    _thresholdMap.set(agent, new Map());
+  }
+  _thresholdMap.get(agent)!.set(parameter, value);
+}
+
+// ── Input validation ─────────────────────────────────────────────────────────
+export function validateAgentStat(stat: { runs: number; successRate: number }): void {
+  if (!Number.isFinite(stat.runs) || stat.runs < 1) {
+    throw new Error(`Invalid runs value: ${stat.runs}`);
+  }
+  if (!Number.isFinite(stat.successRate) || stat.successRate < 0 || stat.successRate > 100) {
+    throw new Error(`Invalid successRate: ${stat.successRate}`);
+  }
+}
+
+// ── Duplicate-proposal suppression ──────────────────────────────────────────
+export async function hasOpenProposal(agent: string, parameter: string): Promise<boolean> {
+  const OPEN_STATUSES: ActionStatus[] = ["proposed", "pending_review", "approved"];
+  const rows = await db
+    .select({ id: improvementActions.id })
+    .from(improvementActions)
+    .where(
+      and(
+        eq(improvementActions.agent, agent),
+        eq(improvementActions.parameter, parameter),
+        inArray(improvementActions.status, OPEN_STATUSES)
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+// ── Core evaluation ──────────────────────────────────────────────────────────
+/**
+ * Evaluates all agent stats and proposes threshold adjustments where needed.
+ *
+ * Returns GovernedAction[] — each row is a DB-persisted ImprovementAction
+ * extended with the derived `category` and `autoApprove` fields.
+ *
+ * Rules:
+ *   - Minimum 5 runs before any proposal.
+ *   - Proposals are suppressed when the parameter is already at its ceiling.
+ *   - Duplicate proposals (open row for same agent+parameter) are skipped.
+ *   - Only `operational` parameters can be auto-approved; all others go to
+ *     `pending_review` status and require physician sign-off.
+ */
+export async function evaluateAndImprove(): Promise<GovernedAction[]> {
+  const stats = getAgentStats();
+  const created: GovernedAction[] = [];
+
+  for (const [agent, s] of Object.entries(stats)) {
+    if (s.runs < 5) continue;
+
+    try {
+      validateAgentStat(s);
+    } catch {
+      continue;
+    }
+
+    const metric = { successRate: s.successRate, runs: s.runs };
+
+    // ── conservatism: raised when success rate is low ─────────────────────
+    if (s.successRate < 60) {
+      const parameter = "conservatism";
+      const bounds    = THRESHOLD_BOUNDS[parameter];
+
+      const cached  = _getCachedThreshold(agent, parameter);
+      const current = cached !== undefined ? cached : await _getThresholdFromDb(agent, parameter);
+
+      // Ceiling enforcement — never propose beyond max
+      if (current >= bounds.max) {
+        console.warn(`[SelfImprove] ${agent}.${parameter} at ceiling (${bounds.max}) — skipping proposal`);
+        continue;
+      }
+
+      if (await hasOpenProposal(agent, parameter)) continue;
+
+      const toValue     = Math.min(Math.round((current + bounds.step) * 1000) / 1000, bounds.max);
+      const autoApprove = AUTO_APPROVE_PERMITTED[bounds.category];
+      const status      = autoApprove ? "proposed" : "pending_review";
+
+      const [row] = await db
+        .insert(improvementActions)
+        .values({
+          agent,
+          action:    "threshold_adjustment",
+          parameter,
+          fromValue: current,
+          toValue,
+          reason:    `Success rate ${s.successRate}% below 60% over ${s.runs} runs`,
+          status,
+          metric,
+        } satisfies InsertImprovementAction)
+        .returning();
+
+      created.push({ ...row, category: bounds.category, autoApprove });
+      publish("selfimprove:adjustment_proposed", {
+        agent, parameter, fromValue: current, toValue, autoApprove, category: bounds.category,
+      });
+    }
+
+    // ── escalation: critical failure rate — always clinical/pending_review ─
+    if (s.successRate < 40) {
+      const parameter = "escalation";
+      if (await hasOpenProposal(agent, parameter)) continue;
+
+      const [row] = await db
+        .insert(improvementActions)
+        .values({
+          agent,
+          action:    "escalation_recommended",
+          parameter,
+          fromValue: null,
+          toValue:   null,
+          reason:    `Critical: ${agent} rate ${s.successRate}% — physician-only fallback recommended`,
+          status:    "pending_review",
+          metric,
+        } satisfies InsertImprovementAction)
+        .returning();
+
+      created.push({ ...row, category: "clinical", autoApprove: false });
+      publish("selfimprove:escalation", { agent, actionId: row.id });
+    }
+
+    // ── latency_alert: high average response time — operational ───────────
+    if (s.avgMs > 5000) {
+      const parameter = "latency_alert";
+      if (await hasOpenProposal(agent, parameter)) continue;
+
+      const [row] = await db
+        .insert(improvementActions)
+        .values({
+          agent,
+          action:    "performance_warning",
+          parameter,
+          fromValue: null,
+          toValue:   null,
+          reason:    `Agent ${agent} avg latency ${s.avgMs}ms exceeds 5 s`,
+          status:    "proposed",
+          metric,
+        } satisfies InsertImprovementAction)
+        .returning();
+
+      created.push({ ...row, category: "operational", autoApprove: true });
+    }
+  }
+
+  _appendLegacyLog(created);
+  return created;
+}
+
+// ── Apply an approved action (idempotent, bounds-validated, compare-and-swap) ─
+/**
+ * Applies a previously proposed or approved ImprovementAction.
+ *
+ * Guards (fail-closed):
+ *   1. Advisory per-action lock (prevents concurrent double-apply).
+ *   2. Idempotency check (already applied → no-op).
+ *   3. Status guard (only `proposed` or `approved` may be applied).
+ *   4. Bounds re-validation (toValue must be within THRESHOLD_BOUNDS at apply time).
+ *   5. Compare-and-swap (current DB value must match fromValue from proposal).
+ */
+export async function applyImprovementAction(
+  actionId:  number,
+  decidedBy: string
+): Promise<{ applied: boolean; reason: string }> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTION_LOCK_BASE + actionId})`);
+
+    const [action] = await tx
+      .select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!action) return { applied: false, reason: "action not found" };
+    if (action.status === "applied") return { applied: false, reason: "already applied" };
+    if (!["approved", "proposed"].includes(action.status)) {
+      return { applied: false, reason: `status '${action.status}' is not applicable` };
+    }
+
+    if (action.fromValue !== null && action.toValue !== null && action.parameter) {
+      // ── Bounds re-validation ────────────────────────────────────────────
+      const bounds = THRESHOLD_BOUNDS[action.parameter];
+      if (bounds) {
+        if (action.toValue < bounds.min || action.toValue > bounds.max) {
+          await tx
+            .update(improvementActions)
+            .set({
+              status:       "failed",
+              errorMessage: `Out-of-bounds: ${action.parameter}=${action.toValue} (limits: ${bounds.min}–${bounds.max})`,
+              decidedAt:    new Date(),
+              decidedBy,
+            })
+            .where(eq(improvementActions.id, actionId));
+          return { applied: false, reason: "value out of bounds — refused to apply" };
+        }
+      }
+
+      // ── Compare-and-swap ────────────────────────────────────────────────
+      const [current] = await tx
+        .select({ currentValue: agentThresholdRecords.currentValue })
+        .from(agentThresholdRecords)
+        .where(
+          and(
+            eq(agentThresholdRecords.agent, action.agent),
+            eq(agentThresholdRecords.parameter, action.parameter)
+          )
+        )
+        .limit(1);
+
+      const dbVal = current?.currentValue ?? 0;
+      if (Math.abs(dbVal - (action.fromValue ?? 0)) > 1e-9) {
+        await tx
+          .update(improvementActions)
+          .set({
+            status:       "failed",
+            errorMessage: `CAS mismatch: expected ${action.fromValue}, found ${dbVal}`,
+            decidedAt:    new Date(),
+            decidedBy,
+          })
+          .where(eq(improvementActions.id, actionId));
+        return { applied: false, reason: "compare-and-swap mismatch — stale proposal" };
+      }
+
+      // ── Write threshold ─────────────────────────────────────────────────
+      await _persistThreshold(action.agent, action.parameter, action.toValue, decidedBy, tx as any);
+    }
+
+    const now = new Date();
+    await tx
+      .update(improvementActions)
+      .set({ status: "applied", decidedAt: now, decidedBy })
+      .where(eq(improvementActions.id, actionId));
+
+    await auditStep({
+      traceId:  `selfimprove-apply-${actionId}`,
+      step:     "improvement_action_applied",
+      input:    { actionId, decidedBy },
+      output:   { agent: action.agent, parameter: action.parameter, toValue: action.toValue },
+      metadata: {
+        actionId,
+        agent:    action.agent,
+        category: action.parameter ? (THRESHOLD_BOUNDS[action.parameter]?.category ?? "unknown") : "unknown",
+        decidedBy,
+      },
+    });
+
+    publish("selfimprove:adjustment_applied", {
+      agent:     action.agent,
+      parameter: action.parameter,
+      fromValue: action.fromValue,
+      toValue:   action.toValue,
+      appliedBy: decidedBy,
+    });
+
+    return { applied: true, reason: "ok" };
+  });
+}
+
+// ── Reject an action ─────────────────────────────────────────────────────────
+export async function rejectImprovementAction(
+  actionId:   number,
+  reviewerId: string,
+  note?:      string
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(improvementActions)
+      .set({ status: "rejected", decidedAt: new Date(), decidedBy: reviewerId })
+      .where(eq(improvementActions.id, actionId));
+
+    await tx.insert(improvementReviews).values({
+      actionId,
+      reviewerId,
+      decision: "rejected",
+      note:     note ?? null,
+    });
+  });
+}
+
+// ── Approve + apply by a physician reviewer ───────────────────────────────────
+export async function approveAndApplyAction(
+  actionId:   number,
+  reviewerId: string,
+  note?:      string
+): Promise<{ applied: boolean; reason: string }> {
+  await db
+    .update(improvementActions)
+    .set({ status: "approved", decidedAt: new Date(), decidedBy: reviewerId })
+    .where(eq(improvementActions.id, actionId));
+
+  await db.insert(improvementReviews).values({
+    actionId,
+    reviewerId,
+    decision: "approved",
+    note:     note ?? null,
+  });
+
+  return applyImprovementAction(actionId, reviewerId);
+}
+
+// ── DB-backed log / threshold accessors ─────────────────────────────────────
+export async function getImprovementLog(limit = 100): Promise<DbImprovementAction[]> {
+  return db
+    .select()
+    .from(improvementActions)
+    .orderBy(desc(improvementActions.proposedAt))
+    .limit(limit);
+}
+
+export async function getAgentThresholds(): Promise<Record<string, Record<string, number>>> {
+  const rows = await db.select().from(agentThresholdRecords);
+  const out: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    if (!out[r.agent]) out[r.agent] = {};
+    out[r.agent][r.parameter] = r.currentValue;
+  }
+  return out;
+}
+
+export async function listPendingReviews(): Promise<DbImprovementAction[]> {
+  return db
+    .select()
+    .from(improvementActions)
+    .where(inArray(improvementActions.status, ["proposed", "pending_review", "approved"]))
+    .orderBy(desc(improvementActions.proposedAt));
+}
+
+export async function getReviewHistory(actionId: number) {
+  return db
+    .select()
+    .from(improvementReviews)
+    .where(eq(improvementReviews.actionId, actionId))
+    .orderBy(desc(improvementReviews.decidedAt));
+}
+
+// ── Count auto-approved actions in a rolling window (rate limit helper) ───────
+export async function countAppliedInWindow(windowMs: number): Promise<number> {
+  const windowStart = new Date(Date.now() - windowMs);
+  const [{ value }] = await db
+    .select({ value: count() })
+    .from(improvementActions)
+    .where(
+      and(
+        eq(improvementActions.status, "applied"),
+        gte(improvementActions.decidedAt, windowStart)
+      )
+    );
+  return value ?? 0;
+}
+
+// ── computeBusinessMetrics (unchanged — used by metaOrchestrator) ─────────────
+export function computeBusinessMetrics(claimData: Array<{ revenue: number; paid: boolean }>): {
+  revenue:  number;
+  cost:     number;
+  profit:   number;
+  margin:   number;
+  strategy: string;
+} {
+  const revenue = claimData.reduce((sum, c) => sum + (c.paid ? c.revenue : 0), 0);
+  const cost    = claimData.length * 0.02;
+  const profit  = revenue - cost;
+  const margin  = revenue > 0 ? Math.round(((revenue - cost) / revenue) * 100) / 100 : 0;
+
+  let strategy: string;
+  if (margin < 0.5)         strategy = "Reduce compute cost or renegotiate payer contracts — margin critically low";
+  else if (margin < 0.7)    strategy = "Optimize coding accuracy to reduce denials and improve revenue per claim";
+  else if (revenue > 50000) strategy = "Scale marketing and clinic partnerships — strong unit economics";
+  else                      strategy = "Focus on growth — add clinics, expand payer network, increase case volume";
+
+  return {
+    revenue:  Math.round(revenue),
+    cost:     Math.round(cost * 100) / 100,
+    profit:   Math.round(profit * 100) / 100,
+    margin,
+    strategy,
+  };
+}
+
+// ── Loop management ──────────────────────────────────────────────────────────
+let improvementInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startSelfImproveLoop(intervalMs = 60000) {
+  if (improvementInterval) return;
+  improvementInterval = setInterval(() => {
+    evaluateAndImprove().catch((err) =>
+      console.error("[selfImprove] loop error:", err)
+    );
+  }, intervalMs);
+}
+
+export function stopSelfImproveLoop() {
+  if (improvementInterval) {
+    clearInterval(improvementInterval);
+    improvementInterval = null;
+  }
+}
+
+// ── Legacy in-memory log shim (keeps backward compat for sync callers) ───────
+const _legacyLog: ImprovementAction[] = [];
+
+function _appendLegacyLog(rows: DbImprovementAction[]): void {
+  for (const r of rows) {
+    _legacyLog.push({
+      agent:     r.agent,
+      action:    r.action,
+      reason:    r.reason,
+      timestamp: r.proposedAt?.toISOString() ?? new Date().toISOString(),
+      metric:    (r.metric as { successRate: number; runs: number }) ?? { successRate: 0, runs: 0 },
+    });
+  }
+  if (_legacyLog.length > 500) _legacyLog.splice(0, _legacyLog.length - 500);
+}
+
+
+=================================================================================
+FILE: server/agents/selfModify.ts
+=================================================================================
+export interface AgentFeedback {
+  successRate: number;
+  failedActions: string[];
+  dominantComplaint?: string;
+  averageRiskScore?: number;
+}
+
+export interface AgentConfig {
+  basePrompt: string;
+  appendedInstructions: string[];
+  confidenceThreshold: number;
+  preferDifferentialDiagnosis: boolean;
+  lastModifiedAt: string;
+  modificationCount: number;
+}
+
+const agentConfigs = new Map<string, AgentConfig>();
+
+function getOrCreate(agentId: string): AgentConfig {
+  if (!agentConfigs.has(agentId)) {
+    agentConfigs.set(agentId, {
+      basePrompt: "Diagnose and triage patient based on complaints, vitals, and history.",
+      appendedInstructions: [],
+      confidenceThreshold: 0.7,
+      preferDifferentialDiagnosis: false,
+      lastModifiedAt: new Date().toISOString(),
+      modificationCount: 0,
+    });
+  }
+  return agentConfigs.get(agentId)!;
+}
+
+export function improveAgent(agentId: string, feedback: AgentFeedback): { modified: boolean; changes: string[] } {
+  const config = getOrCreate(agentId);
+  const changes: string[] = [];
+
+  if (feedback.successRate < 0.7) {
+    config.appendedInstructions.push("Consider alternative diagnoses before committing to primary.");
+    changes.push("Added differential diagnosis reminder");
+    config.preferDifferentialDiagnosis = true;
+  }
+
+  if (feedback.failedActions.includes("otoscopy") && !config.appendedInstructions.includes("Verify ear canal alignment before otoscope approach.")) {
+    config.appendedInstructions.push("Verify ear canal alignment before otoscope approach.");
+    changes.push("Added otoscope alignment check");
+  }
+
+  if ((feedback.averageRiskScore ?? 0) > 0.75) {
+    config.confidenceThreshold = Math.min(0.95, config.confidenceThreshold + 0.05);
+    changes.push(`Raised confidence threshold to ${config.confidenceThreshold}`);
+  }
+
+  if (feedback.dominantComplaint === "chest_pain" && !config.appendedInstructions.includes("Always rule out cardiac etiology for chest pain first.")) {
+    config.appendedInstructions.push("Always rule out cardiac etiology for chest pain first.");
+    changes.push("Added cardiac rule-out priority");
+  }
+
+  if (changes.length > 0) {
+    config.lastModifiedAt = new Date().toISOString();
+    config.modificationCount++;
+  }
+
+  return { modified: changes.length > 0, changes };
+}
+
+export function getAgentPrompt(agentId: string): string {
+  const config = getOrCreate(agentId);
+  const parts = [config.basePrompt, ...config.appendedInstructions];
+  return parts.join(" ");
+}
+
+export function getAgentConfig(agentId: string): AgentConfig {
+  return getOrCreate(agentId);
+}
+
+export function listAgentConfigs(): Array<{ agentId: string } & AgentConfig> {
+  return [...agentConfigs.entries()].map(([agentId, config]) => ({ agentId, ...config }));
+}
+
+export function resetAgent(agentId: string): void {
+  agentConfigs.delete(agentId);
+}
+
+
+=================================================================================
+FILE: server/analysis/modelDriftDetector.ts
+=================================================================================
+export interface AccuracyRecord {
+  date: number;
+  accuracy: number;
+  source?: string;
+}
+
+export interface DriftAnalysis {
+  drift: boolean;
+  driftMagnitude: number;
+  avgRecent: number;
+  avgOlder: number;
+  trend: "improving" | "stable" | "degrading";
+  dataPoints: number;
+  recommendation?: string;
+}
+
+const MAX_HISTORY = 365;
+const accuracyHistory: AccuracyRecord[] = [];
+
+export function recordAccuracy(accuracy: number, source?: string) {
+  accuracyHistory.push({
+    date: Date.now(),
+    accuracy,
+    source,
+  });
+
+  if (accuracyHistory.length > MAX_HISTORY) {
+    accuracyHistory.shift();
+  }
+}
+
+export function detectModelDrift(windowSize = 10, threshold = 0.05): DriftAnalysis {
+  const minRequired = windowSize * 2;
+
+  if (accuracyHistory.length < minRequired) {
+    return {
+      drift: false,
+      driftMagnitude: 0,
+      avgRecent: 0,
+      avgOlder: 0,
+      trend: "stable",
+      dataPoints: accuracyHistory.length,
+      recommendation: `Need at least ${minRequired} data points (have ${accuracyHistory.length})`,
+    };
+  }
+
+  const recent = accuracyHistory.slice(-windowSize);
+  const older = accuracyHistory.slice(-minRequired, -windowSize);
+
+  const avgRecent = Math.round((recent.reduce((s, r) => s + r.accuracy, 0) / recent.length) * 1000) / 1000;
+  const avgOlder = Math.round((older.reduce((s, r) => s + r.accuracy, 0) / older.length) * 1000) / 1000;
+  const driftMagnitude = Math.round(Math.abs(avgOlder - avgRecent) * 1000) / 1000;
+  const drift = avgOlder - avgRecent > threshold;
+
+  let trend: "improving" | "stable" | "degrading" = "stable";
+  if (avgRecent - avgOlder > 0.02) trend = "improving";
+  else if (avgOlder - avgRecent > 0.02) trend = "degrading";
+
+  let recommendation: string | undefined;
+  if (drift) {
+    recommendation = `Model accuracy dropped ${(driftMagnitude * 100).toFixed(1)}% — consider retraining or investigating data distribution changes`;
+  } else if (trend === "improving") {
+    recommendation = "Performance improving — current learning pipeline is effective";
+  }
+
+  return { drift, driftMagnitude, avgRecent, avgOlder, trend, dataPoints: accuracyHistory.length, recommendation };
+}
+
+export function getAccuracyHistory() {
+  return {
+    total: accuracyHistory.length,
+    maxCapacity: MAX_HISTORY,
+    records: accuracyHistory.slice(-50),
+  };
+}
+
+
+=================================================================================
+FILE: server/governance/clinicalRiskMonitor.ts
+=================================================================================
+export type RiskAlertSeverity = "critical" | "high" | "medium" | "low";
+
+export interface RiskAlert {
+  severity: RiskAlertSeverity;
+  category: string;
+  message: string;
+  threshold?: number;
+  actual?: number;
+}
+
+export interface ClinicalMetrics {
+  redFlagAccuracy?: number;
+  erDispositionRate?: number;
+  overallAccuracy?: number;
+  avgResponseTime?: number;
+  escalationRate?: number;
+  selfCareRate?: number;
+  questionCompletionRate?: number;
+}
+
+const THRESHOLDS = {
+  redFlagAccuracy: { min: 0.95, severity: "critical" as const, message: "Red flag detection accuracy below 95%" },
+  erDispositionRate: { min: 0.03, severity: "high" as const, message: "ER triage rate suspiciously low (< 3%)" },
+  overallAccuracy: { min: 0.85, severity: "high" as const, message: "Overall triage accuracy below 85%" },
+  selfCareRate: { max: 0.70, severity: "medium" as const, message: "Self-care disposition rate suspiciously high (> 70%)" },
+  questionCompletionRate: { min: 0.80, severity: "medium" as const, message: "Question completion rate below 80%" },
+  escalationRate: { max: 0.40, severity: "medium" as const, message: "Escalation rate above 40%" },
+};
+
+export function analyzeClinicalRisk(metrics: ClinicalMetrics): RiskAlert[] {
+  const alerts: RiskAlert[] = [];
+
+  if (metrics.redFlagAccuracy != null && metrics.redFlagAccuracy < THRESHOLDS.redFlagAccuracy.min) {
+    alerts.push({
+      severity: THRESHOLDS.redFlagAccuracy.severity,
+      category: "safety",
+      message: THRESHOLDS.redFlagAccuracy.message,
+      threshold: THRESHOLDS.redFlagAccuracy.min,
+      actual: metrics.redFlagAccuracy,
+    });
+  }
+
+  if (metrics.erDispositionRate != null && metrics.erDispositionRate < THRESHOLDS.erDispositionRate.min) {
+    alerts.push({
+      severity: THRESHOLDS.erDispositionRate.severity,
+      category: "triage",
+      message: THRESHOLDS.erDispositionRate.message,
+      threshold: THRESHOLDS.erDispositionRate.min,
+      actual: metrics.erDispositionRate,
+    });
+  }
+
+  if (metrics.overallAccuracy != null && metrics.overallAccuracy < THRESHOLDS.overallAccuracy.min) {
+    alerts.push({
+      severity: THRESHOLDS.overallAccuracy.severity,
+      category: "accuracy",
+      message: THRESHOLDS.overallAccuracy.message,
+      threshold: THRESHOLDS.overallAccuracy.min,
+      actual: metrics.overallAccuracy,
+    });
+  }
+
+  if (metrics.selfCareRate != null && metrics.selfCareRate > (THRESHOLDS.selfCareRate.max ?? 1)) {
+    alerts.push({
+      severity: THRESHOLDS.selfCareRate.severity,
+      category: "distribution",
+      message: THRESHOLDS.selfCareRate.message,
+      threshold: THRESHOLDS.selfCareRate.max,
+      actual: metrics.selfCareRate,
+    });
+  }
+
+  if (metrics.questionCompletionRate != null && metrics.questionCompletionRate < THRESHOLDS.questionCompletionRate.min) {
+    alerts.push({
+      severity: THRESHOLDS.questionCompletionRate.severity,
+      category: "engagement",
+      message: THRESHOLDS.questionCompletionRate.message,
+      threshold: THRESHOLDS.questionCompletionRate.min,
+      actual: metrics.questionCompletionRate,
+    });
+  }
+
+  if (metrics.escalationRate != null && metrics.escalationRate > (THRESHOLDS.escalationRate.max ?? 1)) {
+    alerts.push({
+      severity: THRESHOLDS.escalationRate.severity,
+      category: "escalation",
+      message: THRESHOLDS.escalationRate.message,
+      threshold: THRESHOLDS.escalationRate.max,
+      actual: metrics.escalationRate,
+    });
+  }
+
+  return alerts.sort((a, b) => {
+    const order = { critical: 0, high: 1, medium: 2, low: 3 };
+    return order[a.severity] - order[b.severity];
+  });
+}
+
+
+=================================================================================
+FILE: server/governance/protocolRegressionAgent.ts
+=================================================================================
+import { runGraphDrivenSimulation, GraphSimulationResult } from "../simulation/graphDrivenSimulationEngine";
+
+export interface RegressionTestResult {
+  passed: boolean;
+  total: number;
+  failures: number;
+  failureDetails: { gap: string; status: string; recommendation: string }[];
+  runAt: string;
+  duration: number;
+}
+
+export function runProtocolRegressionTest(maxSimulations = 50): RegressionTestResult {
+  const start = Date.now();
+
+  const simulation = runGraphDrivenSimulation(maxSimulations);
+
+  const failures = simulation.results.filter(
+    (s) => s.status === "failure" || s.status === "critical_gap"
+  );
+
+  return {
+    passed: failures.length === 0,
+    total: simulation.simulatedCount,
+    failures: failures.length,
+    failureDetails: failures.map((f) => ({
+      gap: f.gap.nodeLabel,
+      status: f.status,
+      recommendation: f.recommendation,
+    })),
+    runAt: new Date().toISOString(),
+    duration: Date.now() - start,
+  };
+}
+
+
+=================================================================================
+FILE: server/services/testing/syntheticCaseGenerator.ts
+=================================================================================
+import path from "path";
+import { loadCsvFile } from "../../data/csvLoader";
+
+export interface SyntheticCase {
+  caseId: string;
+  complaintId: string;
+  answers: Record<string, unknown>;
+  expectedDisposition?: string;
+  metadata: { generated: true; seed: number };
+}
+
+interface QuestionDef {
+  qId: string;
+  answerType: string;
+  required: boolean;
+  askIf: string;
+  category: string;
+}
+
+interface DispositionRule {
+  ruleId: string;
+  priority: number;
+  whenExpr: string;
+  dispositionLevel: string;
+}
+
+const CSV_DIR = path.resolve(process.cwd(), "server/data/csv");
+
+let questionsCache: Record<string, QuestionDef[]> | null = null;
+let dispositionCache: Record<string, DispositionRule[]> | null = null;
+
+function loadQuestionsByComplaint(): Record<string, QuestionDef[]> {
+  if (questionsCache) return questionsCache;
+  const rows = loadCsvFile(path.join(CSV_DIR, "CORE_QUESTIONS.csv"));
+  const map: Record<string, QuestionDef[]> = {};
+  for (const row of rows) {
+    const ccId = row.CC_ID;
+    if (!ccId) continue;
+    if (!map[ccId]) map[ccId] = [];
+    map[ccId].push({
+      qId: row.Q_ID,
+      answerType: (row.ANSWER_TYPE || "tri").toLowerCase(),
+      required: row.REQUIRED === "TRUE",
+      askIf: row.ASK_IF || "true",
+      category: row.CATEGORY || "",
+    });
+  }
+  questionsCache = map;
+  return map;
+}
+
+function loadDispositionsByComplaint(): Record<string, DispositionRule[]> {
+  if (dispositionCache) return dispositionCache;
+  const rows = loadCsvFile(path.join(CSV_DIR, "DISPOSITION_RULES.csv"));
+  const map: Record<string, DispositionRule[]> = {};
+  for (const row of rows) {
+    const ccId = row.CC_ID;
+    if (!ccId) continue;
+    if (!map[ccId]) map[ccId] = [];
+    map[ccId].push({
+      ruleId: row.DISP_RULE_ID,
+      priority: parseInt(row.PRIORITY, 10) || 99,
+      whenExpr: row.WHEN_EXPR || "true",
+      dispositionLevel: row.DISPOSITION_LEVEL || "routine",
+    });
+  }
+  for (const ccId of Object.keys(map)) {
+    map[ccId].sort((a, b) => a.priority - b.priority);
+  }
+  dispositionCache = map;
+  return map;
+}
+
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+}
+
+function generateRandomAnswer(answerType: string, rand: () => number): unknown {
+  switch (answerType) {
+    case "tri": {
+      const r = rand();
+      if (r < 0.4) return "yes";
+      if (r < 0.8) return "no";
+      return "unsure";
+    }
+    case "boolean":
+    case "bool":
+      return rand() < 0.5 ? "yes" : "no";
+    case "number": {
+      const r = rand();
+      if (r < 0.3) return Math.floor(rand() * 3) + 1;
+      if (r < 0.6) return Math.floor(rand() * 7) + 3;
+      if (r < 0.85) return Math.floor(rand() * 14) + 7;
+      return Math.floor(rand() * 30) + 14;
+    }
+    case "select":
+    case "choice":
+      return rand() < 0.5 ? "yes" : "no";
+    default:
+      return rand() < 0.5 ? "yes" : "no";
+  }
+}
+
+function evaluateSimpleCondition(
+  expr: string,
+  answers: Record<string, unknown>,
+): boolean {
+  if (!expr || expr === "true") return true;
+  if (expr === "false") return false;
+
+  try {
+    const safeExpr = expr
+      .replace(/answers\.(\w+)/g, (_, key) => {
+        const val = answers[key];
+        if (val === undefined || val === null) return "undefined";
+        if (typeof val === "number") return String(val);
+        return `"${String(val)}"`;
+      })
+      .replace(/scores\.\w+/g, "0")
+      .replace(/redFlagGate\.gateResult/g, '"NONE"');
+
+    const fn = new Function(`return (${safeExpr});`);
+    return !!fn();
+  } catch {
+    return false;
+  }
+}
+
+function estimateDisposition(
+  complaintId: string,
+  answers: Record<string, unknown>,
+): string | undefined {
+  const dispMap = loadDispositionsByComplaint();
+  const rules = dispMap[complaintId];
+  if (!rules || rules.length === 0) return undefined;
+
+  for (const rule of rules) {
+    if (evaluateSimpleCondition(rule.whenExpr, answers)) {
+      return rule.dispositionLevel;
+    }
+  }
+
+  return "routine";
+}
+
+export function generateSyntheticCases(
+  complaintId: string,
+  count = 10,
+): SyntheticCase[] {
+  const qMap = loadQuestionsByComplaint();
+  const questions = qMap[complaintId];
+  const cases: SyntheticCase[] = [];
+
+  if (!questions || questions.length === 0) {
+    for (let i = 0; i < count; i++) {
+      const seed = Date.now() + i;
+      cases.push({
+        caseId: `synth_${complaintId}_${seed}`,
+        complaintId,
+        answers: {},
+        metadata: { generated: true, seed },
+      });
+    }
+    return cases;
+  }
+
+  for (let i = 0; i < count; i++) {
+    const seed = Date.now() + i;
+    const rand = seededRandom(seed);
+    const answers: Record<string, unknown> = {};
+
+    for (const q of questions) {
+      const shouldAsk = evaluateSimpleCondition(q.askIf, answers);
+      if (!shouldAsk && !q.required) continue;
+
+      if (!q.required && rand() < 0.3) continue;
+
+      answers[q.qId] = generateRandomAnswer(q.answerType, rand);
+    }
+
+    const expectedDisposition = estimateDisposition(complaintId, answers);
+
+    cases.push({
+      caseId: `synth_${complaintId}_${seed}`,
+      complaintId,
+      answers,
+      expectedDisposition,
+      metadata: { generated: true, seed },
+    });
+  }
+
+  return cases;
+}
+
+export function listAvailableComplaints(): string[] {
+  const qMap = loadQuestionsByComplaint();
+  return Object.keys(qMap).sort();
+}
+
+export function clearSyntheticCaches(): void {
+  questionsCache = null;
+  dispositionCache = null;
+}
+
+
+=================================================================================
+FILE: server/services/testing/statisticalValidationService.ts
+=================================================================================
+export interface ValidationStats {
+  sampleSize: number;
+  mean: number;
+  stdDev: number;
+  ci95Lower: number;
+  ci95Upper: number;
+  significanceLevel: number;
+}
+
+export function computeValidationStats(values: number[]): ValidationStats {
+  const n = values.length;
+  if (n === 0) return { sampleSize: 0, mean: 0, stdDev: 0, ci95Lower: 0, ci95Upper: 0, significanceLevel: 1 };
+
+  const mean = values.reduce((s, v) => s + v, 0) / n;
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1 || 1);
+  const stdDev = Math.sqrt(variance);
+  const se = stdDev / Math.sqrt(n);
+  const z = 1.96;
+
+  return {
+    sampleSize: n,
+    mean: Math.round(mean * 1000) / 1000,
+    stdDev: Math.round(stdDev * 1000) / 1000,
+    ci95Lower: Math.round((mean - z * se) * 1000) / 1000,
+    ci95Upper: Math.round((mean + z * se) * 1000) / 1000,
+    significanceLevel: 0.05,
+  };
+}
+

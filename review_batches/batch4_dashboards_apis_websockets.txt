@@ -1,0 +1,3105 @@
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform (Auralyn — HIPAA/FDA multi-tenant SaaS, NYC urgent care).
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Do not be gentle. Be precise.
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+SUMMARY TABLE
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+Likely theater/scaffolding:
+Highest ROI fixes:
+Needs cross-file review confirmation:
+
+BATCH-SPECIFIC FOCUS:
+Review these files for frontend/backend mismatches, fake controls, misleading status indicators, broken contracts, incomplete live wiring, and dashboard behavior that implies functionality not truly enforced by the backend.
+
+======================================================================
+CODE BELOW — BEGIN REVIEW
+======================================================================
+
+=== AURALYN CODE REVIEW — BATCH 4: Dashboards, APIs, WebSockets ===
+Files: dashboard pages, API routes, WebSocket streams, health/status, live patient views
+Review focus: frontend/backend mismatches, fake controls, misleading status indicators, broken contracts, incomplete live wiring
+
+=================================================================================
+FILE: server/realtime/patientStream.ts
+=================================================================================
+/**
+ * server/realtime/patientStream.ts — WebSocket patient broadcast layer
+ *
+ * FIXES (Code Review Issue #7):
+ *   Previously: any client could connect without authentication, and all events
+ *   were broadcast globally to every connected client regardless of tenant.
+ *
+ *   Fixed:
+ *   1. Authentication: JWT Bearer token is required on every connection upgrade.
+ *      Connection is rejected with 401 if the token is missing, invalid, or expired.
+ *      Token can be passed as Authorization header or ?token= query parameter
+ *      (query param for browser WebSocket clients that can't set headers).
+ *
+ *   2. Tenant isolation: Each connected client is tagged with clinicId from
+ *      their verified token. broadcastPatientUpdate and broadcastDiagnosticResult
+ *      now accept a required clinicId parameter and only deliver to clients
+ *      whose clinicId matches. No cross-tenant event leakage.
+ *
+ *   3. Identity: req.physician (set by verifyAccessToken) is attached to the ws
+ *      object so downstream handlers have full principal context.
+ */
+
+import { WebSocketServer, WebSocket } from "ws";
+import type { IncomingMessage } from "http";
+import { verifyAccessToken } from "../auth/unifiedAuth";
+
+// ── Typed client record ───────────────────────────────────────────────────────
+
+interface AuthenticatedClient {
+  ws:        WebSocket;
+  userId:    string;
+  clinicId:  string;
+  role:      string;
+  connectedAt: number;
+}
+
+let wss:     WebSocketServer | null     = null;
+const clients: Set<AuthenticatedClient> = new Set();
+
+// ── Token extraction ──────────────────────────────────────────────────────────
+
+function extractToken(req: IncomingMessage): string | null {
+  // Authorization: Bearer <token>
+  const authHeader = req.headers["authorization"];
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice("Bearer ".length);
+  }
+
+  // ?token=<token> (browser WebSocket clients)
+  const url = req.url ?? "";
+  const qs  = new URL(url, "ws://localhost").searchParams;
+  return qs.get("token") ?? null;
+}
+
+// ── Initialization ────────────────────────────────────────────────────────────
+
+export function initPatientStream(server: any): void {
+  if (wss) return;
+
+  wss = new WebSocketServer({ server, path: "/ws/patients" });
+
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    // ── Authenticate on upgrade ──────────────────────────────────────────────
+    const token = extractToken(req);
+
+    if (!token) {
+      ws.close(4001, "Authentication required");
+      return;
+    }
+
+    let decoded: ReturnType<typeof verifyAccessToken>;
+    try {
+      decoded = verifyAccessToken(token);
+    } catch {
+      ws.close(4001, "Invalid or expired token");
+      return;
+    }
+
+    if (!decoded.clinicId) {
+      ws.close(4003, "Token missing clinicId — tenant isolation required");
+      return;
+    }
+
+    // ── Register authenticated client ────────────────────────────────────────
+    const client: AuthenticatedClient = {
+      ws,
+      userId:      decoded.id,
+      clinicId:    decoded.clinicId,
+      role:        decoded.role,
+      connectedAt: Date.now(),
+    };
+    clients.add(client);
+
+    ws.on("close", () => clients.delete(client));
+    ws.on("error", () => clients.delete(client));
+
+    // Welcome message — safe to include identity back to the authenticated client
+    ws.send(JSON.stringify({
+      type:     "connected",
+      message:  "Auralyn patient stream live",
+      userId:   decoded.id,
+      clinicId: decoded.clinicId,
+      ts:       Date.now(),
+    }));
+  });
+
+  console.log("[PatientStream] WebSocket server attached at /ws/patients (auth required)");
+}
+
+// ── Tenant-scoped broadcast ───────────────────────────────────────────────────
+//
+// clinicId is now required on every broadcast. Only clients whose clinicId
+// matches receive the event — no cross-tenant leakage.
+
+export function broadcastPatientUpdate(
+  data:     Record<string, unknown>,
+  clinicId: string,
+): void {
+  const msg = JSON.stringify({ type: "patient_update", ...data, ts: Date.now() });
+  for (const client of clients) {
+    if (client.clinicId === clinicId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(msg);
+    }
+  }
+}
+
+export function broadcastDiagnosticResult(
+  caseId:   string,
+  result:   Record<string, unknown>,
+  clinicId: string,
+): void {
+  const msg = JSON.stringify({ type: "diagnostic_result", caseId, ...result, ts: Date.now() });
+  for (const client of clients) {
+    if (client.clinicId === clinicId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(msg);
+    }
+  }
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+
+export function clientCount(clinicId?: string): number {
+  if (!clinicId) return clients.size;
+  return [...clients].filter(c => c.clinicId === clinicId).length;
+}
+
+export function isInitialised(): boolean {
+  return wss !== null;
+}
+
+
+=================================================================================
+FILE: server/realtime/livePatientEngine.ts
+=================================================================================
+/**
+ * Live Patient Engine — continuous 2-second patient stream
+ * Generates vitals, runs NEWS2 deterioration + intervention engine,
+ * priority-ranks patients, and broadcasts to all WS clients.
+ */
+
+import { broadcastPatientUpdate }           from "./patientStream";
+import { generateInterventions, VitalSnapshot } from "../engines/interventionEngine";
+
+export interface LivePatient {
+  id:            number;
+  name:          string;
+  age:           number;
+  condition:     string;
+  vitals:        VitalSnapshot & { tempF: number };
+  status:        "stable" | "warning" | "critical";
+  deterioration: {
+    newsScore:      number;
+    riskLevel:      string;
+    sepsisCriteria: boolean;
+    prediction:     string;
+  };
+  interventions: ReturnType<typeof generateInterventions>["interventions"];
+  priorityScore: number;
+  lastUpdated:   string;
+}
+
+// Seeded patient profiles — vitals drift realistically over time
+const PATIENT_PROFILES = [
+  { id: 1, name: "Maria Rivera",   age: 68, condition: "chest pain",         baseHR: 108, baseSPO2: 92, baseTemp: 101.2, baseSBP: 88  },
+  { id: 2, name: "James Lee",      age: 45, condition: "fever + chills",      baseHR:  96, baseSPO2: 97, baseTemp: 102.8, baseSBP: 118 },
+  { id: 3, name: "Sarah Cohen",    age: 33, condition: "shortness of breath", baseHR: 124, baseSPO2: 89, baseTemp:  98.6, baseSBP: 102 },
+  { id: 4, name: "Robert Kim",     age: 72, condition: "altered mental status",baseHR:  88, baseSPO2: 94, baseTemp: 99.1,  baseSBP: 96  },
+  { id: 5, name: "Elena Torres",   age: 55, condition: "abdominal pain",      baseHR:  82, baseSPO2: 98, baseTemp:  99.4, baseSBP: 130 },
+];
+
+// State: each patient's current vitals (will drift over time)
+let state: Record<number, VitalSnapshot & { tempF: number }> = {};
+for (const p of PATIENT_PROFILES) {
+  state[p.id] = { hr: p.baseHR, spo2: p.baseSPO2, temp: p.baseTemp, systolicBP: p.baseSBP, tempF: p.baseTemp };
+}
+
+let currentPatients: LivePatient[] = [];
+let tickCount = 0;
+let engineTimer: ReturnType<typeof setInterval> | null = null;
+
+function drift(value: number, min: number, max: number, volatility: number): number {
+  const delta = (Math.random() - 0.5) * volatility;
+  return Math.min(max, Math.max(min, Math.round((value + delta) * 10) / 10));
+}
+
+function formatBP(systolic: number): string {
+  return `${systolic}/${Math.round(systolic * 0.65)}`;
+}
+
+function patientStatus(riskLevel: string): LivePatient["status"] {
+  if (riskLevel === "critical" || riskLevel === "high") return "critical";
+  if (riskLevel === "medium") return "warning";
+  return "stable";
+}
+
+function tick(): void {
+  tickCount++;
+
+  const patients: LivePatient[] = PATIENT_PROFILES.map((profile) => {
+    const prev = state[profile.id];
+
+    // Drift vitals over time (±small random walk, bounded to physiologic range)
+    const vitals: VitalSnapshot & { tempF: number } = {
+      hr:         drift(prev.hr,         40,  200, 4),
+      spo2:       drift(prev.spo2,       80,  100, 1),
+      temp:       drift(prev.temp,       95.0, 106.0, 0.3),
+      systolicBP: drift(prev.systolicBP, 60,  200, 6),
+      tempF:      drift(prev.temp,       95.0, 106.0, 0.3),
+    };
+    vitals.tempF = vitals.temp;  // alias
+
+    state[profile.id] = vitals;
+
+    const result    = generateInterventions(vitals);
+    const priority  = result.newsScore * 2 + (result.riskLevel === "critical" ? 10 : result.riskLevel === "high" ? 5 : 0);
+
+    return {
+      id:          profile.id,
+      name:        profile.name,
+      age:         profile.age,
+      condition:   profile.condition,
+      vitals:      { ...vitals, bp: formatBP(vitals.systolicBP) } as any,
+      status:      patientStatus(result.riskLevel),
+      deterioration: {
+        newsScore:     result.newsScore,
+        riskLevel:     result.riskLevel,
+        sepsisCriteria:result.sepsisCriteria,
+        prediction:    result.prediction,
+      },
+      interventions: result.interventions,
+      priorityScore: priority,
+      lastUpdated:   new Date().toISOString(),
+    };
+  });
+
+  // Sort by priority descending (sickest first)
+  patients.sort((a, b) => b.priorityScore - a.priorityScore);
+  currentPatients = patients;
+
+  // Broadcast to all WS clients
+  broadcastPatientUpdate({
+    type:     "PATIENT_UPDATE",
+    patients: patients.map((p) => ({
+      id:            p.id,
+      name:          p.name,
+      age:           p.age,
+      condition:     p.condition,
+      vitals:        p.vitals,
+      status:        p.status,
+      deterioration: p.deterioration,
+      interventions: p.interventions.slice(0, 3),   // top 3
+      priorityScore: p.priorityScore,
+      lastUpdated:   p.lastUpdated,
+    })),
+    tick:      tickCount,
+    criticalCount: patients.filter((p) => p.status === "critical").length,
+  });
+}
+
+export function startLivePatientEngine(): void {
+  if (engineTimer) return;
+  tick(); // immediate first tick
+  engineTimer = setInterval(tick, 2000);
+  console.log("[LivePatientEngine] Streaming 5 patients every 2s via /ws/patients");
+}
+
+export function stopLivePatientEngine(): void {
+  if (engineTimer) { clearInterval(engineTimer); engineTimer = null; }
+}
+
+export function getCurrentPatients(): LivePatient[] {
+  return currentPatients;
+}
+
+export function getEngineStats() {
+  return {
+    ticks:          tickCount,
+    patients:       currentPatients.length,
+    criticalCount:  currentPatients.filter((p) => p.status === "critical").length,
+    running:        engineTimer !== null,
+  };
+}
+
+
+=================================================================================
+FILE: server/realtime/livePatientRoutes.ts
+=================================================================================
+/**
+ * Live Patient Routes — /api/patients/*
+ * Feeds current patient state + AI insights to the frontend.
+ */
+
+import express from "express";
+import { getCurrentPatients, getEngineStats } from "./livePatientEngine";
+import { generatePatientInsight }              from "../llm/insightEngine";
+import { generateInterventions }               from "../engines/interventionEngine";
+
+const router = express.Router();
+
+// Current live patient state
+router.get("/live", (_req, res) => {
+  res.json({ patients: getCurrentPatients(), stats: getEngineStats(), timestamp: new Date().toISOString() });
+});
+
+// Engine health
+router.get("/live/stats", (_req, res) => {
+  res.json(getEngineStats());
+});
+
+// AI insight for a single patient by current vitals (POST body = vitals)
+router.post("/insights", async (req, res) => {
+  try {
+    const { patientId = "unknown", name = "Patient", vitals } = req.body;
+    if (!vitals) { res.status(400).json({ error: "vitals required" }); return; }
+
+    const insight = await generatePatientInsight(patientId, name, vitals);
+    res.json(insight);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Batch insights for all current patients (expensive — call sparingly)
+router.post("/insights/batch", async (req, res) => {
+  try {
+    const patients = getCurrentPatients();
+    const insights = await Promise.all(
+      patients.map((p) => generatePatientInsight(String(p.id), p.name, p.vitals).then((insight) => ({ patientId: p.id, insight })))
+    );
+    res.json(insights);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Interventions for ad-hoc vitals (used by command center quick-run)
+router.post("/interventions", (req, res) => {
+  try {
+    const { hr = 80, spo2 = 98, temp = 98.6, systolicBP = 120, rr } = req.body;
+    res.json(generateInterventions({ hr, spo2, temp, systolicBP, rr }));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/realtime/systemHealthMonitor.ts
+=================================================================================
+export interface ServiceStatus {
+  name: string;
+  category: string;
+  status: "healthy" | "warning" | "down";
+  latency: number;
+  lastChecked: number;
+  errorCount: number;
+}
+
+const services: Record<string, ServiceStatus> = {};
+
+export function updateService(name: string, category: string, latency: number, error?: boolean) {
+  const existing = services[name];
+  services[name] = {
+    name,
+    category,
+    latency,
+    status: error ? "down" : latency > 1000 ? "warning" : "healthy",
+    lastChecked: Date.now(),
+    errorCount: error ? (existing?.errorCount || 0) + 1 : 0,
+  };
+}
+
+export function getSystemHealth(): ServiceStatus[] {
+  return Object.values(services);
+}
+
+export function getHealthSummary() {
+  const all = Object.values(services);
+  const healthy = all.filter((s) => s.status === "healthy").length;
+  const warning = all.filter((s) => s.status === "warning").length;
+  const down = all.filter((s) => s.status === "down").length;
+  const avgLatency = all.length ? Math.round(all.reduce((s, v) => s + v.latency, 0) / all.length) : 0;
+
+  return {
+    totalServices: all.length,
+    healthy,
+    warning,
+    down,
+    avgLatency,
+    overallStatus: down > 0 ? "degraded" : warning > 0 ? "warning" : "healthy",
+    services: all,
+  };
+}
+
+updateService("Interface Layer", "layer", 12);
+updateService("Normalization Layer", "layer", 8);
+updateService("State Layer", "layer", 5);
+updateService("Knowledge Layer", "layer", 45);
+updateService("Safety Layer", "layer", 15);
+updateService("Reasoning Layer", "layer", 120);
+updateService("Decision Layer", "layer", 18);
+updateService("Learning Layer", "layer", 85);
+updateService("Analytics Layer", "layer", 95);
+updateService("Governance Layer", "layer", 10);
+updateService("Integration Layer", "layer", 250);
+updateService("Orchestration Layer", "layer", 350);
+updateService("Knowledge Graph", "service", 40);
+updateService("OpenAI API", "external", 450);
+updateService("PubMed API", "external", 380);
+
+
+=================================================================================
+FILE: server/routes/patientFlowRoutes.ts
+=================================================================================
+/**
+ * server/routes/patientFlowRoutes.ts — Patient flow session endpoints
+ *
+ * FIXES (Code Review Issue #8):
+ *   All session endpoints were missing authentication middleware — any client
+ *   could create sessions, confirm consent, read any session, or run the full
+ *   patient flow pipeline without identity. Fixed: requirePhysician middleware
+ *   applied globally. Clinical session ownership is validated against the
+ *   physician's clinicId to prevent cross-tenant session reads.
+ */
+
+import express from "express";
+import { requirePhysician } from "../auth/requirePhysician";
+import { startSession, confirmConsent, getSession, listActiveSessions } from "../patient/sessionController";
+import { checkScope } from "../patient/scopeGuard";
+import { checkEscalation } from "../patient/escalation";
+import { runPatientFlow } from "../patient/patientFlow";
+
+const router = express.Router();
+
+// Require physician-level auth on all patient flow endpoints (Issue #8)
+router.use(requirePhysician);
+
+/**
+ * POST /api/patient-flow/start
+ * Start a new patient session. clinicId injected from verified token.
+ */
+router.post("/start", (req, res) => {
+  try {
+    const physician = req.physician!;
+    const session   = startSession({
+      ...req.body,
+      clinicId:    physician.clinicId,
+      initiatedBy: physician.id,
+    });
+    res.json({ ok: true, session });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/patient-flow/consent
+ * Confirm patient consent for an active session.
+ * Validates that the session belongs to the authenticated physician's clinic.
+ */
+router.post("/consent", (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ ok: false, error: "sessionId required" });
+
+    const session = confirmConsent(sessionId);
+    if (!session) return res.status(404).json({ ok: false, error: "Session not found" });
+
+    // Tenant isolation: ensure session belongs to the authenticated clinic
+    const physician = req.physician!;
+    if (physician.clinicId && session.clinicId && session.clinicId !== physician.clinicId) {
+      return res.status(403).json({ ok: false, error: "Cross-tenant session access denied" });
+    }
+
+    res.json({ ok: true, session });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/patient-flow/session/:sessionId
+ * Retrieve a session by ID — scoped to the authenticated physician's clinic.
+ */
+router.get("/session/:sessionId", (req, res) => {
+  try {
+    const session = getSession(req.params.sessionId);
+    if (!session) return res.status(404).json({ ok: false, error: "Session not found" });
+
+    const physician = req.physician!;
+    if (physician.clinicId && session.clinicId && session.clinicId !== physician.clinicId) {
+      return res.status(403).json({ ok: false, error: "Cross-tenant session access denied" });
+    }
+
+    res.json({ ok: true, session });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/patient-flow/sessions
+ * List active sessions for the authenticated physician's clinic.
+ */
+router.get("/sessions", (req, res) => {
+  try {
+    const physician = req.physician!;
+    const allSessions = listActiveSessions();
+    // Filter to only sessions belonging to the authenticated clinic
+    const sessions = physician.clinicId
+      ? allSessions.filter((s: any) => !s.clinicId || s.clinicId === physician.clinicId)
+      : allSessions;
+    res.json({ ok: true, sessions });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/patient-flow/scope-check
+ */
+router.post("/scope-check", (req, res) => {
+  try {
+    const result = checkScope(req.body);
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/patient-flow/flow
+ * Run the full patient flow pipeline.
+ * clinicId injected from token to scope clinical decisions.
+ */
+router.post("/flow", async (req, res) => {
+  try {
+    const physician = req.physician!;
+    const result    = await runPatientFlow({
+      ...req.body,
+      clinicId:    physician.clinicId,
+      physicianId: physician.id,
+    });
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/routes/fhirRoutes.ts
+=================================================================================
+/**
+ * server/routes/fhirRoutes.ts — FHIR resource ingest endpoints
+ *
+ * FIXES (Code Review Issue #6):
+ *   Previously both /patient and /observation accepted PHI with no authentication
+ *   middleware — any caller could ingest arbitrary FHIR resources or tamper with
+ *   existing data. Fixed: requirePhysician enforces physician-level JWT auth on
+ *   all write endpoints. clinicId from the verified token is attached to every
+ *   ingested resource to ensure tenant isolation.
+ */
+
+import { Router } from "express";
+import { requirePhysician } from "../auth/requirePhysician";
+import bulkExportRouter, {
+  addFHIRResource,
+  buildPatientResource,
+  buildObservationResource,
+} from "../fhir/bulkExport";
+
+const router = Router();
+
+// Bulk export sub-router (read-only, auth handled internally)
+router.use("/", bulkExportRouter);
+
+/**
+ * POST /api/fhir/patient
+ * Ingest a FHIR Patient resource.
+ * Requires physician-level JWT. clinicId is injected from the token.
+ */
+router.post("/patient", requirePhysician, (req, res) => {
+  try {
+    const physician = req.physician!;
+    const resource  = buildPatientResource({
+      ...req.body,
+      // Enforce tenant scoping via injected clinicId — never trust body for this
+      clinicId: physician.clinicId,
+    });
+    addFHIRResource(resource);
+    res.json({ ok: true, resource });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/fhir/observation
+ * Ingest a FHIR Observation resource.
+ * Requires physician-level JWT. clinicId is injected from the token.
+ */
+router.post("/observation", requirePhysician, (req, res) => {
+  try {
+    const physician = req.physician!;
+    const resource  = buildObservationResource({
+      ...req.body,
+      clinicId: physician.clinicId,
+    });
+    addFHIRResource(resource);
+    res.json({ ok: true, resource });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/routes/clinicalRoutes.ts
+=================================================================================
+import express from "express";
+import { requireRole } from "../middleware/requireRole";
+import { runFullClinicalFlow, getFlowLog, getOrchestratorMetrics } from "../orchestrator/clinicalOrchestrator";
+import { sendSMS, sendWhatsApp, parseSMSIntent } from "../services/smsService";
+import { createOrUpsertSession } from "../patient/sessionStorePg";
+import { createTraceId } from "../audit/auditLogger";
+import { handleSMSCommand } from "../chat/botCommandHandler";
+
+const router = express.Router();
+
+router.post("/run", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  const { complaint, answers, patientId, channel } = req.body;
+  if (!complaint) return res.status(400).json({ error: "complaint is required" });
+  const result = await runFullClinicalFlow({ complaint, answers: answers || {}, patientId, channel });
+  res.json(result);
+});
+
+router.get("/log", requireRole(["admin", "physician"]), (req, res) => {
+  const limit = Number(req.query.limit) || 50;
+  res.json(getFlowLog(limit));
+});
+
+router.get("/metrics", requireRole(["admin"]), (_req, res) => {
+  res.json(getOrchestratorMetrics());
+});
+
+router.post("/sms/send", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  const { to, body } = req.body;
+  if (!to || !body) return res.status(400).json({ error: "to and body are required" });
+  const result = await sendSMS(to, body);
+  res.json(result);
+});
+
+router.post("/sms/whatsapp", requireRole(["admin", "physician", "staff"]), async (req, res) => {
+  const { to, body } = req.body;
+  if (!to || !body) return res.status(400).json({ error: "to and body are required" });
+  const result = await sendWhatsApp(to, body);
+  res.json(result);
+});
+
+router.post("/sms/parse-intent", requireRole(["admin", "physician", "staff"]), (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "text required" });
+  res.json(parseSMSIntent(text));
+});
+
+router.post("/sms/webhook", express.urlencoded({ extended: false }), async (req, res) => {
+  const incoming = (req.body.Body ?? "").trim();
+  const from = req.body.From ?? "unknown";
+
+  if (!incoming) {
+    res.sendStatus(200);
+    return;
+  }
+
+  const traceId = createTraceId();
+  const patientId = from.replace(/\W/g, "_");
+
+  const smsCommand = await handleSMSCommand(incoming).catch(() => null);
+  if (smsCommand) {
+    await sendSMS(from, smsCommand).catch(() => {});
+    res.sendStatus(200);
+    return;
+  }
+
+  try {
+    const result = await runFullClinicalFlow({
+      complaint: incoming,
+      answers: {},
+      patientId,
+      channel: "web",
+    });
+
+    await createOrUpsertSession({
+      id: patientId,
+      status: (result as any)?.blocked ? "blocked" : "pending_review",
+      riskLevel: (result as any)?.safetyGate?.level ?? "LOW",
+      safetyFlags: (result as any)?.safetyGate?.reasons ?? [],
+      disposition: result,
+    });
+
+    const replyText =
+      (result as any)?.explanation?.summary ??
+      (result as any)?.message ??
+      "Your case has been received. A clinician will review it shortly.";
+
+    await sendSMS(from, replyText);
+
+    console.log(JSON.stringify({
+      event: "sms_triage",
+      from,
+      patientId,
+      traceId,
+      status: (result as any)?.blocked ? "blocked" : "ok",
+    }));
+  } catch (e: any) {
+    console.error("[SMS Webhook] Error:", e?.message);
+    await sendSMS(from, "We received your message and a clinician will review your case shortly.").catch(() => {});
+  }
+
+  res.sendStatus(200);
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/routes/controlTowerRoutes.ts
+=================================================================================
+/**
+ * Control Tower Feed Route (Phase 6 — Step 4 from bundle)
+ *
+ * GET /api/phase6/control-tower — live system status snapshot
+ *
+ * Note: /api/control-tower is already registered for run records.
+ * This route serves the Phase 6 system status feed at /api/phase6/control-tower
+ * to preserve both endpoints without collision.
+ */
+
+import { Router }            from "express";
+import { getControlTowerData } from "../phase6/controlTower/controlTowerFeed";
+
+const router = Router();
+
+router.get("/control-tower", (_req, res) => {
+  res.json(getControlTowerData());
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/routes/commandCenterRoutes.ts
+=================================================================================
+/**
+ * Command Center Routes — /api/command-center/*
+ * Multi-patient ranking · deterioration · interventions · RLHF · clinical brain
+ * + Article 28b/28c: simulation · sepsis engine · ICU predictor · hospital coordination
+ */
+
+import express from "express";
+import { rankPatientsAI, computePriorityScore } from "../command-center/commandCenterAI";
+import { predictDeterioration, handleDeterioration } from "../prediction/deteriorationEngine";
+import { runInterventions }                          from "../intervention/actionOrchestrator";
+import { runLearningLoop, getLearningStats, getOutcomeLog, getWeights } from "../learning/rlhfClinicalEngine";
+import { runClinicalBrain }                          from "../orchestrator/fullClinicalBrain";
+import { getAlertLog, getCriticalAlerts }            from "../intervention/alertEngine";
+import { getEscalationLog }                          from "../intervention/escalationEngine";
+import { getOrderAuditLog }                          from "../intervention/orderExecutor";
+// Article 28b — simulation + clinical engines
+import { simulatePatients, runDigitalTwin }          from "../simulation/multiPatientSimulator";
+import { generatePatient, generateMixedCohort }      from "../simulation/patientGenerator";
+import { calculateNEWS2, calculateQSOFA, detectSepsis } from "../clinical/sepsisEngine";
+import { predictICUNeed }                            from "../clinical/icuPredictor";
+import { runValidation, runCohortValidation }        from "../evals/validationHarness";
+import { updateWeights, getWeights as getRLHFWeights, getUpdateHistory, resetWeights } from "../rlhf/weightUpdater";
+// Article 28c — hospital coordination
+import { getAllHospitals, getTotalAvailableBeds, getSystemOccupancy, updateBedCount } from "../coordination/hospitalRegistry";
+import { allocateICUBed, releaseICUBed, getNetworkStatus, getAllAllocations }          from "../coordination/bedAllocator";
+
+const router = express.Router();
+
+// ── POST /api/command-center/rank — priority-rank a list of patients ──────────
+router.post("/rank", (req, res) => {
+  try {
+    const { patients } = req.body;
+    if (!Array.isArray(patients)) { res.status(400).json({ error: "patients array required" }); return; }
+    res.json({ success: true, patients: rankPatientsAI(patients) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/command-center/deterioration — predict one patient ──────────────
+router.post("/deterioration", async (req, res) => {
+  try {
+    const { patient, autoAct = false } = req.body;
+    if (!patient?.vitals) { res.status(400).json({ error: "patient.vitals required" }); return; }
+
+    const result = autoAct
+      ? await handleDeterioration(patient)
+      : predictDeterioration(patient);
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/command-center/interventions — execute intervention pipeline ─────
+router.post("/interventions", async (req, res) => {
+  try {
+    const { patient } = req.body;
+    if (!patient?.id || !patient?.vitals) { res.status(400).json({ error: "patient.id + patient.vitals required" }); return; }
+
+    const result = await runInterventions(patient);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/command-center/brain — full multi-patient clinical brain ─────────
+router.post("/brain", async (req, res) => {
+  try {
+    const { patients } = req.body;
+    if (!Array.isArray(patients) || patients.length === 0) { res.status(400).json({ error: "patients array required" }); return; }
+
+    const result = await runClinicalBrain(patients);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/command-center/learn — submit case outcome for RLHF ─────────────
+router.post("/learn", async (req, res) => {
+  try {
+    const { patientId, predictedDisposition, actualDisposition, predictedRisk, outcome, physicianOverride, overrideReason } = req.body;
+    if (!patientId || !predictedDisposition || !actualDisposition || !outcome) {
+      res.status(400).json({ error: "patientId, predictedDisposition, actualDisposition, outcome required" });
+      return;
+    }
+
+    const result = await runLearningLoop({
+      patientId, predictedDisposition, actualDisposition,
+      predictedRisk: predictedRisk ?? "unknown",
+      outcome, physicianOverride, overrideReason,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── GET /api/command-center/learn/stats — RLHF learning stats ────────────────
+router.get("/learn/stats", (_req, res) => {
+  res.json(getLearningStats());
+});
+
+// ── GET /api/command-center/learn/weights — current clinical weights ──────────
+router.get("/learn/weights", (_req, res) => {
+  res.json(getWeights());
+});
+
+// ── GET /api/command-center/alerts — alert log ───────────────────────────────
+router.get("/alerts", (_req, res) => {
+  res.json({ alerts: getAlertLog(), criticalAlerts: getCriticalAlerts() });
+});
+
+// ── GET /api/command-center/escalations — escalation log ─────────────────────
+router.get("/escalations", (_req, res) => {
+  res.json({ escalations: getEscalationLog() });
+});
+
+// ── GET /api/command-center/orders — order audit log ─────────────────────────
+router.get("/orders", (_req, res) => {
+  res.json({ orders: getOrderAuditLog() });
+});
+
+// ══ Article 28b — Multi-patient simulation ════════════════════════════════════
+
+router.post("/simulate", async (req, res) => {
+  try {
+    const { n = 1000 } = req.body as { n?: number };
+    const result = await simulatePatients(Math.min(n, 10_000));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.get("/twin", async (req, res) => {
+  try {
+    const n = parseInt((req.query.n as string) ?? "200");
+    const projections = await runDigitalTwin(Math.min(n, 1000));
+    res.json({ projections, count: projections.length });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── Sepsis clinical engines ───────────────────────────────────────────────────
+
+router.post("/sepsis/news2", (req, res) => {
+  try {
+    const { vitals } = req.body;
+    if (!vitals) return void res.status(400).json({ error: "vitals required" });
+    res.json(calculateNEWS2(vitals));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/sepsis/qsofa", (req, res) => {
+  try {
+    const { vitals, mentalStatus = "normal" } = req.body;
+    if (!vitals) return void res.status(400).json({ error: "vitals required" });
+    res.json(calculateQSOFA(vitals, mentalStatus));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/sepsis/detect", (req, res) => {
+  try {
+    const { vitals, labs, mentalStatus = "normal" } = req.body;
+    if (!vitals || !labs) return void res.status(400).json({ error: "vitals and labs required" });
+    res.json(detectSepsis(vitals, labs, mentalStatus));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/icu/predict", (req, res) => {
+  try {
+    const { vitals, labs, mentalStatus = "normal" } = req.body;
+    if (!vitals || !labs) return void res.status(400).json({ error: "vitals and labs required" });
+    const sepsis = detectSepsis(vitals, labs, mentalStatus);
+    const icu    = predictICUNeed({ vitals, labs }, sepsis);
+    res.json({ sepsis, icu });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── Validation harness ────────────────────────────────────────────────────────
+
+router.post("/validate", (req, res) => {
+  try {
+    const patient = req.body.patient ?? req.body;
+    if (!patient?.vitals || !patient?.labs) {
+      return void res.json(runValidation(generatePatient()));
+    }
+    if (!patient.id) patient.id = `p_${Date.now()}`;
+    if (!patient.age) patient.age = 40;
+    if (!patient.symptoms) patient.symptoms = [];
+    res.json(runValidation(patient));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/validate/cohort", (req, res) => {
+  try {
+    const { patients, n } = req.body as { patients?: unknown[]; n?: number };
+    const cohort = Array.isArray(patients) && patients.length > 0
+      ? patients as Parameters<typeof runCohortValidation>[0]
+      : generateMixedCohort(Math.min(n ?? 100, 5000));
+    res.json(runCohortValidation(cohort));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── RLHF weight updater (Article 28b) ────────────────────────────────────────
+
+router.post("/rlhf/update", (req, res) => {
+  try {
+    const { results, feature } = req.body as {
+      results?: Array<{ correct: boolean; errors?: string[] }>; feature?: string;
+    };
+    if (!Array.isArray(results)) return void res.status(400).json({ error: "results[] required" });
+    res.json(updateWeights(results, feature as any));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.get("/rlhf/batch-weights", (_req, res) => {
+  res.json({ weights: getRLHFWeights() });
+});
+
+router.get("/rlhf/update-history", (_req, res) => {
+  res.json({ history: getUpdateHistory() });
+});
+
+router.post("/rlhf/reset", (_req, res) => {
+  resetWeights();
+  res.json({ ok: true });
+});
+
+// ══ Article 28c — Hospital coordination ══════════════════════════════════════
+
+router.get("/hospitals", (_req, res) => {
+  res.json({
+    hospitals:      getAllHospitals(),
+    totalAvailable: getTotalAvailableBeds(),
+    occupancy:      getSystemOccupancy(),
+  });
+});
+
+router.get("/hospitals/status", (_req, res) => {
+  res.json(getNetworkStatus());
+});
+
+router.post("/hospitals/allocate", (req, res) => {
+  const { patientId, urgency = "urgent", specialty } = req.body as {
+    patientId?: string; urgency?: string; specialty?: string;
+  };
+  if (!patientId) return void res.status(400).json({ error: "patientId required" });
+  const result = allocateICUBed({ patientId, urgency: urgency as any, specialty });
+  res.status(result.assigned ? 200 : 503).json(result);
+});
+
+router.post("/hospitals/release", (req, res) => {
+  const { allocationId, reason = "admitted" } = req.body as {
+    allocationId?: string; reason?: string;
+  };
+  if (!allocationId) return void res.status(400).json({ error: "allocationId required" });
+  const ok = releaseICUBed(allocationId, reason as any);
+  if (!ok) return void res.status(404).json({ error: "Allocation not found or already released" });
+  res.json({ ok: true });
+});
+
+router.patch("/hospitals/:id/beds", (req, res) => {
+  const { available } = req.body as { available?: number };
+  if (available === undefined) return void res.status(400).json({ error: "available required" });
+  const ok = updateBedCount(req.params.id, available);
+  if (!ok) return void res.status(404).json({ error: "Hospital not found" });
+  res.json({ ok: true });
+});
+
+router.get("/hospitals/allocations", (_req, res) => {
+  res.json({ allocations: getAllAllocations() });
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/routes/clinicalControlTowerRoutes.ts
+=================================================================================
+import express from "express";
+import { runSystemReview } from "../brain/systemReviewEngine";
+import { getAllEngines, getEngineCounts } from "../brain/engineRegistry";
+import { listSimulationRuns, getLastRunSummary } from "../simulation/simulationStore";
+import { getAllChannelPerformance } from "../simulation/channelSimulationHarness";
+import { complaintCoverageMatrix, getOverallCoverageStats } from "../analysis/complaintCoverageMatrix";
+import { getImprovements } from "../improvement/improvementStore";
+import { getLearningStats } from "../simulation/simulationLearningBridge";
+
+const router = express.Router();
+
+router.get("/cct/health", (_req, res) => {
+  const review = runSystemReview();
+  const engineCounts = getEngineCounts();
+  const lastSimSummary = getLastRunSummary();
+  const coverageStats = getOverallCoverageStats();
+
+  res.json({
+    systemHealth: {
+      score: review.healthScore,
+      activeEngines: review.activeEngines,
+      totalEngines: review.totalEngines,
+      enginesByLevel: engineCounts,
+    },
+    simulation: lastSimSummary
+      ? {
+          dispositionAccuracy: lastSimSummary.dispositionAccuracy,
+          diagnosisAccuracy: lastSimSummary.diagnosisAccuracy,
+          avgScore: lastSimSummary.avgScore,
+          redFlagMissRate: lastSimSummary.redFlagMissRate,
+          totalCases: lastSimSummary.totalCases,
+        }
+      : null,
+    coverage: coverageStats,
+    topSuggestions: review.suggestions.slice(0, 5),
+    timestamp: Date.now(),
+  });
+});
+
+router.get("/cct/engines", (_req, res) => {
+  const engines = getAllEngines();
+  const counts = getEngineCounts();
+  const active = engines.filter(e => e.status === "active").length;
+
+  res.json({
+    total: engines.length,
+    active,
+    counts,
+    engines: engines.map(e => ({
+      name: e.name,
+      level: e.level,
+      status: e.status,
+      avgLatencyMs: e.avgLatencyMs,
+    })),
+  });
+});
+
+router.get("/cct/simulation-summary", (_req, res) => {
+  const runs = listSimulationRuns();
+  const lastSummary = getLastRunSummary();
+  const learningStats = getLearningStats();
+
+  res.json({
+    totalRuns: runs.length,
+    lastSummary,
+    learningUpdates: learningStats,
+    recentRuns: runs.slice(0, 5),
+  });
+});
+
+router.get("/cct/failures", (_req, res) => {
+  const runs = listSimulationRuns();
+
+  const allFailures: Record<string, number> = {};
+  runs.forEach(r => {
+    if ((r as any).failureBreakdown) {
+      Object.entries((r as any).failureBreakdown).forEach(([cat, cnt]) => {
+        allFailures[cat] = (allFailures[cat] ?? 0) + (cnt as number);
+      });
+    }
+  });
+
+  const sorted = Object.entries(allFailures)
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({ failures: sorted, totalRuns: runs.length });
+});
+
+router.get("/cct/channels", (_req, res) => {
+  res.json(getAllChannelPerformance());
+});
+
+router.get("/cct/coverage", (_req, res) => {
+  res.json({
+    stats: getOverallCoverageStats(),
+    matrix: complaintCoverageMatrix,
+  });
+});
+
+router.get("/cct/improvements", (_req, res) => {
+  const improvements = getImprovements();
+  const latest = improvements[0] ?? null;
+
+  res.json({
+    total: improvements.length,
+    latest,
+    allImprovements: improvements.slice(0, 20),
+  });
+});
+
+router.get("/cct/summary", (_req, res) => {
+  const review = runSystemReview();
+  const lastSim = getLastRunSummary();
+  const coverageStats = getOverallCoverageStats();
+  const learningStats = getLearningStats();
+  const channels = getAllChannelPerformance();
+  const improvements = getImprovements();
+
+  res.json({
+    health: {
+      score: review.healthScore,
+      activeEngines: review.activeEngines,
+      totalEngines: review.totalEngines,
+    },
+    simulation: lastSim,
+    coverage: coverageStats,
+    learning: learningStats,
+    channels: channels.map(c => ({
+      channel: c.channel,
+      dropoutRate: c.dropoutRate,
+      avgCompletionTime: c.avgCompletionTime,
+    })),
+    pendingImprovements: improvements.slice(0, 3).flatMap(r => r.improvements),
+    topSuggestion: review.suggestions[0] ?? null,
+    timestamp: Date.now(),
+  });
+});
+
+export default router;
+
+
+=================================================================================
+FILE: client/src/components/physician/AmbientHealthBar.tsx
+=================================================================================
+import { useQuery } from "@tanstack/react-query";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+interface HealthDot {
+  key: string;
+  label: string;
+  status: "green" | "amber" | "red" | "gray";
+  detail: string;
+  degradedMessage?: string;
+}
+
+interface AmbientHealthSnapshot {
+  dots: HealthDot[];
+  overallStatus: "green" | "amber" | "red" | "gray";
+  hasAlert: boolean;
+  snapshottedAt: string;
+}
+
+const DOT_COLORS: Record<string, string> = {
+  green: "bg-emerald-500",
+  amber: "bg-amber-400 animate-pulse",
+  red: "bg-red-500 animate-pulse",
+  gray: "bg-slate-400",
+};
+
+const DOT_RING: Record<string, string> = {
+  green: "ring-emerald-200",
+  amber: "ring-amber-200",
+  red: "ring-red-200",
+  gray: "ring-slate-200",
+};
+
+export function AmbientHealthBar() {
+  const { data, isLoading } = useQuery<AmbientHealthSnapshot>({
+    queryKey: ["/api/command-strip/health"],
+    refetchInterval: 30_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-3 w-3 rounded-full bg-slate-300 dark:bg-slate-600 animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+
+  const dots = data?.dots ?? [];
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div
+        data-testid="ambient-health-bar"
+        className="flex items-center gap-3 px-4 py-1.5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"
+      >
+        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 shrink-0">System</span>
+        <div className="flex items-center gap-2">
+          {dots.map(dot => (
+            <Tooltip key={dot.key}>
+              <TooltipTrigger asChild>
+                <button
+                  data-testid={`health-dot-${dot.key}`}
+                  className={`h-3 w-3 rounded-full ring-2 ring-offset-1 transition-all ${DOT_COLORS[dot.status]} ${DOT_RING[dot.status]}`}
+                  aria-label={`${dot.label}: ${dot.status}`}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs">
+                <p className="font-semibold">{dot.label}</p>
+                <p className="text-xs opacity-80">{dot.detail}</p>
+                {dot.degradedMessage && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{dot.degradedMessage}</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+        {data?.hasAlert && (
+          <span className="ml-auto text-xs font-medium text-amber-600 dark:text-amber-400">
+            System alert — hover dots for detail
+          </span>
+        )}
+        <span className="text-xs text-slate-400 dark:text-slate-600 ml-auto">
+          {data?.snapshottedAt ? new Date(data.snapshottedAt).toLocaleTimeString() : ""}
+        </span>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/command/MultiPatientGrid.tsx
+=================================================================================
+import { useQuery } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  Heart,
+  RefreshCw,
+  Thermometer,
+  User,
+  Zap,
+} from "lucide-react";
+import { queryClient } from "@/lib/queryClient";
+
+export interface PatientRow {
+  patient_id: string;
+  name: string;
+  age: number;
+  phone: string;
+  chief_complaint: string;
+  top_dx: string;
+  disposition: string;
+  risk_score: number;
+  admission_risk: number;
+  vitals: Record<string, number>;
+  flags: string[];
+  last_update: string;
+}
+
+interface Props {
+  selected: string | null;
+  onSelect: (p: PatientRow) => void;
+}
+
+const RISK_CONFIG = {
+  critical: { color: "bg-red-600 text-white",    badge: "bg-red-600",    border: "border-red-500",    label: "CRITICAL" },
+  high:     { color: "bg-orange-500 text-white",  badge: "bg-orange-500", border: "border-orange-400", label: "HIGH" },
+  moderate: { color: "bg-yellow-500 text-white",  badge: "bg-yellow-500", border: "border-yellow-400", label: "MODERATE" },
+  low:      { color: "bg-green-600 text-white",   badge: "bg-green-600",  border: "border-green-500",  label: "LOW" },
+};
+
+function riskLevel(score: number) {
+  if (score >= 0.8) return "critical";
+  if (score >= 0.6) return "high";
+  if (score >= 0.35) return "moderate";
+  return "low";
+}
+
+function dispositionLabel(d: string) {
+  const map: Record<string, string> = {
+    ER_NOW: "ER – Immediate",
+    urgent_care: "Urgent Care",
+    office_followup: "Office Follow-up",
+    self_care: "Self-Care",
+    pending: "Pending",
+  };
+  return map[d] ?? d;
+}
+
+export default function MultiPatientGrid({ selected, onSelect }: Props) {
+  const { data, isLoading, refetch } = useQuery<{ patients: PatientRow[]; count: number }>({
+    queryKey: ["/api/command/grid"],
+    refetchInterval: 30_000,
+  });
+
+  const patients = data?.patients ?? [];
+
+  const stats = {
+    total:    patients.length,
+    critical: patients.filter(p => riskLevel(p.risk_score) === "critical").length,
+    high:     patients.filter(p => riskLevel(p.risk_score) === "high").length,
+    er:       patients.filter(p => p.disposition === "ER_NOW").length,
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Summary bar */}
+      <div className="flex items-center gap-3 p-3 bg-muted/40 border-b flex-shrink-0">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <User size={14} /> <span data-testid="stat-total">{stats.total}</span> patients
+        </div>
+        <div className="h-4 w-px bg-border" />
+        <div className="flex items-center gap-1 text-sm text-red-500 font-semibold">
+          <Zap size={13} /> <span data-testid="stat-critical">{stats.critical}</span> critical
+        </div>
+        <div className="flex items-center gap-1 text-sm text-orange-500 font-semibold">
+          <AlertTriangle size={13} /> <span data-testid="stat-high">{stats.high}</span> high
+        </div>
+        <div className="flex items-center gap-1 text-sm text-red-400">
+          <Activity size={13} /> <span data-testid="stat-er">{stats.er}</span> ER-now
+        </div>
+        <div className="ml-auto">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ["/api/command/grid"] });
+              refetch();
+            }}
+            data-testid="button-refresh-grid"
+          >
+            <RefreshCw size={13} />
+          </Button>
+        </div>
+      </div>
+
+      {/* Patient rows */}
+      <div className="flex-1 overflow-y-auto divide-y divide-border">
+        {isLoading
+          ? Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="p-3">
+                <Skeleton className="h-16 w-full rounded" />
+              </div>
+            ))
+          : patients.map(p => {
+              const level = riskLevel(p.risk_score);
+              const cfg   = RISK_CONFIG[level];
+              const isSelected = selected === p.patient_id;
+
+              return (
+                <div
+                  key={p.patient_id}
+                  data-testid={`patient-row-${p.patient_id}`}
+                  className={cn(
+                    "flex items-start gap-3 p-3 cursor-pointer transition-colors",
+                    isSelected
+                      ? "bg-primary/10 border-l-4 border-primary"
+                      : `hover:bg-muted/50 border-l-4 ${cfg.border}`
+                  )}
+                  onClick={() => onSelect(p)}
+                >
+                  {/* Risk badge */}
+                  <div className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold min-w-[62px] text-center mt-0.5", cfg.color)}>
+                    {cfg.label}
+                  </div>
+
+                  {/* Patient info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm truncate">{p.name}</span>
+                      <span className="text-xs text-muted-foreground">Age {p.age}</span>
+                      {p.flags?.includes("high_risk") && (
+                        <AlertTriangle size={12} className="text-red-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">{p.chief_complaint}</div>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-[11px] font-mono text-blue-400">{p.top_dx?.replace("DX_BAY_", "").replace(/_/g, " ")}</span>
+                      <Badge variant="outline" className="text-[10px] px-1 h-4">
+                        {dispositionLabel(p.disposition)}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {/* Vitals mini strip */}
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0 text-[11px]">
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Heart size={11} className={p.vitals?.hr > 110 ? "text-red-400" : "text-pink-400"} />
+                      {p.vitals?.hr ?? "—"}
+                    </div>
+                    {p.vitals?.spo2 && (
+                      <div className={cn("flex items-center gap-1", p.vitals.spo2 < 93 ? "text-red-400" : "text-green-400")}>
+                        <Activity size={11} />
+                        {p.vitals.spo2}%
+                      </div>
+                    )}
+                    {p.vitals?.temp && (
+                      <div className={cn("flex items-center gap-1", p.vitals.temp >= 39 ? "text-orange-400" : "text-muted-foreground")}>
+                        <Thermometer size={11} />
+                        {p.vitals.temp}°C
+                      </div>
+                    )}
+                    <div className={cn("mt-0.5 font-bold text-[10px]", level === "critical" ? "text-red-500" : level === "high" ? "text-orange-500" : "text-muted-foreground")}>
+                      Risk {Math.round(p.risk_score * 100)}%
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+        {!isLoading && patients.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <CheckCircle size={32} className="mb-2" />
+            <span className="text-sm">No active patients</span>
+          </div>
+        )}
+      </div>
+
+      {/* Last refresh */}
+      <div className="text-[10px] text-muted-foreground text-right px-3 py-1 border-t flex-shrink-0 flex items-center justify-end gap-1">
+        <Clock size={10} /> Auto-refresh 30s
+      </div>
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/command/PhysicianAlertPanel.tsx
+=================================================================================
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  AlertTriangle,
+  Bell,
+  CheckCircle,
+  Clock,
+  Phone,
+  Stethoscope,
+  User,
+  XCircle,
+  Zap,
+} from "lucide-react";
+import type { PatientRow } from "./MultiPatientGrid";
+import { cn } from "@/lib/utils";
+
+interface PhysicianAlert {
+  id: string;
+  patient_id: string;
+  physician_name: string;
+  physician_phone: string;
+  message: string;
+  status: string;
+  created_at: string;
+}
+
+interface Props {
+  patient: PatientRow;
+}
+
+const QUICK_MESSAGES = [
+  "URGENT: Patient requires immediate evaluation. High clinical risk score detected.",
+  "STAT page: Patient vitals deteriorating. Please respond within 5 minutes.",
+  "Patient admitted to ER. Your assessment needed urgently.",
+  "Alert: Sepsis criteria met. Please review and initiate protocol.",
+  "Patient disposition requires physician override. Please review case.",
+];
+
+function urgencyForRisk(riskScore: number): string {
+  if (riskScore >= 0.8) return "CRITICAL ALERT";
+  if (riskScore >= 0.6) return "URGENT";
+  return "NOTICE";
+}
+
+export default function PhysicianAlertPanel({ patient }: Props) {
+  const { toast } = useToast();
+  const [physicianName, setPhysicianName]   = useState("Dr. Smith");
+  const [physicianPhone, setPhysicianPhone] = useState("+15551234567");
+  const [message, setMessage] = useState(
+    `${urgencyForRisk(patient.risk_score)}: Patient ${patient.name} (Age ${patient.age}) — ${patient.chief_complaint}. Risk: ${Math.round(patient.risk_score * 100)}%. Admission probability: ${Math.round((patient.admission_risk ?? 0) * 100)}%. Immediate evaluation requested.`
+  );
+
+  const { data: logData } = useQuery<{ alerts: PhysicianAlert[] }>({
+    queryKey: ["/api/command/physician-alerts", patient.patient_id],
+    queryFn: () =>
+      apiRequest("GET", `/api/command/physician-alerts?patientId=${patient.patient_id}`).then(r => r.json()),
+    refetchInterval: 15_000,
+  });
+
+  const alertMut = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/command/physician-alert", {
+        patientId: patient.patient_id,
+        physicianName,
+        physicianPhone,
+        message,
+      }).then(r => r.json()),
+    onSuccess: d => {
+      queryClient.invalidateQueries({ queryKey: ["/api/command/physician-alerts", patient.patient_id] });
+      if (d.ok) {
+        toast({ title: "Physician Paged", description: `SMS alert sent to ${physicianName} at ${physicianPhone}` });
+      } else {
+        toast({ title: "Page failed", description: d.error ?? "Unknown error", variant: "destructive" });
+      }
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <ScrollArea className="h-full">
+      <div className="p-4 space-y-4">
+
+        {/* Header */}
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="text-orange-400" />
+          <span className="text-sm font-semibold">Physician Auto-Paging</span>
+          <Badge variant="outline" className="ml-auto text-[10px] text-orange-400 border-orange-500/30">
+            SMS Alert
+          </Badge>
+        </div>
+
+        {/* Patient urgency banner */}
+        <div className={cn(
+          "rounded-lg border p-2.5 text-xs",
+          patient.risk_score >= 0.8
+            ? "border-red-500/30 bg-red-500/10 text-red-400"
+            : patient.risk_score >= 0.6
+            ? "border-orange-500/30 bg-orange-500/10 text-orange-400"
+            : "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+        )}>
+          <div className="flex items-center gap-1.5 font-semibold mb-0.5">
+            <AlertTriangle size={11} />
+            {urgencyForRisk(patient.risk_score)} — {patient.name}
+          </div>
+          <div>{patient.chief_complaint}</div>
+          <div className="mt-0.5">Risk: {Math.round(patient.risk_score * 100)}% · Adm. Risk: {Math.round((patient.admission_risk ?? 0) * 100)}%</div>
+        </div>
+
+        {/* Physician fields */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Stethoscope size={12} className="text-muted-foreground" />
+            <span className="text-xs font-semibold text-muted-foreground">Physician on Call</span>
+          </div>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <User size={12} className="absolute left-2.5 top-2.5 text-muted-foreground" />
+              <Input
+                data-testid="input-physician-name"
+                value={physicianName}
+                onChange={e => setPhysicianName(e.target.value)}
+                className="pl-7 h-8 text-xs"
+                placeholder="Physician name"
+              />
+            </div>
+            <div className="relative flex-1">
+              <Phone size={12} className="absolute left-2.5 top-2.5 text-muted-foreground" />
+              <Input
+                data-testid="input-physician-phone"
+                value={physicianPhone}
+                onChange={e => setPhysicianPhone(e.target.value)}
+                className="pl-7 h-8 text-xs"
+                placeholder="+1xxxxxxxxxx"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Quick message templates */}
+        <div className="space-y-1.5">
+          <div className="text-xs font-semibold text-muted-foreground">Quick Templates</div>
+          <div className="space-y-1">
+            {QUICK_MESSAGES.slice(0, 3).map((msg, i) => (
+              <button
+                key={i}
+                className="w-full text-left text-[11px] text-muted-foreground rounded border px-2 py-1.5 hover:bg-muted/40 truncate"
+                onClick={() => setMessage(msg)}
+                data-testid={`template-${i}`}
+              >
+                {msg.slice(0, 70)}…
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Alert message */}
+        <div className="space-y-2">
+          <div className="text-xs font-semibold text-muted-foreground">Alert Message</div>
+          <Textarea
+            data-testid="input-physician-message"
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            rows={4}
+            className="text-xs resize-none"
+          />
+        </div>
+
+        {/* Page button */}
+        <Button
+          className="w-full bg-orange-600 hover:bg-orange-700 text-white"
+          disabled={alertMut.isPending || !physicianPhone}
+          onClick={() => alertMut.mutate()}
+          data-testid="button-page-physician"
+        >
+          <Zap size={13} className="mr-1.5" />
+          {alertMut.isPending ? "Paging…" : "Page Physician via SMS"}
+        </Button>
+
+        <Separator />
+
+        {/* Alert history */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock size={12} className="text-muted-foreground" />
+            <span className="text-xs font-semibold">Alert History</span>
+          </div>
+          {(logData?.alerts ?? []).length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-3">No alerts sent yet</div>
+          ) : (
+            <div className="space-y-1.5" data-testid="alert-log">
+              {(logData?.alerts ?? []).map(a => (
+                <div key={a.id} className="rounded border p-2 bg-muted/20 text-xs">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="font-semibold">{a.physician_name}</span>
+                    <Badge variant="outline" className={cn("text-[9px] h-3.5", a.status === "sent" ? "text-green-400" : a.status === "sending" ? "text-yellow-400" : "text-red-400")}>
+                      {a.status === "sent" ? <CheckCircle size={9} className="mr-0.5" /> : <XCircle size={9} className="mr-0.5" />}
+                      {a.status}
+                    </Badge>
+                  </div>
+                  <div className="text-muted-foreground line-clamp-1">{a.message}</div>
+                  <div className="text-muted-foreground/60 mt-0.5">{new Date(a.created_at).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </ScrollArea>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/command/SystemHealthPanel.tsx
+=================================================================================
+import { useQuery } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { apiRequest } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
+import {
+  Activity,
+  BrainCircuit,
+  Building2,
+  CheckCircle,
+  Database,
+  MessageSquare,
+  Phone,
+  RefreshCw,
+  Siren,
+  XCircle,
+  Zap,
+} from "lucide-react";
+
+interface HealthResult {
+  name: string;
+  pass: boolean;
+  detail?: string;
+  durationMs?: number;
+}
+
+interface SystemHealthData {
+  results: HealthResult[];
+  passed: number;
+  failed: number;
+  total: number;
+}
+
+const ICONS: Record<string, any> = {
+  intake:     MessageSquare,
+  diagnosis:  BrainCircuit,
+  admission:  Building2,
+  ems:        Siren,
+  outreach:   Phone,
+  kb_rules:   Database,
+  grid:       Activity,
+  hospitals:  Building2,
+};
+
+function getIcon(name: string) {
+  const key = Object.keys(ICONS).find(k => name.toLowerCase().includes(k));
+  return key ? ICONS[key] : Zap;
+}
+
+export default function SystemHealthPanel() {
+  const { data, isLoading, refetch, isFetching } = useQuery<SystemHealthData>({
+    queryKey: ["/api/command/system-health"],
+    queryFn: () => apiRequest("GET", "/api/command/system-health").then(r => r.json()),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const results = data?.results ?? [];
+  const allGreen = results.length > 0 && results.every(r => r.pass);
+  const anyRed   = results.some(r => !r.pass);
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Activity size={14} className={cn(allGreen ? "text-green-400" : anyRed ? "text-red-400" : "text-muted-foreground")} />
+          <span className="text-sm font-semibold">System Integration Health</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {data && (
+            <Badge variant="outline" className={cn("text-[11px]", allGreen ? "text-green-400 border-green-500/30" : anyRed ? "text-red-400 border-red-500/30" : "text-yellow-400 border-yellow-500/30")}>
+              {data.passed}/{data.total} PASS
+            </Badge>
+          )}
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="button-refresh-health"
+          >
+            <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+
+      {/* Results grid */}
+      {isLoading ? (
+        <div className="grid grid-cols-2 gap-2">
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-16 rounded" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2" data-testid="health-results-grid">
+          {results.map(r => {
+            const Icon = getIcon(r.name);
+            return (
+              <div
+                key={r.name}
+                data-testid={`health-${r.name.toLowerCase().replace(/\s+/g, "-")}`}
+                className={cn(
+                  "rounded border p-2.5 flex items-start gap-2.5",
+                  r.pass ? "border-green-500/20 bg-green-500/5" : "border-red-500/20 bg-red-500/5"
+                )}
+              >
+                <Icon size={14} className={r.pass ? "text-green-400 flex-shrink-0 mt-0.5" : "text-red-400 flex-shrink-0 mt-0.5"} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs font-semibold truncate">{r.name}</span>
+                    {r.pass
+                      ? <CheckCircle size={10} className="text-green-400 flex-shrink-0" />
+                      : <XCircle    size={10} className="text-red-400 flex-shrink-0" />}
+                  </div>
+                  {r.detail && <div className="text-[10px] text-muted-foreground truncate">{r.detail}</div>}
+                  {r.durationMs !== undefined && (
+                    <div className="text-[10px] text-muted-foreground">{r.durationMs}ms</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Cross-system validation summary */}
+      <div className="rounded-lg border border-border/40 bg-muted/20 p-3 space-y-2">
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Cross-System Validations</div>
+        <div className="space-y-1.5 text-xs">
+          {[
+            { label: "Intake → Diagnosis",  desc: "Questions feed KB probability weights" },
+            { label: "Diagnosis → Workup",  desc: "Workup adapts to top differential" },
+            { label: "Diagnosis → Admission", desc: "Admission KB rules trigger correctly" },
+            { label: "Risk → EMS",          desc: "High risk activates EMS dispatch panel" },
+            { label: "Outreach → Log",      desc: "All outreach persisted to patient_outreach" },
+            { label: "Learning → KB",       desc: "Approved outcomes update clinical weights" },
+          ].map(item => (
+            <div key={item.label} className="flex items-start gap-2">
+              <CheckCircle size={11} className="text-green-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-medium">{item.label}</span>
+                <span className="text-muted-foreground ml-1">— {item.desc}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/PatientQueue.tsx
+=================================================================================
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { 
+  Clock, 
+  AlertTriangle, 
+  CheckCircle, 
+  ChevronRight,
+  MessageSquare,
+  User
+} from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import type { Encounter } from "@shared/schema";
+
+interface PatientQueueProps {
+  encounters: Encounter[];
+  filter: "pending" | "approved" | "all";
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+}
+
+const statusConfig = {
+  gathering_info: { label: "Gathering Info", variant: "secondary" as const, icon: MessageSquare },
+  pending_review: { label: "Pending Review", variant: "default" as const, icon: Clock },
+  approved: { label: "Approved", variant: "outline" as const, icon: CheckCircle },
+  rejected: { label: "Rejected", variant: "destructive" as const, icon: AlertTriangle },
+};
+
+const urgencyConfig = {
+  routine: { label: "Routine", className: "bg-muted text-muted-foreground" },
+  urgent: { label: "Urgent", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
+  emergent: { label: "Emergent", className: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" },
+};
+
+export default function PatientQueue({ encounters, filter, selectedId, onSelect }: PatientQueueProps) {
+  const filteredEncounters = encounters.filter((e) => {
+    if (filter === "pending") return e.status === "pending_review";
+    if (filter === "approved") return e.status === "approved";
+    return true;
+  });
+
+  if (filteredEncounters.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+        <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+          {filter === "pending" ? (
+            <Clock className="w-8 h-8 text-muted-foreground" />
+          ) : filter === "approved" ? (
+            <CheckCircle className="w-8 h-8 text-muted-foreground" />
+          ) : (
+            <User className="w-8 h-8 text-muted-foreground" />
+          )}
+        </div>
+        <h3 className="text-lg font-medium mb-2">No cases found</h3>
+        <p className="text-sm text-muted-foreground max-w-xs">
+          {filter === "pending" 
+            ? "No cases are currently waiting for review." 
+            : filter === "approved"
+            ? "No approved cases yet."
+            : "No patient encounters in the system."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      {filteredEncounters.map((encounter) => {
+        const status = statusConfig[encounter.status as keyof typeof statusConfig] || statusConfig.pending_review;
+        const urgency = urgencyConfig[encounter.urgencyLevel as keyof typeof urgencyConfig] || urgencyConfig.routine;
+        const StatusIcon = status.icon;
+
+        return (
+          <Card 
+            key={encounter.id}
+            className={`cursor-pointer transition-colors hover-elevate ${
+              selectedId === encounter.id ? "ring-2 ring-primary" : ""
+            }`}
+            onClick={() => onSelect(encounter.id)}
+            data-testid={`case-card-${encounter.id}`}
+          >
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge className={urgency.className} variant="secondary">
+                      {urgency.label}
+                    </Badge>
+                    <Badge variant={status.variant}>
+                      <StatusIcon className="w-3 h-3 mr-1" />
+                      {status.label}
+                    </Badge>
+                  </div>
+                  
+                  <h4 className="font-medium text-sm mb-1 truncate">
+                    {encounter.chiefComplaint || "Chief complaint pending..."}
+                  </h4>
+                  
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span className="font-mono">Case #{encounter.id}</span>
+                    <span>Patient #{encounter.patientId}</span>
+                    <span>
+                      {formatDistanceToNow(new Date(encounter.createdAt), { addSuffix: true })}
+                    </span>
+                  </div>
+
+                  {encounter.aiDiagnosis && (
+                    <div className="mt-2 p-2 bg-muted/50 rounded-md">
+                      <p className="text-xs text-muted-foreground">
+                        <span className="font-medium">AI Suggestion:</span>{" "}
+                        {encounter.aiDiagnosis}
+                        {encounter.aiConfidence && (
+                          <span className="ml-2 text-muted-foreground">
+                            ({encounter.aiConfidence}% confidence)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/GlobalCommandCenter.tsx
+=================================================================================
+/**
+ * Global Command Center
+ *
+ * "Healthcare operating system for populations — at planetary scale."
+ *
+ * Surfaces:
+ *   - Continent-level volume + trend signals
+ *   - Recommended redistribution targets (underloaded regions)
+ *   - Pandemic detection: respiratory + GI cluster thresholds
+ *   - SIR spread simulation: next-day / next-week / next-month projections
+ *   - Early warning system: alerts + prescribed actions
+ *   - Global policy: country-level regulatory compliance snapshot
+ *
+ * Adapted from the packet's raw props component to TanStack Query useMutation.
+ */
+
+import { useMutation }     from "@tanstack/react-query";
+import { apiRequest }      from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge }           from "@/components/ui/badge";
+import { Button }          from "@/components/ui/button";
+import { Progress }        from "@/components/ui/progress";
+import {
+  Globe, AlertTriangle, TrendingUp, Shield, Activity,
+  Thermometer, BarChart3, ArrowUpRight, CheckCircle2,
+  Zap, Users, Map,
+} from "lucide-react";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface GlobalOutput {
+  continentSignals: Array<{
+    continent:   string;
+    volume:      number;
+    trend:       "spiking" | "stable" | "declining";
+    avgStrain:   number;
+    regionCount: number;
+  }>;
+  recommendedRedistribution: string[];
+  overloadedRegions:         string[];
+  pandemic: {
+    symptomCounts:      Record<string, number>;
+    clusters:           Array<[string, number]>;
+    respiratoryCluster: boolean;
+    giCluster:          boolean;
+    alert:              boolean;
+    topSymptom:         string | null;
+    riskLevel:          "low" | "medium" | "high" | "critical";
+  };
+  simulation: {
+    current:       number;
+    nextDay:       number;
+    nextWeek:      number;
+    nextMonth:     number;
+    riskLevel:     string;
+    peakEstimate:  number;
+    herdThreshold: number;
+  };
+  earlyWarning: {
+    alert:    string | null;
+    action:   string | null;
+    severity: "none" | "watch" | "warning" | "critical";
+  };
+  policy: {
+    telemedAllowed:       boolean;
+    physicianRequired:    boolean;
+    nhsRouting:           boolean;
+    dataSovereigntyFlag:  boolean;
+    whoReportingRequired: boolean;
+    notes:                string[];
+    jurisdiction:         string;
+  };
+  summary: {
+    totalGlobalPatients:  number;
+    hotContinents:        number;
+    pandemicAlert:        boolean;
+    redistributionNeeded: boolean;
+    globalAlertLevel:     "green" | "yellow" | "orange" | "red";
+  };
+}
+
+// ── Demo data — 5 continents, 10 regions ─────────────────────────────────────
+
+const DEMO_REGIONS = [
+  // North America
+  {
+    regionName: "NYC Metro", continent: "North America", country: "US",
+    summary: { totalPatients: 480, erSuggested: 96 },
+    capacityState: { strainScore: 7.2, systemState: "strained" as const },
+    surgeState: { status: "surge" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 80 }, { complaint: "cough", count: 65 }] },
+  },
+  {
+    regionName: "LA Metro", continent: "North America", country: "US",
+    summary: { totalPatients: 340, erSuggested: 52 },
+    capacityState: { strainScore: 4.8, systemState: "stable" as const },
+    surgeState: { status: "watch" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 55 }, { complaint: "cough", count: 42 }] },
+  },
+  {
+    regionName: "Toronto", continent: "North America", country: "CA",
+    summary: { totalPatients: 210, erSuggested: 30 },
+    capacityState: { strainScore: 3.2, systemState: "stable" as const },
+    surgeState: { status: "none" as const },
+    populationSignals: { topComplaints: [{ complaint: "cough", count: 30 }, { complaint: "fever", count: 25 }] },
+  },
+  // Europe
+  {
+    regionName: "London", continent: "Europe", country: "GB",
+    summary: { totalPatients: 520, erSuggested: 80 },
+    capacityState: { strainScore: 6.5, systemState: "strained" as const },
+    surgeState: { status: "surge" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 90 }, { complaint: "cough", count: 78 }, { complaint: "shortness_of_breath", count: 35 }] },
+  },
+  {
+    regionName: "Berlin", continent: "Europe", country: "DE",
+    summary: { totalPatients: 180, erSuggested: 22 },
+    capacityState: { strainScore: 2.8, systemState: "stable" as const },
+    surgeState: { status: "none" as const },
+    populationSignals: { topComplaints: [{ complaint: "cough", count: 20 }, { complaint: "sore_throat", count: 15 }] },
+  },
+  // Asia
+  {
+    regionName: "Mumbai", continent: "Asia", country: "IN",
+    summary: { totalPatients: 850, erSuggested: 170 },
+    capacityState: { strainScore: 8.8, systemState: "critical" as const },
+    surgeState: { status: "critical" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 200 }, { complaint: "cough", count: 185 }, { complaint: "diarrhea", count: 90 }, { complaint: "vomiting", count: 80 }] },
+  },
+  {
+    regionName: "Singapore", continent: "Asia", country: "SG",
+    summary: { totalPatients: 140, erSuggested: 18 },
+    capacityState: { strainScore: 3.5, systemState: "stable" as const },
+    surgeState: { status: "none" as const },
+    populationSignals: { topComplaints: [{ complaint: "cough", count: 28 }, { complaint: "fever", count: 22 }] },
+  },
+  // Africa
+  {
+    regionName: "Nairobi", continent: "Africa", country: "KE",
+    summary: { totalPatients: 290, erSuggested: 65 },
+    capacityState: { strainScore: 7.9, systemState: "critical" as const },
+    surgeState: { status: "critical" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 110 }, { complaint: "diarrhea", count: 85 }, { complaint: "vomiting", count: 70 }] },
+  },
+  // Oceania
+  {
+    regionName: "Sydney", continent: "Oceania", country: "AU",
+    summary: { totalPatients: 160, erSuggested: 20 },
+    capacityState: { strainScore: 3.0, systemState: "stable" as const },
+    surgeState: { status: "none" as const },
+    populationSignals: { topComplaints: [{ complaint: "cough", count: 30 }, { complaint: "fever", count: 22 }] },
+  },
+  // South America
+  {
+    regionName: "São Paulo", continent: "South America", country: "BR",
+    summary: { totalPatients: 380, erSuggested: 70 },
+    capacityState: { strainScore: 6.2, systemState: "strained" as const },
+    surgeState: { status: "watch" as const },
+    populationSignals: { topComplaints: [{ complaint: "fever", count: 95 }, { complaint: "cough", count: 80 }, { complaint: "diarrhea", count: 40 }] },
+  },
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const ALERT_COLORS: Record<string, string> = {
+  green:  "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  yellow: "bg-yellow-500/15  text-yellow-400  border-yellow-500/30",
+  orange: "bg-orange-500/15  text-orange-400  border-orange-500/30",
+  red:    "bg-red-500/15     text-red-400     border-red-500/30",
+};
+
+const SEVERITY_COLORS: Record<string, string> = {
+  none:     "bg-gray-700/20    text-gray-400",
+  watch:    "bg-yellow-500/15  text-yellow-400",
+  warning:  "bg-orange-500/15  text-orange-400",
+  critical: "bg-red-500/15     text-red-400",
+};
+
+function trendIcon(trend: string) {
+  if (trend === "spiking")   return <ArrowUpRight className="h-3.5 w-3.5 text-red-400"    />;
+  if (trend === "declining") return <TrendingUp    className="h-3.5 w-3.5 text-emerald-400 rotate-180" />;
+  return                            <Activity      className="h-3.5 w-3.5 text-gray-400"   />;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export default function GlobalCommandCenter() {
+  const mutation = useMutation<GlobalOutput, Error>({
+    mutationFn: () =>
+      apiRequest("POST", "/api/global/orchestrate", {
+        regions:  DEMO_REGIONS,
+        simInput: { R0: 1.8, population: 5_000_000, initialInfected: 320 },
+      }).then(r => r.json()),
+  });
+
+  const data = mutation.data;
+
+  return (
+    <div className="space-y-5" data-testid="global-command-center">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Globe className="h-5 w-5 text-emerald-400" />
+          <h2 className="text-base font-semibold">Global Command Center</h2>
+          <span className="text-xs text-gray-500">Pandemic detection · SIR simulation · Continent signals · Global policy</span>
+        </div>
+        <Button
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          data-testid="btn-run-global"
+          size="sm"
+          className="bg-emerald-800 hover:bg-emerald-700 text-white"
+        >
+          <Globe className="h-4 w-4 mr-1.5" />
+          {mutation.isPending ? "Orchestrating..." : "Run Global Orchestration"}
+        </Button>
+      </div>
+
+      {mutation.isError && (
+        <div className="rounded-lg border border-red-700/50 bg-red-950/40 px-4 py-3 text-sm text-red-400" data-testid="global-error">
+          {mutation.error?.message}
+        </div>
+      )}
+
+      {data && (
+        <div className="space-y-4" data-testid="global-output">
+
+          {/* Early warning banner */}
+          {data.earlyWarning.severity !== "none" && (
+            <div className={`rounded-xl border px-4 py-3 flex items-start gap-3 ${data.earlyWarning.severity === "critical" ? "border-red-700/60 bg-red-950/50" : "border-orange-700/50 bg-orange-950/30"}`}
+              data-testid="early-warning-banner">
+              <Thermometer className="h-5 w-5 text-red-400 mt-0.5 shrink-0" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm text-red-300">{data.earlyWarning.alert}</span>
+                  <Badge className={`border text-xs ${SEVERITY_COLORS[data.earlyWarning.severity]}`}>{data.earlyWarning.severity}</Badge>
+                </div>
+                {data.earlyWarning.action && (
+                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                    <Zap className="h-3 w-3 text-yellow-400" /> {data.earlyWarning.action}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "Global Patients",  value: data.summary.totalGlobalPatients.toLocaleString(), testId: "kpi-global-patients" },
+              { label: "Hot Continents",   value: data.summary.hotContinents,                        testId: "kpi-hot-continents"  },
+              { label: "Pandemic Alert",   value: data.summary.pandemicAlert ? "YES" : "No",         testId: "kpi-pandemic-alert"  },
+              { label: "Alert Level",      value: data.summary.globalAlertLevel.toUpperCase(),        testId: "kpi-alert-level"     },
+            ].map(({ label, value, testId }) => (
+              <Card key={testId} className="border-gray-800 bg-gray-950" data-testid={testId}>
+                <CardContent className="pt-4 pb-3">
+                  <div className="text-xs text-gray-400 mb-1">{label}</div>
+                  <div className={`text-2xl font-bold ${testId === "kpi-alert-level" ? ALERT_COLORS[data.summary.globalAlertLevel]?.split(" ")[1] ?? "" : ""}`}>{value}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Continent signals */}
+          <Card className="border-gray-800 bg-gray-950" data-testid="card-continent-signals">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-gray-400 flex items-center gap-1.5">
+                <Map className="h-4 w-4" /> Continent Signals
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {data.continentSignals.map(c => (
+                  <div key={c.continent}
+                    className="flex items-center gap-3 p-2 rounded-lg bg-gray-900/60 border border-gray-800"
+                    data-testid={`continent-${c.continent.replace(/\s+/g, "-").toLowerCase()}`}>
+                    <div className="shrink-0">{trendIcon(c.trend)}</div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-medium">{c.continent}</span>
+                        <span className={`${c.trend === "spiking" ? "text-red-400" : "text-gray-400"}`}>{c.trend}</span>
+                        <span className="text-gray-500">{c.regionCount} regions · {c.volume.toLocaleString()} patients</span>
+                        <span className="text-gray-600">avg strain {c.avgStrain.toFixed(1)}/10</span>
+                      </div>
+                      <Progress value={c.avgStrain * 10} className="h-1 mt-1.5" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Pandemic detection */}
+            <Card className="border-gray-800 bg-gray-950" data-testid="card-pandemic">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-gray-400 flex items-center gap-1.5">
+                  <Thermometer className="h-4 w-4" /> Pandemic Detection
+                  <div className="ml-auto">
+                    <Badge className={`border text-xs ${ALERT_COLORS[data.pandemic.riskLevel === "critical" ? "red" : data.pandemic.riskLevel === "high" ? "orange" : "green"]}`}>
+                      {data.pandemic.riskLevel}
+                    </Badge>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded bg-gray-900/60 border border-gray-800 px-3 py-2">
+                    <div className="text-gray-500">Respiratory cluster</div>
+                    <div className={`font-semibold ${data.pandemic.respiratoryCluster ? "text-red-400" : "text-emerald-400"}`}>
+                      {data.pandemic.respiratoryCluster ? "DETECTED" : "clear"}
+                    </div>
+                  </div>
+                  <div className="rounded bg-gray-900/60 border border-gray-800 px-3 py-2">
+                    <div className="text-gray-500">GI cluster</div>
+                    <div className={`font-semibold ${data.pandemic.giCluster ? "text-orange-400" : "text-emerald-400"}`}>
+                      {data.pandemic.giCluster ? "DETECTED" : "clear"}
+                    </div>
+                  </div>
+                </div>
+                {data.pandemic.topSymptom && (
+                  <div className="text-xs text-gray-500">Top global symptom: <span className="text-gray-300">{data.pandemic.topSymptom.replace(/_/g, " ")}</span></div>
+                )}
+                {Object.entries(data.pandemic.symptomCounts).length > 0 && (
+                  <div className="space-y-1">
+                    {Object.entries(data.pandemic.symptomCounts)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 5)
+                      .map(([s, count]) => (
+                        <div key={s} className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-400 w-28 truncate">{s.replace(/_/g, " ")}</span>
+                          <Progress value={Math.min(100, count / 5)} className="h-1 flex-1" />
+                          <span className="text-gray-500 w-8 text-right">{count}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Spread simulation */}
+            <Card className="border-gray-800 bg-gray-950" data-testid="card-simulation">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-gray-400 flex items-center gap-1.5">
+                  <BarChart3 className="h-4 w-4" /> SIR Spread Simulation
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: "Current",    value: data.simulation.current.toLocaleString(),    testId: "sim-current"   },
+                    { label: "Tomorrow",   value: data.simulation.nextDay.toLocaleString(),     testId: "sim-nextday"   },
+                    { label: "Next week",  value: data.simulation.nextWeek.toLocaleString(),    testId: "sim-nextweek"  },
+                    { label: "Next month", value: data.simulation.nextMonth.toLocaleString(),   testId: "sim-nextmonth" },
+                  ].map(({ label, value, testId }) => (
+                    <div key={testId} className="rounded bg-gray-900/60 border border-gray-800 px-3 py-2 text-xs" data-testid={testId}>
+                      <div className="text-gray-500">{label}</div>
+                      <div className="font-semibold text-base text-gray-200">{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 text-xs text-gray-500 space-y-1">
+                  <div>Peak estimate: <span className="text-gray-300">{data.simulation.peakEstimate.toLocaleString()}</span></div>
+                  <div>Herd threshold: <span className="text-gray-300">{data.simulation.herdThreshold.toLocaleString()}</span></div>
+                  <div>Risk level: <span className={data.simulation.riskLevel === "critical" ? "text-red-400" : data.simulation.riskLevel === "high" ? "text-orange-400" : "text-emerald-400"}>{data.simulation.riskLevel}</span></div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Redistribution + Policy */}
+          {(data.recommendedRedistribution.length > 0 || data.overloadedRegions.length > 0) && (
+            <Card className="border-gray-800 bg-gray-950" data-testid="card-redistribution">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-gray-400 flex items-center gap-1.5">
+                  <Users className="h-4 w-4" /> Global Redistribution
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {data.recommendedRedistribution.length > 0 && (
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1.5">Underloaded — accept overflow:</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.recommendedRedistribution.map(r => (
+                        <Badge key={r} className="border border-emerald-600/30 bg-emerald-950/30 text-emerald-400 text-xs">{r}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {data.overloadedRegions.length > 0 && (
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1.5">Overloaded — divert non-critical:</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.overloadedRegions.map(r => (
+                        <Badge key={r} className="border border-red-600/30 bg-red-950/30 text-red-400 text-xs">{r}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+        </div>
+      )}
+
+      {!data && !mutation.isPending && !mutation.isError && (
+        <div className="rounded-xl border border-gray-800 bg-gray-950 px-6 py-12 text-center" data-testid="global-empty">
+          <Globe className="h-10 w-10 mx-auto text-emerald-400/30 mb-3" />
+          <p className="text-sm text-gray-500">
+            Click <strong className="text-gray-300">Run Global Orchestration</strong> to activate the WHO-scale intelligence layer — continent signals, pandemic detection, SIR spread simulation, early warning, and global policy enforcement.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/tower/LivePatientsPanel.tsx
+=================================================================================
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
+import { Activity, Wifi, WifiOff } from "lucide-react";
+
+interface StreamEvent {
+  patient_id: string;
+  feature_key: string;
+  value: number;
+  ts: number;
+}
+
+interface PatientStateRow {
+  patientId: string;
+  currentDx: string | null;
+  currentDisposition: string | null;
+  riskScore: number | null;
+}
+
+export default function LivePatientsPanel() {
+  const [connected, setConnected] = useState(false);
+  const [stream, setStream] = useState<StreamEvent[]>([]);
+
+  const { data: patients = [] } = useQuery<PatientStateRow[]>({
+    queryKey: ["/api/sysctrl/patients"],
+    refetchInterval: 5000,
+  });
+
+  useEffect(() => {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws/patient-stream`);
+
+    ws.onopen = () => setConnected(true);
+    ws.onclose = () => setConnected(false);
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.patient_id) {
+          setStream(prev => [data, ...prev.slice(0, 29)]);
+        }
+      } catch {}
+    };
+    return () => { try { ws.close(); } catch {} };
+  }, []);
+
+  return (
+    <div data-testid="live-patients-panel" className="space-y-3">
+      <div className="flex items-center gap-2">
+        {connected
+          ? <><Wifi className="h-3.5 w-3.5 text-green-500" /><span className="text-xs text-green-600">Live stream connected</span></>
+          : <><WifiOff className="h-3.5 w-3.5 text-muted-foreground" /><span className="text-xs text-muted-foreground">Waiting for stream…</span></>
+        }
+      </div>
+
+      {/* Patient state table */}
+      {patients.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Active Patients</p>
+          <div className="space-y-1">
+            {patients.map((p, i) => (
+              <div key={p.patientId} className="flex items-center justify-between text-xs p-2 rounded-lg border bg-card" data-testid={`patient-state-${i}`}>
+                <span className="font-medium">{p.patientId}</span>
+                <div className="flex items-center gap-1">
+                  {p.currentDx && <Badge variant="outline" className="text-xs py-0">{p.currentDx.slice(0, 12)}</Badge>}
+                  {p.riskScore != null && p.riskScore > 0 && (
+                    <Badge variant="destructive" className="text-xs py-0">risk {p.riskScore.toFixed(1)}</Badge>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Live stream events */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Live Events</p>
+        <div className="space-y-0.5 max-h-48 overflow-y-auto">
+          {stream.length === 0 && (
+            <p className="text-xs text-muted-foreground py-2">No events yet — POST to /api/sysctrl/stream to push data</p>
+          )}
+          {stream.map((ev, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs py-0.5 border-b border-border/40">
+              <Activity className="h-3 w-3 text-blue-500 shrink-0" />
+              <span className="font-medium">{ev.patient_id}</span>
+              <span className="text-muted-foreground">→</span>
+              <span>{ev.feature_key}</span>
+              <Badge variant="secondary" className="text-xs py-0 ml-auto">{ev.value}</Badge>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/tower/LiveLogsPanel.tsx
+=================================================================================
+import { useQuery } from "@tanstack/react-query";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { Terminal } from "lucide-react";
+
+interface LogEntry { ts: number; level: string; msg: string; }
+
+const LEVEL_COLOR: Record<string, string> = {
+  info:  "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+  warn:  "bg-yellow-100 text-yellow-800",
+  error: "bg-red-100 text-red-800",
+  debug: "bg-gray-100 text-gray-600",
+};
+
+function fmtTime(ts: number) {
+  return new Date(ts).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+export default function LiveLogsPanel() {
+  const { data: logs = [] } = useQuery<LogEntry[]>({
+    queryKey: ["/api/sysctrl/logs"],
+    refetchInterval: 3000,
+  });
+
+  return (
+    <div data-testid="live-logs-panel">
+      <ScrollArea className="h-48 rounded-lg border bg-black/95">
+        <div className="p-2 space-y-0.5 font-mono">
+          {logs.length === 0 && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2 px-1">
+              <Terminal className="h-3 w-3" />
+              <span>Waiting for system events…</span>
+            </div>
+          )}
+          {logs.map((l, i) => (
+            <div key={i} className="flex items-start gap-2 text-xs text-green-300 border-b border-white/5 pb-0.5" data-testid={`log-row-${i}`}>
+              <span className="text-gray-500 shrink-0">{fmtTime(l.ts)}</span>
+              <Badge className={`text-xs py-0 shrink-0 ${LEVEL_COLOR[l.level] ?? LEVEL_COLOR.info}`}>
+                {l.level}
+              </Badge>
+              <span className="break-all">{l.msg}</span>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/OversightPanel.tsx
+=================================================================================
+/**
+ * OversightPanel — Autonomous System Oversight Widget
+ *
+ * Displays the real-time health status produced by the autonomous oversight
+ * agent. Clinicians and engineers use this to know:
+ *   - Is the system drifting from its clinical baseline?
+ *   - Where is it failing?
+ *   - What actions are recommended?
+ *   - Is it safe to deploy a new change?
+ *
+ * Uses useMutation (not useQuery) because the oversight check is an on-demand
+ * computation, not a cached resource — running it uses system resources and
+ * should be triggered deliberately.
+ */
+
+import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
+import { AlertTriangle, ShieldCheck, Activity, RefreshCw, ChevronRight, Info } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface OversightDecision {
+  alerts:         string[];
+  actions:        string[];
+  severity:       "low" | "medium" | "high" | "critical";
+  driftReport?:   { driftDetected: boolean; magnitude: number; severity: string };
+  topCluster?:    { complaint: string; ageGroup: string; count: number } | null;
+  summary:        string;
+}
+
+// ── Severity styling ──────────────────────────────────────────────────────────
+
+const SEVERITY_BADGE: Record<string, string> = {
+  critical: "bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-200",
+  high:     "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950 dark:text-orange-200",
+  medium:   "bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-950 dark:text-yellow-200",
+  low:      "bg-green-100 text-green-800 border-green-300 dark:bg-green-950 dark:text-green-200",
+};
+
+const SEVERITY_ICON: Record<string, React.ReactNode> = {
+  critical: <AlertTriangle className="h-4 w-4 text-red-600" />,
+  high:     <AlertTriangle className="h-4 w-4 text-orange-500" />,
+  medium:   <Info className="h-4 w-4 text-yellow-600" />,
+  low:      <ShieldCheck className="h-4 w-4 text-green-600" />,
+};
+
+// ── Default snapshot metrics (used when real metrics aren't available) ─────────
+// In production these would come from the system metrics store or a live API call.
+
+const DEFAULT_METRICS = {
+  latency:            0,
+  errorRate:          0,
+  fhirFailures:       0,
+  safetyMismatchRate: 0,
+  degradedRate:       0,
+  rlhfViolations:     0,
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export default function OversightPanel() {
+  const [lastRun, setLastRun] = useState<string | null>(null);
+
+  const mutation = useMutation<OversightDecision, Error, void>({
+    mutationFn: () =>
+      apiRequest("POST", "/api/oversight/run", {
+        input: {
+          outcomes:      [],                // live system: pass real recent outcomes here
+          systemMetrics: DEFAULT_METRICS,
+          kbVersion:     "current",
+          timestamp:     Date.now(),
+        },
+      }).then(r => r.json()),
+    onSuccess: () => setLastRun(new Date().toLocaleTimeString()),
+  });
+
+  const decision = mutation.data;
+
+  return (
+    <Card data-testid="oversight-panel">
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <div className="flex items-center gap-2">
+          <Activity className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">Autonomous Oversight Agent</CardTitle>
+        </div>
+        <div className="flex items-center gap-3">
+          {lastRun && (
+            <span
+              data-testid="oversight-last-run"
+              className="text-xs text-muted-foreground"
+            >
+              Last checked: {lastRun}
+            </span>
+          )}
+          <Button
+            data-testid="button-run-oversight"
+            size="sm"
+            variant="outline"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending
+              ? <><RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />Running…</>
+              : <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Run Check</>
+            }
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        {mutation.isError && (
+          <Alert variant="destructive" data-testid="oversight-error">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Oversight check failed</AlertTitle>
+            <AlertDescription>{mutation.error.message}</AlertDescription>
+          </Alert>
+        )}
+
+        {!decision && !mutation.isPending && !mutation.isError && (
+          <div className="text-sm text-muted-foreground text-center py-6">
+            Click <strong>Run Check</strong> to evaluate system health
+          </div>
+        )}
+
+        {decision && (
+          <div className="space-y-4" data-testid="oversight-results">
+            {/* Severity badge + summary */}
+            <div className="flex items-start gap-3">
+              <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${SEVERITY_BADGE[decision.severity]}`}
+                data-testid="oversight-severity">
+                {SEVERITY_ICON[decision.severity]}
+                {decision.severity.toUpperCase()}
+              </div>
+              <p className="text-sm text-muted-foreground leading-snug" data-testid="oversight-summary">
+                {decision.summary}
+              </p>
+            </div>
+
+            {/* Drift report */}
+            {decision.driftReport?.driftDetected && (
+              <div className="rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/30 p-3"
+                data-testid="oversight-drift">
+                <p className="text-xs font-semibold text-orange-700 dark:text-orange-300 mb-0.5">
+                  Clinical Drift Detected
+                </p>
+                <p className="text-xs text-orange-600 dark:text-orange-400">
+                  Magnitude: {(decision.driftReport.magnitude * 100).toFixed(1)}% — {decision.driftReport.severity}
+                </p>
+              </div>
+            )}
+
+            {/* Top failure cluster */}
+            {decision.topCluster && (
+              <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/30 p-3"
+                data-testid="oversight-cluster">
+                <p className="text-xs font-semibold text-yellow-700 dark:text-yellow-300 mb-0.5">
+                  Top Failure Cluster
+                </p>
+                <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                  {decision.topCluster.complaint} / {decision.topCluster.ageGroup}
+                  {" "}— {decision.topCluster.count} failure{decision.topCluster.count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            )}
+
+            {/* Alerts */}
+            {decision.alerts.length > 0 && (
+              <div data-testid="oversight-alerts">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Alerts ({decision.alerts.length})
+                </p>
+                <ul className="space-y-1.5">
+                  {decision.alerts.map((alert, i) => (
+                    <li
+                      key={i}
+                      data-testid={`oversight-alert-${i}`}
+                      className="flex items-start gap-2 text-xs"
+                    >
+                      <AlertTriangle className="h-3.5 w-3.5 text-orange-500 shrink-0 mt-0.5" />
+                      <span>{alert}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {decision.alerts.length === 0 && (
+              <div className="flex items-center gap-2 text-xs text-green-700 dark:text-green-300"
+                data-testid="oversight-healthy">
+                <ShieldCheck className="h-4 w-4" />
+                No active alerts — system within normal bounds
+              </div>
+            )}
+
+            <Separator />
+
+            {/* Recommended actions */}
+            {decision.actions.length > 0 && (
+              <div data-testid="oversight-actions">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Recommended Actions
+                </p>
+                <ul className="space-y-1.5">
+                  {decision.actions.map((action, i) => (
+                    <li
+                      key={i}
+                      data-testid={`oversight-action-${i}`}
+                      className="flex items-start gap-2 text-xs"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />
+                      <span>{action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/PhysicianCopilot.tsx
+=================================================================================
+interface CaseData {
+  complaint?: string;
+  differential?: Array<{ diagnosis?: string; name?: string }>;
+  risk?: string;
+  disposition?: string;
+  [key: string]: unknown;
+}
+
+interface PhysicianCopilotProps {
+  caseData: CaseData;
+  onOverride?: (disposition: string) => void;
+}
+
+export default function PhysicianCopilot({ caseData, onOverride }: PhysicianCopilotProps) {
+  const topDx =
+    caseData.differential?.[0]?.diagnosis ??
+    caseData.differential?.[0]?.name ??
+    "—";
+
+  const riskColor =
+    caseData.risk === "high" ? "text-red-400" :
+    caseData.risk === "medium" ? "text-yellow-300" : "text-green-400";
+
+  return (
+    <div className="bg-gray-900 text-white p-4 rounded-xl space-y-2 border border-gray-700">
+      <h2 className="text-lg font-semibold flex items-center gap-2">
+        <span>🧠</span> AI Copilot
+      </h2>
+
+      <div className="text-sm space-y-1">
+        <p>
+          <span className="text-gray-400 font-medium">Complaint: </span>
+          <span data-testid="copilot-complaint">{caseData.complaint ?? "—"}</span>
+        </p>
+        <p>
+          <span className="text-gray-400 font-medium">Top Diagnosis: </span>
+          <span data-testid="copilot-top-dx">{topDx}</span>
+        </p>
+        <p>
+          <span className="text-gray-400 font-medium">Risk: </span>
+          <span className={`font-bold ${riskColor}`} data-testid="copilot-risk">{caseData.risk ?? "—"}</span>
+        </p>
+      </div>
+
+      <div className="mt-2 bg-gray-800 rounded-lg p-2 text-yellow-300 text-sm" data-testid="copilot-disposition">
+        Suggested Action: <span className="font-bold">{caseData.disposition ?? "—"}</span>
+      </div>
+
+      {onOverride && (
+        <div className="flex gap-2 mt-2">
+          <button
+            onClick={() => onOverride("ER_NOW")}
+            data-testid="button-override-er"
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs rounded font-semibold"
+          >
+            🚨 Override → ER
+          </button>
+          <button
+            onClick={() => onOverride("ROUTINE")}
+            data-testid="button-override-routine"
+            className="px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded font-semibold"
+          >
+            ✅ Override → Routine
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+=================================================================================
+FILE: client/src/components/PhysicianOverrideDialog.tsx
+=================================================================================
+import { useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast';
+import { apiFetch, getOrCreateCorrelationId } from '@/lib/correlation';
+
+interface PhysicianOverrideDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  encounterId: string;
+  originalRecommendation: string;
+  onSaved?: () => void;
+}
+
+export default function PhysicianOverrideDialog({
+  open,
+  onOpenChange,
+  encounterId,
+  originalRecommendation,
+  onSaved,
+}: PhysicianOverrideDialogProps) {
+  const [overrideValue, setOverrideValue] = useState('');
+  const [rationale, setRationale]         = useState('');
+  const [saving, setSaving]               = useState(false);
+  const { toast } = useToast();
+
+  async function submit() {
+    if (!overrideValue.trim() || !rationale.trim()) return;
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/clinical/encounters/${encounterId}/override`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          originalRecommendation,
+          overrideValue,
+          rationale,
+          correlationId: getOrCreateCorrelationId(),
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: 'Override saved', description: 'The physician override has been recorded.' });
+      setOverrideValue('');
+      setRationale('');
+      onOpenChange(false);
+      onSaved?.();
+    } catch (err: any) {
+      toast({
+        title: 'Save failed',
+        description: err?.message ?? 'Could not save the override. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Physician Override</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <Label className="text-sm text-muted-foreground">Original AI recommendation</Label>
+            <p
+              className="mt-1 text-sm font-medium border rounded-md px-3 py-2 bg-muted/40"
+              data-testid="text-original-recommendation"
+            >
+              {originalRecommendation || '—'}
+            </p>
+          </div>
+
+          <div>
+            <Label htmlFor="override-value">Override decision</Label>
+            <Input
+              id="override-value"
+              data-testid="input-override-value"
+              className="mt-1"
+              placeholder="Enter your clinical decision"
+              value={overrideValue}
+              onChange={(e) => setOverrideValue(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="override-rationale">
+              Rationale <span className="text-destructive">*</span>
+            </Label>
+            <Textarea
+              id="override-rationale"
+              data-testid="input-override-rationale"
+              className="mt-1"
+              placeholder="Required — document clinical reasoning for this override"
+              rows={4}
+              value={rationale}
+              onChange={(e) => setRationale(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            data-testid="button-cancel-override"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={submit}
+            disabled={!overrideValue.trim() || !rationale.trim() || saving}
+            data-testid="button-save-override"
+          >
+            {saving ? 'Saving…' : 'Save Override'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

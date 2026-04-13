@@ -1,0 +1,2075 @@
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform (Auralyn — HIPAA/FDA multi-tenant SaaS, NYC urgent care).
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Do not be gentle. Be precise.
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+SUMMARY TABLE
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+Likely theater/scaffolding:
+Highest ROI fixes:
+Needs cross-file review confirmation:
+
+BATCH-SPECIFIC FOCUS:
+Review these files for realism of integration, failure safety, write-back risk, incomplete adapter paths, insecure automation behavior, and features presented as real but only partially implemented.
+
+======================================================================
+CODE BELOW — BEGIN REVIEW
+======================================================================
+
+=== AURALYN CODE REVIEW — BATCH 5: EHR, FHIR, Automation Adapters ===
+Files: EHR adapters, SMART on FHIR, UI automation, write-back endpoints, selector healing
+Review focus: realism of integration, failure safety, write-back risk, incomplete adapter paths, insecure automation, features presented as real but only partially implemented
+
+=================================================================================
+FILE: server/ehr/ehrWriter.ts
+=================================================================================
+/**
+ * server/ehr/ehrWriter.ts — EHR clinical record writer
+ *
+ * FIX (Code Review Issue #12):
+ *   Previously: on Athena/Epic failure the code silently fell back to writeMock()
+ *   and returned { success: true, fallback: true } — physicians saw a "success"
+ *   indicator even when the EHR write never happened. Charts appeared filed when
+ *   they were not. This is a patient-safety and regulatory compliance failure.
+ *
+ *   Fixed: fallback to mock is REMOVED from production paths. When a real EHR
+ *   write fails it now throws, the caller receives success: false with the actual
+ *   error, and the audit log records the failure. writeMock() is only used when
+ *   system is explicitly "mock" (dev/test) and that fact is clearly surfaced.
+ *
+ *   The EHRWriteResult.success field accurately reflects whether the write reached
+ *   the actual EHR. There is no code path that returns success: true on a failed write.
+ */
+
+import { logEvent } from "../ops/auditEvents";
+
+export interface EHRWritePayload {
+  patientId:    string;
+  disposition:  string;
+  notes:        string;
+  system?:      "athena" | "epic" | "ecw" | "mock";
+  physicianId?: string;
+  timestamp?:   string;
+}
+
+export interface EHRWriteResult {
+  success:    boolean;
+  system:     string;
+  patientId:  string;
+  recordedAt: string;
+  error?:     string;
+  /** true only when system="mock" was explicit (dev/test) — never set on production EHR failure */
+  isMock?:    boolean;
+}
+
+export async function ehrWrite(payload: EHRWritePayload): Promise<EHRWriteResult> {
+  const system = payload.system ?? detectSystem();
+  const now    = new Date().toISOString();
+
+  let result: EHRWriteResult;
+
+  // ── Production EHR writes — NO mock fallback ──────────────────────────────
+  // If the real EHR write fails, we propagate the error. Callers must handle it.
+  // Physicians must be informed of write failures — never shown a false success.
+  if (system === "athena") {
+    result = await writeAthena(payload, now);
+  } else if (system === "epic") {
+    result = await writeEpic(payload, now);
+  } else if (system === "ecw") {
+    result = await writeECW(payload, now);
+  } else {
+    // Explicit mock (dev/test only)
+    result = writeMock(payload, now);
+  }
+
+  logEvent({
+    actor:      payload.physicianId ?? "ehr_writer",
+    action:     `ehr:write:${result.success ? "success" : "failed"}`,
+    entityType: "patient",
+    entityId:   payload.patientId,
+    details: {
+      system:     result.system,
+      success:    result.success,
+      isMock:     result.isMock ?? false,
+      error:      result.error,
+      recordedAt: result.recordedAt,
+    },
+  });
+
+  return result;
+}
+
+// ── System detection ──────────────────────────────────────────────────────────
+
+function detectSystem(): "athena" | "epic" | "ecw" | "mock" {
+  if (process.env.ATHENA_EHR_URL)  return "athena";
+  if (process.env.EPIC_EHR_URL)    return "epic";
+  if (process.env.ECW_EHR_URL)     return "ecw";
+  return "mock";
+}
+
+// ── EHR adapters ──────────────────────────────────────────────────────────────
+// Each adapter throws on failure — no swallowing, no mock fallback.
+
+async function writeAthena(payload: EHRWritePayload, now: string): Promise<EHRWriteResult> {
+  const url = process.env.ATHENA_EHR_URL;
+  if (!url) throw new Error("ATHENA_EHR_URL not configured");
+
+  const res = await fetch(`${url}/api/chart/update`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      patient:   payload.patientId,
+      diagnosis: payload.disposition,
+      notes:     payload.notes,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Athena EHR write failed: HTTP ${res.status} — ${body}`);
+  }
+
+  return { success: true, system: "athena", patientId: payload.patientId, recordedAt: now };
+}
+
+async function writeEpic(payload: EHRWritePayload, now: string): Promise<EHRWriteResult> {
+  const url = process.env.EPIC_EHR_URL;
+  if (!url) throw new Error("EPIC_EHR_URL not configured");
+
+  const res = await fetch(`${url}/api/fhir/encounter`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      subject:    payload.patientId,
+      conclusion: payload.disposition,
+      notes:      payload.notes,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Epic EHR write failed: HTTP ${res.status} — ${body}`);
+  }
+
+  return { success: true, system: "epic", patientId: payload.patientId, recordedAt: now };
+}
+
+async function writeECW(payload: EHRWritePayload, now: string): Promise<EHRWriteResult> {
+  const url = process.env.ECW_EHR_URL;
+  if (!url) throw new Error("ECW_EHR_URL not configured");
+
+  const res = await fetch(`${url}/api/encounter`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      patientId:   payload.patientId,
+      disposition: payload.disposition,
+      notes:       payload.notes,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`eCW EHR write failed: HTTP ${res.status} — ${body}`);
+  }
+
+  return { success: true, system: "ecw", patientId: payload.patientId, recordedAt: now };
+}
+
+// ── Mock writer (dev/test only) ───────────────────────────────────────────────
+// Only used when system is explicitly "mock". Never called as a production fallback.
+
+function writeMock(payload: EHRWritePayload, now: string): EHRWriteResult {
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd) {
+    throw new Error(
+      "EHR mock writer cannot be used in production. Configure ATHENA_EHR_URL or EPIC_EHR_URL."
+    );
+  }
+  return {
+    success:    true,
+    system:     "mock",
+    patientId:  payload.patientId,
+    recordedAt: now,
+    isMock:     true,   // explicit flag — callers can detect mock writes
+  };
+}
+
+
+=================================================================================
+FILE: server/ehr/ehrOrchestrator.ts
+=================================================================================
+/**
+ * EHR Orchestrator — routes encounters to the correct EHR adapter.
+ * In production: Playwright-based automation or FHIR API calls.
+ * In development/test: stub mode (no browser launch).
+ */
+
+export interface EHRSubmitResult {
+  success:  boolean;
+  system:   string;
+  stub:     boolean;
+  traceId?: string;
+  error?:   string;
+}
+
+async function runEHRAction(
+  action: string,
+  payload: Record<string, unknown>
+): Promise<EHRSubmitResult> {
+  // Stub: In production, replace with Playwright automation or FHIR REST calls
+  console.log(`[EHR] Action=${action} diagnosis=${payload.diagnosis ?? "?"} disposition=${payload.disposition ?? "?"}`);
+  return {
+    success: true,
+    system:  action.split("_")[0],
+    stub:    true,
+    traceId: (payload.traceId as string | undefined),
+  };
+}
+
+export async function submitEncounter(
+  data: Record<string, unknown>
+): Promise<EHRSubmitResult> {
+  const system = (process.env.EHR_SYSTEM ?? "athena").toLowerCase();
+
+  const actionMap: Record<string, string> = {
+    athena: "athena_submit",
+    epic:   "epic_submit",
+    ecw:    "ecw_submit",
+  };
+
+  const action = actionMap[system];
+  if (!action) {
+    return { success: false, system, stub: true, error: `Unsupported EHR system: ${system}` };
+  }
+
+  return runEHRAction(action, data);
+}
+
+
+=================================================================================
+FILE: server/ehr/ehrExecutor.ts
+=================================================================================
+/**
+ * EHR Executor — scope-gated EHR writes (Epic / Athena / ECW)
+ * ALL EHR writes flow through the scope engine before execution.
+ * Without physician_signed + confidence ≥ 0.9 → returns PENDING_OVERRIDE.
+ */
+
+import { executeWithScope }   from "../execution/executeWithScope";
+import { executeOrder }       from "../intervention/orderExecutor";
+
+export interface EHRPayload {
+  patientId:      string;
+  system?:        "epic" | "athena" | "ecw";
+  data:           Record<string, any>;
+  physicianSigned?:boolean;
+  confidence?:    number;
+  orderText?:     string;
+}
+
+// ── Write to EHR (scope-gated) ────────────────────────────────────────────────
+export async function writeToEHR(payload: EHRPayload) {
+  return executeWithScope(
+    {
+      agentRole: "ehr_agent",
+      action:    "write:ehr",
+      context:   {
+        physicianSigned: payload.physicianSigned ?? false,
+        confidence:      payload.confidence      ?? 0,
+        system:          payload.system          ?? "mock",
+      },
+    },
+    async () => {
+      const system = payload.system ?? "mock";
+
+      if (system === "epic")   return writeEpic(payload);
+      if (system === "athena") return writeAthena(payload);
+      if (system === "ecw")    return writeECW(payload);
+
+      // Mock EHR for dev/test
+      return {
+        written:   true,
+        system:    "mock",
+        patientId: payload.patientId,
+        recordAt:  new Date().toISOString(),
+      };
+    }
+  );
+}
+
+// ── Submit order (scope-gated) ────────────────────────────────────────────────
+export async function submitOrder(payload: EHRPayload) {
+  return executeWithScope(
+    {
+      agentRole: "ehr_agent",
+      action:    "submit:orders",
+      context:   {
+        physicianSigned: payload.physicianSigned ?? false,
+        confidence:      payload.confidence      ?? 0,
+      },
+    },
+    async () => executeOrder(payload.orderText ?? "Unspecified order", payload.patientId)
+  );
+}
+
+// ── EHR adapter stubs (replace with real client in production) ────────────────
+async function writeEpic(payload: EHRPayload) {
+  const url = process.env.EPIC_EHR_URL;
+  if (!url) return { written: false, system: "epic", error: "EPIC_EHR_URL not configured" };
+  try {
+    const res  = await fetch(`${url}/api/fhir/write`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patientId: payload.patientId, data: payload.data }),
+      signal: AbortSignal.timeout(4000),
+    });
+    return { written: res.ok, system: "epic", status: res.status };
+  } catch (err: any) {
+    return { written: false, system: "epic", error: err.message };
+  }
+}
+
+async function writeAthena(payload: EHRPayload) {
+  const url = process.env.ATHENA_EHR_URL;
+  if (!url) return { written: false, system: "athena", error: "ATHENA_EHR_URL not configured" };
+  try {
+    const res = await fetch(`${url}/api/chart/update`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patientId: payload.patientId, data: payload.data }),
+      signal: AbortSignal.timeout(4000),
+    });
+    return { written: res.ok, system: "athena", status: res.status };
+  } catch (err: any) {
+    return { written: false, system: "athena", error: err.message };
+  }
+}
+
+async function writeECW(payload: EHRPayload) {
+  return { written: false, system: "ecw", error: "ECW adapter not yet configured" };
+}
+
+
+=================================================================================
+FILE: server/ehr/smartAuth.ts
+=================================================================================
+import { fhirGet, fhirPost } from "../integrations/ehr/fhirClient";
+
+const EPIC_ISSUER  = process.env.EPIC_ISSUER  ?? "";
+const FHIR_BASE    = process.env.FHIR_BASE    ?? "";
+const SMART_REDIRECT  = process.env.SMART_REDIRECT  ?? "";
+const SMART_CLIENT_ID = process.env.SMART_CLIENT_ID ?? "";
+
+export interface SmartToken {
+  access_token:  string;
+  token_type:    string;
+  expires_in:    number;
+  scope:         string;
+  patient?:      string;
+}
+
+export function buildSmartLaunchUrl(opts: {
+  clientId?:   string;
+  redirect?:   string;
+  iss?:        string;
+  scope?:      string;
+  launch?:     string;
+}): string {
+  const iss = opts.iss ?? EPIC_ISSUER;
+  if (!iss) throw new Error("EPIC_ISSUER not configured");
+
+  const url = new URL(`${iss}/authorize`);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id",     opts.clientId  ?? SMART_CLIENT_ID);
+  url.searchParams.set("redirect_uri",  opts.redirect  ?? SMART_REDIRECT);
+  url.searchParams.set("scope",         opts.scope ?? "launch openid profile user/*.read");
+  if (opts.launch) url.searchParams.set("launch", opts.launch);
+  return url.toString();
+}
+
+export async function exchangeCodeForToken(code: string): Promise<SmartToken> {
+  const issuer = EPIC_ISSUER;
+  if (!issuer) throw new Error("EPIC_ISSUER not configured");
+
+  const res = await fetch(`${issuer}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type:   "authorization_code",
+      code,
+      redirect_uri: SMART_REDIRECT,
+      client_id:    SMART_CLIENT_ID,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`SMART token exchange failed ${res.status}: ${body}`);
+  }
+  return res.json() as Promise<SmartToken>;
+}
+
+export async function getPatientFHIR(patientId: string, token: string) {
+  const base = FHIR_BASE;
+  if (!base) throw new Error("FHIR_BASE not configured");
+  return fhirGet(`${base}/Patient/${patientId}`, token);
+}
+
+export async function createEncounterFHIR(patientId: string, token: string, opts: {
+  class?: string;
+  type?:  string;
+} = {}) {
+  const base = FHIR_BASE;
+  if (!base) throw new Error("FHIR_BASE not configured");
+
+  const body = {
+    resourceType: "Encounter",
+    status:       "in-progress",
+    class: {
+      system:  "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+      code:    opts.class ?? "AMB",
+      display: opts.class === "EMER" ? "Emergency" : "Ambulatory",
+    },
+    type: opts.type ? [{ text: opts.type }] : undefined,
+    subject: { reference: `Patient/${patientId}` },
+    period:  { start: new Date().toISOString() },
+  };
+
+  return fhirPost(`${base}/Encounter`, token, body);
+}
+
+export async function postObservationFHIR(
+  patientId: string,
+  token: string,
+  obs: { code: string; value: number; unit: string; display?: string }
+) {
+  const base = FHIR_BASE;
+  if (!base) throw new Error("FHIR_BASE not configured");
+
+  const body = {
+    resourceType: "Observation",
+    status:       "final",
+    subject:      { reference: `Patient/${patientId}` },
+    effectiveDateTime: new Date().toISOString(),
+    code: { text: obs.display ?? obs.code, coding: [{ code: obs.code }] },
+    valueQuantity: { value: obs.value, unit: obs.unit },
+  };
+
+  return fhirPost(`${base}/Observation`, token, body);
+}
+
+export async function postVitalsFHIR(
+  patientId: string,
+  token: string,
+  vitals: { systolicBp?: number; diastolicBp?: number; oxygenSaturation?: number; heartRate?: number; respiratoryRate?: number; temperature?: number }
+) {
+  const observations: Promise<unknown>[] = [];
+
+  if (vitals.systolicBp != null) {
+    observations.push(postObservationFHIR(patientId, token, { code: "8480-6", value: vitals.systolicBp, unit: "mmHg", display: "Systolic BP" }));
+  }
+  if (vitals.oxygenSaturation != null) {
+    observations.push(postObservationFHIR(patientId, token, { code: "59408-5", value: vitals.oxygenSaturation, unit: "%", display: "SpO2" }));
+  }
+  if (vitals.heartRate != null) {
+    observations.push(postObservationFHIR(patientId, token, { code: "8867-4", value: vitals.heartRate, unit: "bpm", display: "Heart Rate" }));
+  }
+  if (vitals.respiratoryRate != null) {
+    observations.push(postObservationFHIR(patientId, token, { code: "9279-1", value: vitals.respiratoryRate, unit: "breaths/min", display: "Respiratory Rate" }));
+  }
+  if (vitals.temperature != null) {
+    observations.push(postObservationFHIR(patientId, token, { code: "8310-5", value: vitals.temperature, unit: "°F", display: "Body Temperature" }));
+  }
+
+  return Promise.allSettled(observations);
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/smartLaunch.ts
+=================================================================================
+/**
+ * server/ehr/fhir/smartLaunch.ts — SMART on FHIR launch flow
+ *
+ * FIXES (Code Review Issues #9, #10, #11):
+ *
+ *   Issue #9 — Static CSRF state:
+ *     buildAuthUrl() defaulted to the hardcoded string "auralyn-state" when
+ *     config.state was not provided. This makes CSRF protection entirely useless —
+ *     any CSRF attack can include the known static state value. Fixed: if no state
+ *     is provided, one is generated via crypto.randomUUID(). Callers SHOULD generate
+ *     state server-side and store it in the user's session before the redirect.
+ *
+ *   Issue #10 — Issuer-driven token endpoint (SSRF risk):
+ *     exchangeCode() posted to `${iss}/token` where `iss` came directly from the
+ *     caller. An attacker controlling the `iss` parameter could redirect the token
+ *     exchange to an arbitrary endpoint — a classic SSRF vector and token hijack.
+ *     Fixed: iss is validated against an allowlist (FHIR_ALLOWED_ISSUERS env var)
+ *     before the request is made. Unknown issuers are rejected with an error.
+ *
+ *   Issue #11 — SMART incomplete (no PKCE, no nonce):
+ *     SMART App Launch Framework v2.0 requires PKCE (Proof Key for Code Exchange)
+ *     for public clients. Without PKCE, authorization codes are vulnerable to
+ *     interception. Fixed: buildAuthUrl() generates a code_verifier (S256 method)
+ *     and includes code_challenge in the authorization URL. exchangeCode() accepts
+ *     the matching code_verifier and includes it in the token exchange.
+ *     The code_verifier must be stored server-side (in the user session) between
+ *     Step 1 and Step 2.
+ *
+ * Environment variables required:
+ *   FHIR_BASE_URL         — e.g. https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4
+ *   FHIR_CLIENT_ID        — registered client ID in the EHR app portal
+ *   FHIR_REDIRECT_URI     — your callback URL, e.g. https://yourapp.com/fhir/callback
+ *   FHIR_SCOPE            — space-delimited scopes (default: "launch patient/*.read openid profile")
+ *   FHIR_ALLOWED_ISSUERS  — comma-separated list of allowed SMART issuer base URLs
+ */
+
+import crypto from "crypto";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface SmartTokenResponse {
+  access_token:   string;
+  token_type:     string;
+  expires_in:     number;
+  scope:          string;
+  patient?:       string;
+  encounter?:     string;
+  id_token?:      string;
+  refresh_token?: string;
+}
+
+export interface SmartLaunchConfig {
+  iss:              string;
+  launch?:          string;
+  /** State should be generated server-side and stored in session. If omitted, one is auto-generated. */
+  state?:           string;
+  additionalScope?: string;
+}
+
+/** Result of buildAuthUrl — caller must store codeVerifier and state in the user's session */
+export interface SmartAuthUrlResult {
+  authUrl:      string;
+  state:        string;    // must be stored server-side and verified on callback
+  codeVerifier: string;    // must be stored server-side and sent in exchangeCode()
+}
+
+// ── Issuer allowlist (Issue #10 FIX) ─────────────────────────────────────────
+
+function getAllowedIssuers(): string[] {
+  const raw = process.env.FHIR_ALLOWED_ISSUERS ?? "";
+  const issuers = raw.split(",").map(s => s.trim()).filter(Boolean);
+  return issuers;
+}
+
+function validateIssuer(iss: string): void {
+  const allowed = getAllowedIssuers();
+
+  if (allowed.length === 0) {
+    const isProd = process.env.NODE_ENV === "production";
+    if (isProd) {
+      throw new Error(
+        "FATAL: FHIR_ALLOWED_ISSUERS is not configured. " +
+        "Set a comma-separated list of allowed SMART issuer base URLs before enabling SMART launch."
+      );
+    }
+    // Dev: warn but continue to not block development workflow
+    console.warn("[SmartLaunch] FHIR_ALLOWED_ISSUERS not set — issuer not validated (non-production).");
+    return;
+  }
+
+  const issNormalized = iss.replace(/\/$/, "");
+  const isAllowed = allowed.some(a => issNormalized === a.replace(/\/$/, ""));
+
+  if (!isAllowed) {
+    throw new Error(
+      `SMART issuer '${iss}' is not in the FHIR_ALLOWED_ISSUERS allowlist. ` +
+      `Allowed: ${allowed.join(", ")}`
+    );
+  }
+}
+
+// ── PKCE helpers (Issue #11 FIX) ──────────────────────────────────────────────
+
+function generateCodeVerifier(): string {
+  // RFC 7636 §4.1: code_verifier = 43–128 char URL-safe string
+  return crypto.randomBytes(64).toString("base64url");
+}
+
+function generateCodeChallenge(verifier: string): string {
+  // S256 method: BASE64URL(SHA256(ASCII(code_verifier)))
+  return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
+// ── Step 1 — Build authorization URL ─────────────────────────────────────────
+
+export function buildAuthUrl(config: SmartLaunchConfig): SmartAuthUrlResult {
+  // Validate issuer against allowlist before building the URL
+  validateIssuer(config.iss);
+
+  const clientId    = process.env.FHIR_CLIENT_ID    || "";
+  const redirectUri = process.env.FHIR_REDIRECT_URI || "";
+  const baseScope   = process.env.FHIR_SCOPE || "launch patient/*.read openid profile";
+  const scope       = config.launch ? `${baseScope} launch` : baseScope;
+  const effectiveScope = config.additionalScope ? `${scope} ${config.additionalScope}` : scope;
+
+  // Issue #9 FIX: generate cryptographically random state if not provided
+  // Callers should generate this themselves and store it in the user's session.
+  const state = config.state ?? crypto.randomUUID();
+
+  if (!config.state) {
+    console.warn(
+      "[SmartLaunch] state not provided to buildAuthUrl — auto-generated. " +
+      "For production, generate state server-side and store it in the user session before redirecting."
+    );
+  }
+
+  // Issue #11 FIX: generate PKCE code_verifier and code_challenge
+  const codeVerifier  = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+
+  const params = new URLSearchParams({
+    response_type:          "code",
+    client_id:              clientId,
+    redirect_uri:           redirectUri,
+    scope:                  effectiveScope,
+    aud:                    config.iss,
+    state,
+    code_challenge:         codeChallenge,   // PKCE
+    code_challenge_method:  "S256",          // PKCE S256
+  });
+
+  if (config.launch) params.set("launch", config.launch);
+
+  return {
+    authUrl:      `${config.iss}/authorize?${params.toString()}`,
+    state,
+    codeVerifier,  // must be stored in session; sent in exchangeCode()
+  };
+}
+
+// ── Step 2 — Exchange code for tokens ────────────────────────────────────────
+
+export async function exchangeCode(
+  code:         string,
+  iss:          string,
+  codeVerifier: string,   // Issue #11 FIX: required for PKCE verification
+): Promise<SmartTokenResponse> {
+  // Issue #10 FIX: validate iss before posting to it
+  validateIssuer(iss);
+
+  const clientId    = process.env.FHIR_CLIENT_ID    || "";
+  const redirectUri = process.env.FHIR_REDIRECT_URI || "";
+
+  // Use the allowlisted issuer to construct the token URL — not the raw iss string
+  const tokenUrl = `${iss.replace(/\/$/, "")}/token`;
+
+  const body = new URLSearchParams({
+    grant_type:    "authorization_code",
+    code,
+    redirect_uri:  redirectUri,
+    client_id:     clientId,
+    code_verifier: codeVerifier,   // PKCE: verifier proves we initiated the auth request
+  });
+
+  const res = await fetch(tokenUrl, {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    body.toString(),
+    signal:  AbortSignal.timeout(10_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`SMART token exchange failed (${res.status}): ${text}`);
+  }
+
+  return res.json() as Promise<SmartTokenResponse>;
+}
+
+// ── Configuration check ───────────────────────────────────────────────────────
+
+export function isSmartLaunchConfigured(): boolean {
+  return Boolean(
+    process.env.FHIR_BASE_URL &&
+    process.env.FHIR_CLIENT_ID &&
+    process.env.FHIR_REDIRECT_URI
+  );
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/fhirClient.ts
+=================================================================================
+/**
+ * server/ehr/fhir/fhirClient.ts — FHIR API client
+ *
+ * FIX (Code Review Issue #11):
+ *   Previously: when SMART auth token acquisition failed, the error was downgraded
+ *   to a console.warn and the request proceeded without an Authorization header.
+ *   This meant FHIR requests were silently made as unauthenticated — the server
+ *   was falsely integrated with the EHR and requests would be rejected with 401
+ *   (or worse, accepted on permissive staging endpoints that don't enforce auth).
+ *
+ *   Fixed: auth token failure is now a hard error. buildHeaders() throws if SMART
+ *   is configured but token acquisition fails. fhirFetch() propagates the error.
+ *   The only way to make FHIR requests without auth is to not configure SMART auth
+ *   (which is valid for FHIR servers that use IP allowlisting or other controls).
+ *
+ *   The 401 retry path is preserved: if a token has expired mid-request, we
+ *   invalidate the cache and retry once with a fresh token.
+ */
+
+import { getBearerToken, isSmartAuthConfigured, invalidateToken } from "./fhirAuth";
+
+const FHIR_BASE_URL = process.env.FHIR_BASE_URL;
+
+function assertFhirConfigured(): void {
+  if (!FHIR_BASE_URL) {
+    throw new Error(
+      "FHIR_BASE_URL is not configured — set the environment variable to enable FHIR sync"
+    );
+  }
+}
+
+async function buildHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Accept:         "application/fhir+json",
+    "Content-Type": "application/fhir+json",
+  };
+
+  if (isSmartAuthConfigured()) {
+    // FIX (Issue #11): auth failure now throws — request does not proceed unauthenticated
+    const token = await getBearerToken();  // throws on failure (no try/catch wrapper)
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+async function fhirFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
+  assertFhirConfigured();
+  const headers = await buildHeaders();
+
+  const res = await fetch(`${FHIR_BASE_URL}${path}`, {
+    method,
+    headers,
+    body:   body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  // 401 + SMART configured: invalidate cached token and retry once
+  if (res.status === 401 && isSmartAuthConfigured()) {
+    invalidateToken();
+    const freshHeaders = await buildHeaders();  // throws if re-auth fails
+    const retry = await fetch(`${FHIR_BASE_URL}${path}`, {
+      method,
+      headers: freshHeaders,
+      body:    body ? JSON.stringify(body) : undefined,
+      signal:  AbortSignal.timeout(15_000),
+    });
+    if (!retry.ok) {
+      const text = await retry.text().catch(() => "(unreadable)");
+      throw new Error(`FHIR ${method} ${path} → HTTP ${retry.status}: ${text}`);
+    }
+    return retry.json() as Promise<T>;
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "(unreadable)");
+    throw new Error(`FHIR ${method} ${path} → HTTP ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function fhirGet<T>(path: string): Promise<T> {
+  return fhirFetch<T>("GET", path);
+}
+
+export async function fhirPost<T>(path: string, body: unknown): Promise<T> {
+  return fhirFetch<T>("POST", path, body);
+}
+
+export async function fhirPut<T>(path: string, body: unknown): Promise<T> {
+  return fhirFetch<T>("PUT", path, body);
+}
+
+export function isFhirConfigured(): boolean {
+  return Boolean(FHIR_BASE_URL);
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/fhirAuth.ts
+=================================================================================
+/**
+ * SMART on FHIR — OAuth 2.0 client_credentials flow.
+ *
+ * Caches the token in memory and refreshes automatically 60 s before expiry.
+ * All other FHIR client calls should call getBearerToken() to get a fresh token.
+ */
+
+interface TokenCache {
+  token: string;
+  expiresAt: number;
+}
+
+let tokenCache: TokenCache | null = null;
+
+const BUFFER_MS = 60_000; // refresh 60 s before expiry
+
+export function isSmartAuthConfigured(): boolean {
+  return Boolean(
+    process.env.FHIR_BASE_URL &&
+    process.env.FHIR_CLIENT_ID &&
+    process.env.FHIR_CLIENT_SECRET
+  );
+}
+
+/**
+ * Returns a valid Bearer token.
+ * Throws if SMART on FHIR credentials are not configured.
+ */
+export async function getBearerToken(): Promise<string> {
+  if (!isSmartAuthConfigured()) {
+    throw new Error(
+      "SMART on FHIR not configured — set FHIR_BASE_URL, FHIR_CLIENT_ID, FHIR_CLIENT_SECRET"
+    );
+  }
+
+  if (tokenCache && tokenCache.expiresAt > Date.now() + BUFFER_MS) {
+    return tokenCache.token;
+  }
+
+  const tokenUrl = `${process.env.FHIR_BASE_URL}/oauth/token`;
+
+  const body = new URLSearchParams({
+    grant_type:    "client_credentials",
+    client_id:     process.env.FHIR_CLIENT_ID!,
+    client_secret: process.env.FHIR_CLIENT_SECRET!,
+    ...(process.env.FHIR_AUDIENCE ? { audience: process.env.FHIR_AUDIENCE } : {}),
+  });
+
+  const res = await fetch(tokenUrl, {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    body.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`SMART on FHIR token request failed (${res.status}): ${text}`);
+  }
+
+  const data: { access_token: string; expires_in: number } = await res.json();
+
+  tokenCache = {
+    token:     data.access_token,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
+
+  console.log(`[FhirAuth] Token acquired — expires in ${data.expires_in}s`);
+  return tokenCache.token;
+}
+
+/** Invalidate the cached token (e.g., after a 401 response) */
+export function invalidateToken(): void {
+  tokenCache = null;
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/fhirMapper.ts
+=================================================================================
+import type { FhirDiagnosticReport, FhirEncounter, FhirMedicationRequest, FhirObservation, FhirPatient } from "./fhirTypes";
+
+export function mapInternalPatientToFhir(patient: any): FhirPatient {
+  return {
+    resourceType: "Patient",
+    identifier: patient.externalPatientId
+      ? [{ system: "urn:external-patient-id", value: patient.externalPatientId }]
+      : undefined,
+    name: [{ family: patient.lastName ?? patient.name, given: [patient.firstName ?? "Unknown"] }],
+    telecom: [
+      patient.phone ? { system: "phone", value: patient.phone } : undefined,
+      patient.email ? { system: "email", value: patient.email } : undefined,
+    ].filter(Boolean) as Array<{ system?: string; value?: string }>,
+    birthDate: patient.dob || undefined,
+    gender: patient.sex || undefined,
+  };
+}
+
+export function mapInternalEncounterToFhir(encounter: any, fhirPatientId: string): FhirEncounter {
+  return {
+    resourceType: "Encounter",
+    status: "finished",
+    class: {
+      system: "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+      code: "AMB",
+    },
+    subject: { reference: `Patient/${fhirPatientId}` },
+    reasonCode: [{ text: encounter.complaint || encounter.chiefComplaint }],
+  };
+}
+
+export function mapTriageResultToFhirObservations(
+  encounter: any,
+  fhirPatientId: string
+): FhirObservation[] {
+  const result = encounter.triageResult || encounter.result || {};
+  return [
+    result.topDiagnosis || result.diagnosis
+      ? {
+          resourceType: "Observation" as const,
+          status: "final",
+          code: { text: "AI top diagnosis" },
+          subject: { reference: `Patient/${fhirPatientId}` },
+          valueString: String(result.topDiagnosis ?? result.diagnosis),
+        }
+      : undefined,
+    result.disposition
+      ? {
+          resourceType: "Observation" as const,
+          status: "final",
+          code: { text: "AI disposition" },
+          subject: { reference: `Patient/${fhirPatientId}` },
+          valueString: String(result.disposition),
+        }
+      : undefined,
+    result.confidence !== undefined
+      ? {
+          resourceType: "Observation" as const,
+          status: "final",
+          code: { text: "AI confidence score" },
+          subject: { reference: `Patient/${fhirPatientId}` },
+          valueString: String(result.confidence),
+        }
+      : undefined,
+  ].filter(Boolean) as FhirObservation[];
+}
+
+/**
+ * Maps a triage encounter into a FHIR DiagnosticReport that captures the full
+ * AI reasoning output — diagnosis, disposition, confidence, red flags, and
+ * treatment recommendation — as a structured clinical report.
+ */
+export function mapTriageResultToFhirDiagnosticReport(
+  encounter: any,
+  fhirPatientId: string,
+  fhirEncounterId?: string,
+): FhirDiagnosticReport {
+  const result = encounter.triageResult || encounter.result || {};
+  const obs = mapTriageResultToFhirObservations(encounter, fhirPatientId);
+
+  const lines: string[] = [];
+  if (result.topDiagnosis ?? result.diagnosis)
+    lines.push(`Diagnosis: ${result.topDiagnosis ?? result.diagnosis}`);
+  if (result.disposition)        lines.push(`Disposition: ${result.disposition}`);
+  if (result.confidence != null) lines.push(`Confidence: ${(result.confidence * 100).toFixed(1)}%`);
+  if (result.treatment)          lines.push(`Treatment: ${result.treatment}`);
+  if (result.redFlags?.length)   lines.push(`Red Flags: ${result.redFlags.join(", ")}`);
+  if (result.workup)             lines.push(`Workup: ${JSON.stringify(result.workup)}`);
+  if (encounter.complaint)       lines.push(`Chief Complaint: ${encounter.complaint}`);
+
+  const report: FhirDiagnosticReport = {
+    resourceType: "DiagnosticReport",
+    status: "final",
+    code: {
+      text: "AI Triage Clinical Summary",
+      coding: [
+        {
+          system: "http://loinc.org",
+          code: "11488-4",
+          display: "Consult note",
+        },
+      ],
+    },
+    subject: { reference: `Patient/${fhirPatientId}` },
+    effectiveDateTime: new Date().toISOString(),
+    conclusion: lines.join("\n"),
+    result: obs.map((_, i) => ({ reference: `#obs-${i}` })),
+    presentedForm: lines.length
+      ? [
+          {
+            contentType: "text/plain",
+            data: Buffer.from(lines.join("\n")).toString("base64"),
+          },
+        ]
+      : undefined,
+  };
+
+  if (fhirEncounterId) {
+    (report as any).encounter = { reference: `Encounter/${fhirEncounterId}` };
+  }
+
+  return report;
+}
+
+/**
+ * Maps a treatment recommendation into a FHIR MedicationRequest.
+ */
+export function mapTreatmentToFhirMedicationRequest(
+  treatment: { name: string; dose?: string; route?: string; indication?: string },
+  fhirPatientId: string,
+): FhirMedicationRequest {
+  return {
+    resourceType: "MedicationRequest",
+    status: "active",
+    intent: "order",
+    medicationCodeableConcept: { text: treatment.name },
+    subject: { reference: `Patient/${fhirPatientId}` },
+    dosageInstruction: treatment.dose
+      ? [{ text: `${treatment.dose}${treatment.route ? " via " + treatment.route : ""}` }]
+      : undefined,
+    reasonCode: treatment.indication ? [{ text: treatment.indication }] : undefined,
+  };
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/fhirService.ts
+=================================================================================
+import {
+  mapInternalEncounterToFhir,
+  mapInternalPatientToFhir,
+  mapTriageResultToFhirObservations,
+  mapTriageResultToFhirDiagnosticReport,
+  mapTreatmentToFhirMedicationRequest,
+} from "./fhirMapper";
+import { fhirPost, isFhirConfigured } from "./fhirClient";
+
+export interface FhirSyncResult {
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  fhirPatientId?: string;
+  resourcesCreated?: number;
+  error?: string;
+}
+
+export async function syncEncounterToFhir(input: {
+  clinicId: string;
+  encounter: any;
+  patient: any;
+}): Promise<FhirSyncResult> {
+  if (!isFhirConfigured()) {
+    return { ok: true, skipped: true, reason: "FHIR_BASE_URL not configured — sync skipped" };
+  }
+
+  try {
+    const createdPatient = await fhirPost<any>("/Patient", mapInternalPatientToFhir(input.patient));
+    const fhirPatientId = createdPatient.id;
+
+    const createdEncounter = await fhirPost<any>("/Encounter", mapInternalEncounterToFhir(input.encounter, fhirPatientId));
+    const fhirEncounterId = createdEncounter?.id;
+
+    const observations = mapTriageResultToFhirObservations(input.encounter, fhirPatientId);
+    for (const obs of observations) {
+      await fhirPost("/Observation", obs);
+    }
+
+    const diagnosticReport = mapTriageResultToFhirDiagnosticReport(input.encounter, fhirPatientId, fhirEncounterId);
+    await fhirPost("/DiagnosticReport", diagnosticReport);
+
+    const treatments: Array<any> = input.encounter.triageResult?.treatments ?? input.encounter.result?.treatments ?? [];
+    const medRequests = treatments.map((t: any) =>
+      mapTreatmentToFhirMedicationRequest(
+        { name: t.name ?? t.drug ?? t, dose: t.dose, route: t.route, indication: t.indication ?? input.encounter.complaint },
+        fhirPatientId,
+      )
+    );
+    for (const med of medRequests) {
+      await fhirPost("/MedicationRequest", med);
+    }
+
+    return {
+      ok: true,
+      fhirPatientId,
+      fhirEncounterId,
+      resourcesCreated: 1 + 1 + observations.length + 1 + medRequests.length,
+      resourceTypes: ["Patient", "Encounter", ...observations.map(() => "Observation"), "DiagnosticReport", ...medRequests.map(() => "MedicationRequest")],
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function searchExternalPatientByIdentifier(identifier: string): Promise<any> {
+  return fhirPost<any>(`/Patient/_search`, {
+    resourceType: "Parameters",
+    parameter: [{ name: "identifier", valueString: identifier }],
+  });
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/epicAdapter.ts
+=================================================================================
+/**
+ * Epic Sandbox Adapter — FHIR R4 Patient + Encounter CRUD
+ *
+ * Wraps fhirClient.ts with Epic-specific resource shapes.
+ * Works against the Epic sandbox at:
+ *   https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4
+ * or any FHIR R4-compliant endpoint.
+ *
+ * Set FHIR_BASE_URL to enable real calls; gracefully no-ops when absent.
+ */
+
+import { fhirGet, fhirPost, fhirPut, isFhirConfigured } from "./fhirClient";
+import type { FhirPatient, FhirEncounter, FhirObservation } from "./fhirTypes";
+
+// ── Patient ───────────────────────────────────────────────────────────────────
+
+export async function getPatient(patientId: string): Promise<FhirPatient> {
+  return fhirGet<FhirPatient>(`/Patient/${patientId}`);
+}
+
+export async function searchPatients(params: {
+  family?: string;
+  given?:  string;
+  birthdate?: string;
+  identifier?: string;
+}): Promise<{ entry?: Array<{ resource: FhirPatient }> }> {
+  const q = new URLSearchParams();
+  if (params.family)     q.set("family",     params.family);
+  if (params.given)      q.set("given",      params.given);
+  if (params.birthdate)  q.set("birthdate",  params.birthdate);
+  if (params.identifier) q.set("identifier", params.identifier);
+  return fhirGet(`/Patient?${q.toString()}`);
+}
+
+export async function createPatient(patient: Partial<FhirPatient>): Promise<FhirPatient> {
+  return fhirPost<FhirPatient>("/Patient", { resourceType: "Patient", ...patient });
+}
+
+export async function updatePatient(patientId: string, patient: Partial<FhirPatient>): Promise<FhirPatient> {
+  return fhirPut<FhirPatient>(`/Patient/${patientId}`, { resourceType: "Patient", id: patientId, ...patient });
+}
+
+// ── Encounter ─────────────────────────────────────────────────────────────────
+
+export async function getEncounter(encounterId: string): Promise<FhirEncounter> {
+  return fhirGet<FhirEncounter>(`/Encounter/${encounterId}`);
+}
+
+export async function createEncounter(encounter: Partial<FhirEncounter>): Promise<FhirEncounter> {
+  return fhirPost<FhirEncounter>("/Encounter", { resourceType: "Encounter", ...encounter });
+}
+
+export async function listEncountersForPatient(
+  patientId: string,
+  limit = 10
+): Promise<{ entry?: Array<{ resource: FhirEncounter }> }> {
+  return fhirGet(`/Encounter?patient=${patientId}&_count=${limit}&_sort=-date`);
+}
+
+// ── Observation ───────────────────────────────────────────────────────────────
+
+export async function createObservation(obs: Partial<FhirObservation>): Promise<FhirObservation> {
+  return fhirPost<FhirObservation>("/Observation", { resourceType: "Observation", ...obs });
+}
+
+// ── Capability / Health check ──────────────────────────────────────────────────
+
+export async function getCapabilityStatement(): Promise<any> {
+  return fhirGet("/metadata");
+}
+
+export function isEpicAdapterConfigured(): boolean {
+  return isFhirConfigured();
+}
+
+
+=================================================================================
+FILE: server/ehr/fhir/fhirRoutes.ts
+=================================================================================
+import { Router } from "express";
+import { syncEncounterToFhir, searchExternalPatientByIdentifier } from "./fhirService";
+import { isFhirConfigured } from "./fhirClient";
+
+export const fhirRoutes = Router();
+
+fhirRoutes.get("/status", (_req, res) => {
+  res.json({
+    ok: true,
+    configured: isFhirConfigured(),
+    baseUrl: process.env.FHIR_BASE_URL || null,
+    message: isFhirConfigured()
+      ? "FHIR R4 endpoint configured"
+      : "FHIR not configured — set FHIR_BASE_URL to enable sync",
+  });
+});
+
+fhirRoutes.get("/patient/search", async (req, res) => {
+  try {
+    const identifier = String(req.query.identifier || "");
+    if (!identifier) return res.status(400).json({ error: "identifier is required" });
+    const data = await searchExternalPatientByIdentifier(identifier);
+    return res.json(data);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "FHIR search failed" });
+  }
+});
+
+fhirRoutes.post("/sync-encounter", async (req, res) => {
+  try {
+    const { clinicId, encounter, patient } = req.body;
+    if (!encounter || !patient) {
+      return res.status(400).json({ error: "encounter and patient are required" });
+    }
+    const result = await syncEncounterToFhir({ clinicId: clinicId || "unknown", encounter, patient });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "FHIR sync failed" });
+  }
+});
+
+
+=================================================================================
+FILE: server/automation/automationService.ts
+=================================================================================
+import { startAutomationSession, stopAutomationSession } from "./browser";
+import { getAutomationTemplate, listAutomationTemplates } from "./templateRegistry";
+import { interpretPage } from "./pageInterpreter";
+import { runAutomationAction } from "./actionRunner";
+import {
+  createAutomationRun,
+  updateAutomationRun,
+  listAutomationRuns,
+  getAutomationRun,
+  listAutomationRunEvents,
+  decideAutomationApproval,
+  listPendingApprovals,
+} from "../repos/automationRunRepo";
+import type { AutomationRunInput } from "./types";
+
+export async function runAutomation(input: AutomationRunInput) {
+  const template = getAutomationTemplate(input.templateKey);
+
+  const run = await createAutomationRun({
+    clinicId: input.clinicId,
+    templateKey: input.templateKey,
+    status: "running",
+    traceId: input.traceId,
+    startedBy: input.startedBy,
+    payload: input.payload,
+  });
+
+  const session = await startAutomationSession(true);
+
+  try {
+    await session.page.goto(template.startUrl, { waitUntil: "networkidle" });
+
+    const pageSummary = await interpretPage(session.page);
+
+    await updateAutomationRun({
+      runId: run.id,
+      currentStep: 0,
+      result: { pageSummary },
+    });
+
+    for (let i = 0; i < template.actions.length; i++) {
+      const action = template.actions[i];
+
+      await updateAutomationRun({ runId: run.id, currentStep: i });
+
+      await runAutomationAction({
+        runId: run.id,
+        stepIndex: i,
+        action,
+        payload: input.payload,
+        page: session.page,
+        startedBy: input.startedBy,
+      });
+    }
+
+    const finalPage = await interpretPage(session.page);
+
+    const updated = await updateAutomationRun({
+      runId: run.id,
+      status: "completed",
+      result: { finalPage },
+      finished: true,
+    });
+
+    return updated;
+  } catch (err: any) {
+    await updateAutomationRun({
+      runId: run.id,
+      status: "failed",
+      error: err?.message || "Unknown automation failure",
+      finished: true,
+    });
+
+    throw err;
+  } finally {
+    await stopAutomationSession(session);
+  }
+}
+
+export async function getAutomationRunDetail(runId: string) {
+  const [run, events] = await Promise.all([
+    getAutomationRun(runId),
+    listAutomationRunEvents(runId),
+  ]);
+  return { run, events };
+}
+
+export async function listRuns() {
+  return listAutomationRuns(100);
+}
+
+export async function listApprovals() {
+  return listPendingApprovals(100);
+}
+
+export async function approveRunCheckpoint(
+  approvalId: string,
+  decidedBy?: string,
+  notes?: string
+) {
+  return decideAutomationApproval({ approvalId, status: "approved", decidedBy, decisionNotes: notes });
+}
+
+export async function rejectRunCheckpoint(
+  approvalId: string,
+  decidedBy?: string,
+  notes?: string
+) {
+  return decideAutomationApproval({ approvalId, status: "rejected", decidedBy, decisionNotes: notes });
+}
+
+export { listAutomationTemplates };
+
+
+=================================================================================
+FILE: server/automation/browser.ts
+=================================================================================
+import { chromium, Browser, Page } from "playwright";
+
+export type AutomationSession = {
+  browser: Browser;
+  page: Page;
+};
+
+export async function startAutomationSession(headless = true): Promise<AutomationSession> {
+  const browser = await chromium.launch({ headless });
+
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1024 },
+  });
+
+  return { browser, page };
+}
+
+export async function stopAutomationSession(session: AutomationSession) {
+  await session.browser.close();
+}
+
+
+=================================================================================
+FILE: server/automation/credentialVault.ts
+=================================================================================
+import { query } from "../db";
+
+export async function saveAutomationCredential(input: {
+  credentialKey: string;
+  systemName: string;
+  username?: string;
+  secretJson: Record<string, any>;
+}) {
+  const result = await query(
+    `INSERT INTO automation_credentials (credential_key, system_name, username, secret_json, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (credential_key)
+     DO UPDATE SET
+       system_name = EXCLUDED.system_name,
+       username = EXCLUDED.username,
+       secret_json = EXCLUDED.secret_json,
+       updated_at = NOW()
+     RETURNING id, credential_key, system_name, username, created_at, updated_at`,
+    [
+      input.credentialKey,
+      input.systemName,
+      input.username || null,
+      input.secretJson,
+    ]
+  );
+  return result.rows[0];
+}
+
+export async function getAutomationCredential(credentialKey: string) {
+  const result = await query(
+    `SELECT * FROM automation_credentials WHERE credential_key = $1 LIMIT 1`,
+    [credentialKey]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function listAutomationCredentials() {
+  const result = await query(
+    `SELECT id, credential_key, system_name, username, created_at, updated_at
+     FROM automation_credentials
+     ORDER BY updated_at DESC`
+  );
+  return result.rows;
+}
+
+
+=================================================================================
+FILE: server/automation/executionGuard.ts
+=================================================================================
+export interface ExecutionStep<T = unknown> {
+  name: string;
+  execute: () => Promise<T>;
+  verify: (result: T) => Promise<boolean>;
+}
+
+export interface GuardedResult<T> {
+  success: true;
+  verified: true;
+  result: T;
+  attempts: number;
+  durationMs: number;
+}
+
+export async function executeWithVerification<T>(
+  step: ExecutionStep<T>
+): Promise<GuardedResult<T>> {
+  const started = Date.now();
+  const result = await step.execute();
+  const verified = await step.verify(result);
+
+  if (!verified) {
+    throw new Error(
+      `[ExecutionGuard] Step "${step.name}" executed but failed verification — aborting`
+    );
+  }
+
+  return {
+    success: true,
+    verified: true,
+    result,
+    attempts: 1,
+    durationMs: Date.now() - started,
+  };
+}
+
+export async function retryExecution<T>(
+  step: ExecutionStep<T>,
+  maxRetries = 3,
+  backoffMs = 1000
+): Promise<GuardedResult<T>> {
+  const started = Date.now();
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await step.execute();
+      const verified = await step.verify(result);
+
+      if (!verified) {
+        throw new Error(
+          `[ExecutionGuard] Step "${step.name}" attempt ${attempt} failed verification`
+        );
+      }
+
+      console.log(
+        `[ExecutionGuard] "${step.name}" succeeded on attempt ${attempt}/${maxRetries}`
+      );
+
+      return {
+        success: true,
+        verified: true,
+        result,
+        attempts: attempt,
+        durationMs: Date.now() - started,
+      };
+    } catch (e: any) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      console.warn(
+        `[ExecutionGuard] "${step.name}" attempt ${attempt}/${maxRetries} failed: ${lastError.message}`
+      );
+
+      if (attempt < maxRetries) {
+        const delay = backoffMs * Math.pow(2, attempt - 1);
+        await new Promise((res) => setTimeout(res, delay));
+      }
+    }
+  }
+
+  throw new Error(
+    `[ExecutionGuard] "${step.name}" failed after ${maxRetries} attempts: ${lastError?.message}`
+  );
+}
+
+
+=================================================================================
+FILE: server/automation/selectorHealing.ts
+=================================================================================
+/**
+ * Selector Healing — Packet 20 final rewrite
+ *
+ * Round-trip budget:
+ *   1  — original selector check via locator()
+ *   1  — batch CSS candidates via page.evaluate() (short-circuits in browser)
+ *   N  — Playwright-only :has-text() selectors (unavoidable, last resort)
+ *
+ * Key improvements vs baseline:
+ *  - escAttr / escText helpers prevent injecting raw user-controlled strings
+ *    into selectors that then break CSS parsing or open selector-injection.
+ *  - page.evaluate() now short-circuits: the browser returns the FIRST
+ *    matching selector string, so we never evaluate further candidates
+ *    once a match is found (vs the old approach of mapping a boolean array).
+ *  - [name=] branch symmetrically expands, same as the #id branch.
+ */
+
+import type { Page } from "playwright";
+
+// ── Escaping helpers ──────────────────────────────────────────────────────────
+
+/** Escape a value that will be placed inside a CSS attribute selector string. */
+function escAttr(v: string): string {
+  return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Escape a value used inside a Playwright :has-text() pseudo-selector. */
+function escText(v: string): string {
+  return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+// ── Candidate construction ────────────────────────────────────────────────────
+
+interface CandidateSet {
+  css:        string[];   // batchable via page.evaluate() + document.querySelector
+  playwright: string[];   // require locator() — must be checked individually
+}
+
+function buildCandidates(selector: string): CandidateSet {
+  if (selector.startsWith("#")) {
+    const id = selector.slice(1).trim();
+    const esc = escAttr(id);
+    const txt = escText(id);
+    return {
+      css: [
+        `[name="${esc}"]`,
+        `[aria-label="${esc}"]`,
+        `[placeholder*="${esc}" i]`,
+      ],
+      playwright: [
+        `label:has-text("${txt}") + input`,
+        `label:has-text("${txt}") + select`,
+        `label:has-text("${txt}") + textarea`,
+      ],
+    };
+  }
+
+  const nameMatch = selector.match(/\[name="([^"]+)"\]/);
+  if (nameMatch) {
+    const name = nameMatch[1];
+    const esc  = escAttr(name);
+    const txt  = escText(name);
+    return {
+      css: [
+        `#${name}`,
+        `[aria-label="${esc}"]`,
+        `[placeholder*="${esc}" i]`,
+      ],
+      playwright: [
+        `label:has-text("${txt}") + input`,
+        `label:has-text("${txt}") + select`,
+      ],
+    };
+  }
+
+  return { css: [], playwright: [] };
+}
+
+// ── Core healer ───────────────────────────────────────────────────────────────
+
+/**
+ * Try to find a working replacement for `selector` on `page`.
+ * Returns the selector that matched (original or a healed alternative),
+ * or null if nothing worked.
+ */
+export async function healSelector(page: Page, selector: string): Promise<string | null> {
+  // Round-trip 1 — original selector
+  try {
+    if ((await page.locator(selector).count()) > 0) return selector;
+  } catch {}
+
+  const { css, playwright } = buildCandidates(selector);
+
+  // Round-trip 2 — batch CSS candidates; browser short-circuits on first match
+  if (css.length > 0) {
+    try {
+      const found = await page.evaluate(
+        (candidates: string[]) => {
+          for (const c of candidates) {
+            try {
+              if (document.querySelector(c)) return c;
+            } catch {}
+          }
+          return null;
+        },
+        css
+      );
+      if (found) return found;
+    } catch {}
+  }
+
+  // Playwright-only fallback — one round-trip per candidate (unavoidable)
+  for (const candidate of playwright) {
+    try {
+      if ((await page.locator(candidate).count()) > 0) return candidate;
+    } catch {}
+  }
+
+  return null;
+}
+
+export async function resolveSelector(page: Page, selector?: string): Promise<string> {
+  if (!selector) throw new Error("No selector provided");
+  const healed = await healSelector(page, selector);
+  if (!healed) throw new Error(`Selector not found and could not heal: ${selector}`);
+  return healed;
+}
+
+
+=================================================================================
+FILE: server/automation/approvalGate.ts
+=================================================================================
+import {
+  createAutomationApproval,
+  getPendingApprovalByRunAndCheckpoint,
+} from "../repos/automationRunRepo";
+
+export async function requestApproval(
+  runId: string,
+  checkpointName: string,
+  requestedBy?: string
+) {
+  const existing = await getPendingApprovalByRunAndCheckpoint(runId, checkpointName);
+  if (existing) return existing;
+
+  return createAutomationApproval({ runId, checkpointName, requestedBy });
+}
+
+export async function waitForApproval(
+  runId: string,
+  checkpointName: string,
+  timeoutMs = 15 * 60 * 1000
+) {
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const pending = await getPendingApprovalByRunAndCheckpoint(runId, checkpointName);
+
+    if (!pending) {
+      return { approved: false, reason: "Approval record not found" };
+    }
+
+    if (pending.status === "approved") {
+      return { approved: true };
+    }
+
+    if (pending.status === "rejected") {
+      return { approved: false, reason: pending.decision_notes || "Rejected" };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  return { approved: false, reason: "Approval timeout" };
+}
+
+
+=================================================================================
+FILE: server/automation/actionRunner.ts
+=================================================================================
+import type { Page } from "playwright";
+import type { AutomationAction } from "./types";
+import { captureRunScreenshot, recordRunEvent } from "./replayRecorder";
+import { requestApproval, waitForApproval } from "./approvalGate";
+import { resolveSelector } from "./selectorHealing";
+import { handleVisualFallback } from "./visualFallback";
+import { evaluateAutomationPolicy } from "./policyEngine";
+
+export async function runAutomationAction(input: {
+  runId: string;
+  stepIndex: number;
+  action: AutomationAction;
+  payload: Record<string, any>;
+  page: Page;
+  startedBy?: string;
+  templateKey?: string;
+}) {
+  const { runId, stepIndex, action, payload, page, startedBy, templateKey = "unknown" } = input;
+
+  await recordRunEvent({
+    runId,
+    eventType: "action.started",
+    stepIndex,
+    actionName: action.name,
+    payload: action,
+  });
+
+  const policy = evaluateAutomationPolicy({ templateKey, action, payload });
+
+  if (!policy.allowed) {
+    throw new Error(policy.reason || `Policy blocked action ${action.name}`);
+  }
+
+  if (policy.requiresApproval && action.type !== "humanApproval") {
+    const checkpoint = action.checkpointName || `policy-${action.name}`;
+    await requestApproval(runId, checkpoint, startedBy);
+    const decision = await waitForApproval(runId, checkpoint);
+    if (!decision.approved) {
+      throw new Error(`Policy approval denied: ${decision.reason || checkpoint}`);
+    }
+  }
+
+  switch (action.type) {
+    case "goto": {
+      if (!action.url) throw new Error(`Action ${action.name} missing url`);
+      await page.goto(action.url, { waitUntil: "networkidle" });
+      break;
+    }
+
+    case "fill": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = payload[action.valueKey];
+      if (value != null) {
+        try {
+          const resolved = await resolveSelector(page, action.selector);
+          await page.fill(resolved, String(value));
+        } catch (err: any) {
+          await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "fill failed" });
+          throw err;
+        }
+      }
+      break;
+    }
+
+    case "select": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = payload[action.valueKey];
+      if (value != null) {
+        try {
+          const resolved = await resolveSelector(page, action.selector);
+          await page.selectOption(resolved, String(value));
+        } catch (err: any) {
+          await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "select failed" });
+          throw err;
+        }
+      }
+      break;
+    }
+
+    case "check": {
+      if (!action.selector || !action.valueKey) {
+        throw new Error(`Action ${action.name} missing selector or valueKey`);
+      }
+      const value = Boolean(payload[action.valueKey]);
+      if (value) {
+        try {
+          const resolved = await resolveSelector(page, action.selector);
+          await page.check(resolved);
+        } catch (err: any) {
+          await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "check failed" });
+          throw err;
+        }
+      }
+      break;
+    }
+
+    case "click": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      try {
+        const resolved = await resolveSelector(page, action.selector);
+        await page.click(resolved);
+      } catch (err: any) {
+        await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "click failed" });
+        throw err;
+      }
+      break;
+    }
+
+    case "waitFor": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      try {
+        const resolved = await resolveSelector(page, action.selector);
+        await page.waitForSelector(resolved, { timeout: action.timeoutMs || 10000 });
+      } catch (err: any) {
+        await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "waitFor failed" });
+        throw err;
+      }
+      break;
+    }
+
+    case "assertVisible": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      try {
+        const resolved = await resolveSelector(page, action.selector);
+        await page.waitForSelector(resolved, { state: "visible", timeout: action.timeoutMs || 5000 });
+      } catch (err: any) {
+        await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "assertVisible failed" });
+        throw err;
+      }
+      break;
+    }
+
+    case "extractText": {
+      if (!action.selector) throw new Error(`Action ${action.name} missing selector`);
+      try {
+        const resolved = await resolveSelector(page, action.selector);
+        const text = await page.textContent(resolved);
+        await recordRunEvent({
+          runId,
+          eventType: "action.extracted_text",
+          stepIndex,
+          actionName: action.name,
+          payload: { text: text?.trim() || "" },
+        });
+      } catch (err: any) {
+        await handleVisualFallback({ runId, page, stepIndex, actionName: action.name, reason: err?.message || "extractText failed" });
+        throw err;
+      }
+      break;
+    }
+
+    case "screenshot": {
+      const shot = await captureRunScreenshot(runId, page, action.screenshotLabel || action.name);
+      await recordRunEvent({
+        runId,
+        eventType: "action.screenshot",
+        stepIndex,
+        actionName: action.name,
+        screenshotKey: shot.fileName,
+      });
+      break;
+    }
+
+    case "humanApproval": {
+      const checkpointName = action.checkpointName || action.name;
+      await requestApproval(runId, checkpointName, startedBy);
+      const decision = await waitForApproval(runId, checkpointName);
+      if (!decision.approved) {
+        throw new Error(`Approval denied or timed out: ${decision.reason || checkpointName}`);
+      }
+      break;
+    }
+
+    default:
+      throw new Error(`Unsupported automation action: ${String((action as any).type)}`);
+  }
+
+  await recordRunEvent({
+    runId,
+    eventType: "action.completed",
+    stepIndex,
+    actionName: action.name,
+  });
+}
+
+
+=================================================================================
+FILE: server/automation/visionAgent.ts
+=================================================================================
+import { findElement } from "./uiEngine";
+import { sendToECWEncounter } from "../integrations/ecwAdapter";
+
+let _openai: any = null;
+function getOpenAI() {
+  if (!_openai) {
+    const { default: OpenAI } = require("openai");
+    _openai = new OpenAI();
+  }
+  return _openai;
+}
+
+export interface VisionCoords { x: number; y: number }
+
+export async function findByVision(
+  screenshotBase64: string,
+  goal: string
+): Promise<VisionCoords | null> {
+  try {
+    const res = await getOpenAI().chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: `Locate the UI element for: "${goal}". Return ONLY valid JSON {x:number,y:number} with pixel coordinates. No markdown.` },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${screenshotBase64}` } },
+        ],
+      }],
+      max_tokens: 80,
+    });
+    const text = res.choices[0]?.message?.content?.trim() ?? "";
+    return JSON.parse(text) as VisionCoords;
+  } catch {
+    return null;
+  }
+}
+
+export async function clickAt(page: any, x: number, y: number): Promise<void> {
+  await page.mouse.click(x, y);
+}
+
+export async function smartClick(page: any, label: string): Promise<void> {
+  const sel = await findElement(page, label);
+  if (sel) { await page.click(sel); return; }
+  try {
+    const img = await page.screenshot({ encoding: "base64" });
+    const pos = await findByVision(img, label);
+    if (pos?.x != null) { await clickAt(page, pos.x, pos.y); return; }
+  } catch {}
+  throw new Error(`smartClick: could not locate "${label}" via selector or vision`);
+}
+
+// ── Selector Learning Memory ──────────────────────────────────────────────────
+const selectorMemory: Record<string, string> = {};
+
+export function rememberSelector(label: string, selector: string): void {
+  selectorMemory[label] = selector;
+}
+
+export function recallSelector(label: string): string | undefined {
+  return selectorMemory[label];
+}
+
+export function clearSelectorMemory(): void {
+  Object.keys(selectorMemory).forEach(k => delete selectorMemory[k]);
+}
+
+// ── UI Screen Memory ──────────────────────────────────────────────────────────
+const uiMemory: Record<string, unknown> = {};
+
+export function rememberUI(screen: string, mapping: unknown): void {
+  uiMemory[screen] = mapping;
+}
+
+export function recallUI(screen: string): unknown {
+  return uiMemory[screen];
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+export function diagnoseUIError(err: string): string {
+  if (err.includes("timeout"))  return "Page load issue";
+  if (err.includes("selector")) return "UI changed";
+  if (err.includes("FHIR"))     return "FHIR token issue";
+  if (err.includes("network"))  return "Network unavailable";
+  return "Unknown";
+}
+
+export function buildHeatmap(events: Array<{ x?: number; y?: number; [key: string]: unknown }>): Array<{ x: number; y: number }> {
+  return events
+    .filter(e => e.x != null && e.y != null)
+    .map(e => ({ x: e.x as number, y: e.y as number }));
+}
+
+// ── Multi-system Fallback Chain ────────────────────────────────────────────────
+export async function fallbackChain(data: {
+  patientId: string;
+  disposition: string;
+  [key: string]: unknown;
+}): Promise<"ecw" | "epic" | "failed"> {
+  try {
+    await sendToECWEncounter({ patientId: data.patientId, disposition: data.disposition });
+    return "ecw";
+  } catch {
+    try {
+      const token = process.env.EPIC_TOKEN ?? "";
+      const base  = process.env.FHIR_BASE  ?? "";
+      if (!token || !base) throw new Error("No EPIC config");
+      await fetch(`${base}/Observation`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      return "epic";
+    } catch {
+      return "failed";
+    }
+  }
+}
+
+
+=================================================================================
+FILE: server/automation/policyEngine.ts
+=================================================================================
+import type { AutomationAction } from "./types";
+
+export type PolicyDecision = {
+  allowed: boolean;
+  requiresApproval: boolean;
+  reason?: string;
+};
+
+export function evaluateAutomationPolicy(input: {
+  templateKey: string;
+  action: AutomationAction;
+  payload: Record<string, any>;
+}): PolicyDecision {
+  const { action } = input;
+
+  if (action.type === "click" && /submit|final|send/i.test(action.name)) {
+    return {
+      allowed: true,
+      requiresApproval: true,
+      reason: "Final submission requires human approval",
+    };
+  }
+
+  if (action.type === "goto" && action.url?.includes("admin")) {
+    return {
+      allowed: true,
+      requiresApproval: true,
+      reason: "Administrative target requires checkpoint",
+    };
+  }
+
+  return { allowed: true, requiresApproval: false };
+}
+

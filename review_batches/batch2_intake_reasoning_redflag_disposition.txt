@@ -1,0 +1,4564 @@
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform (Auralyn — HIPAA/FDA multi-tenant SaaS, NYC urgent care).
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Do not be gentle. Be precise.
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+SUMMARY TABLE
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+Likely theater/scaffolding:
+Highest ROI fixes:
+Needs cross-file review confirmation:
+
+BATCH-SPECIFIC FOCUS:
+Review these files for clinical safety, contradiction risk, missing escalation logic, inconsistent reasoning, unsafe fallbacks, and hidden disagreement between engines.
+
+======================================================================
+CODE BELOW — BEGIN REVIEW
+======================================================================
+
+=== AURALYN CODE REVIEW — BATCH 2: Intake, Reasoning, Red Flags, Disposition ===
+Files: clinical reasoning, red flag detection, Bayesian engine, disposition logic, scoring
+Review focus: clinical safety, contradiction risk, missing escalation logic, unsafe fallbacks, disagreement between engines
+
+=================================================================================
+FILE: server/agent/safety/redFlags.ts
+=================================================================================
+import type { CaseState } from "../../../shared/agentTypes";
+
+export function detectRedFlags(state: CaseState): string[] {
+  const a = state.answers;
+  const flags: string[] = [];
+
+  if (a["Q_SHORTNESS_OF_BREATH"] === "yes") flags.push("RF_SOB");
+  if (a["Q_CHEST_PAIN"] === "yes") flags.push("RF_CHEST_PAIN");
+  if (a["Q_STRIDOR"] === "yes") flags.push("RF_STRIDOR");
+  if (a["Q_UNABLE_TO_SWALLOW_SALIVA"] === "yes") flags.push("RF_DROOLING");
+
+  if (a["Q_HTN_NEURO_DEFICIT"] === "yes") flags.push("RF_HTN_EMERGENCY_NEURO");
+  if (a["Q_HTN_VISION_LOSS"] === "yes") flags.push("RF_HTN_EMERGENCY_VISION");
+  if (a["Q_HTN_SEVERE_HEADACHE"] === "yes" && a["Q_CHEST_PAIN"] === "yes") flags.push("RF_HTN_EMERGENCY_MULTI");
+  if (a["Q_HTN_PREGNANCY_SEVERE"] === "yes") flags.push("RF_HTN_PREGNANCY_EMERGENCY");
+
+  if (a["Q_DM_ALTERED_MENTAL_STATUS"] === "yes") flags.push("RF_DKA_HHS");
+  if (a["Q_DM_PERSISTENT_VOMITING"] === "yes" && a["Q_DM_DEHYDRATION"] === "yes") flags.push("RF_DKA_HHS");
+  if (a["Q_DM_KUSSMAUL"] === "yes") flags.push("RF_DKA_HHS");
+  if (a["Q_DM_SEVERE_HYPO"] === "yes") flags.push("RF_SEVERE_HYPOGLYCEMIA");
+
+  if (state.htn?.endOrganSymptoms && state.htn.endOrganSymptoms.length > 0) {
+    const critical = ["neuro_deficit", "vision_loss", "pulmonary_edema", "aortic_dissection"];
+    if (state.htn.endOrganSymptoms.some(s => critical.includes(s))) {
+      flags.push("RF_HTN_EMERGENCY");
+    }
+  }
+
+  if (state.dm?.ketoneRisk && a["Q_DM_FRUITY_BREATH"] === "yes") {
+    flags.push("RF_DKA_HHS");
+  }
+
+  return [...new Set(flags)];
+}
+
+
+=================================================================================
+FILE: server/agents/redFlagAgent.ts
+=================================================================================
+import { MedicalAgent } from "../core/MedicalAgent";
+import { FlowContext } from "../core/FlowContext";
+
+export class RedFlagAgent extends MedicalAgent {
+  constructor() {
+    super({
+      name:     "redFlagAgent",
+      consumes: ["vitals"],
+      provides: ["redFlags"],
+    });
+  }
+
+  async run(ctx: FlowContext): Promise<FlowContext> {
+    const vitals   = ctx.get<Record<string, number>>("vitals");
+    const symptoms = ctx.tryGet<Record<string, boolean>>("symptoms") ?? {};
+    const redFlags: string[] = [];
+
+    const hr        = Number(vitals.hr   ?? 0);
+    const spo2      = Number(vitals.spo2 ?? 99);
+    const sbp       = Number(vitals.systolicBP ?? 120);
+    const rr        = Number(vitals.rr   ?? 16);
+    const tempF     = Number(vitals.tempF ?? 98.6);
+    const chestPain = Boolean(symptoms.chestPain);
+    const confusion = Boolean(symptoms.confusion);
+    const sob       = Boolean(symptoms.sob);
+
+    if (chestPain && hr > 120)      redFlags.push("possible_PE_or_ACS");
+    if (spo2 <= 90)                 redFlags.push("critical_hypoxia");
+    if (sbp < 90)                   redFlags.push("shock_risk");
+    if (rr >= 30)                   redFlags.push("respiratory_failure");
+    if (tempF >= 103 && confusion)  redFlags.push("possible_sepsis");
+    if (sob && spo2 <= 92)          redFlags.push("cardiopulmonary_compromise");
+
+    const out = ctx.clone();
+    out.set("redFlags", redFlags);
+    return out;
+  }
+}
+
+
+=================================================================================
+FILE: server/clinical/autonomyGate.ts
+=================================================================================
+/**
+ * server/clinical/autonomyGate.ts — Clinical autonomy safety gate
+ *
+ * FIX (Code Review Issue #13):
+ *   Previously: `decision.riskScore ?? 0` and `decision.uncertainty ?? 0` coalesced
+ *   missing inputs to 0, which incorrectly authorized autonomous action when the
+ *   safety signals were simply absent. A system with no risk data was treated as a
+ *   zero-risk system — a silent under-triage that could harm patients.
+ *
+ *   Fixed: FAIL-CLOSED on absent safety inputs.
+ *   - If riskScore is missing → deny autonomy, require more data
+ *   - If uncertainty is missing → deny autonomy, require more data
+ *   - Both must be present and within bounds to approve autonomous action
+ *   - "Missing data" is audited separately from "out-of-bounds" for traceability
+ */
+
+import { auditLog } from "../security/auditLogger";
+import { logMetric } from "../monitoring/metrics";
+
+export interface AutonomyCheckInput {
+  riskScore?:     number;
+  uncertainty?:   number;
+  overallRisk?:   string;
+  recommendation?: string;
+  workflow?:      any;
+  patientId?:     string;
+}
+
+export interface AutonomyGateResult {
+  allowed:         boolean;
+  reason:          string;
+  requiredAction?: "physician_review" | "more_data" | "none";
+  /** Inputs that triggered the decision — for audit trail transparency */
+  inputs: {
+    riskScore:   number | null;
+    uncertainty: number | null;
+    overallRisk: string | null;
+  };
+}
+
+const MAX_RISK        = 0.25;
+const MAX_UNCERTAINTY = 0.20;
+
+// ── allowAutonomy — simplified boolean check ──────────────────────────────────
+// Preserves backward-compat signature; now also fail-closed on missing inputs.
+
+export function allowAutonomy(decision: AutonomyCheckInput): boolean {
+  return checkAutonomy(decision).allowed;
+}
+
+// ── checkAutonomy — full gated check with audit ───────────────────────────────
+
+export function checkAutonomy(decision: AutonomyCheckInput): AutonomyGateResult {
+  const inputRecord = {
+    riskScore:   decision.riskScore   ?? null,
+    uncertainty: decision.uncertainty ?? null,
+    overallRisk: decision.overallRisk ?? null,
+  };
+
+  // ── FAIL-CLOSED: missing riskScore (Issue #13) ────────────────────────────
+  if (decision.riskScore === undefined || decision.riskScore === null) {
+    logMetric("autonomy_gate.blocked.missing_risk", 1, "safety");
+    auditLog({
+      actor:     "autonomy_gate",
+      action:    "autonomy_blocked_missing_risk_score",
+      patientId: decision.patientId,
+      riskScore: null,
+    });
+    return {
+      allowed:        false,
+      reason:         "riskScore is required for autonomy approval — missing input treated as unsafe",
+      requiredAction: "more_data",
+      inputs:         inputRecord,
+    };
+  }
+
+  // ── FAIL-CLOSED: missing uncertainty (Issue #13) ──────────────────────────
+  if (decision.uncertainty === undefined || decision.uncertainty === null) {
+    logMetric("autonomy_gate.blocked.missing_uncertainty", 1, "safety");
+    auditLog({
+      actor:     "autonomy_gate",
+      action:    "autonomy_blocked_missing_uncertainty",
+      patientId: decision.patientId,
+      riskScore: decision.riskScore,
+    });
+    return {
+      allowed:        false,
+      reason:         "uncertainty is required for autonomy approval — missing input treated as unsafe",
+      requiredAction: "more_data",
+      inputs:         inputRecord,
+    };
+  }
+
+  // ── Explicit safety checks (both values now confirmed present) ────────────
+
+  const riskScore   = decision.riskScore;
+  const uncertainty = decision.uncertainty;
+
+  if (riskScore > MAX_RISK) {
+    logMetric("autonomy_gate.blocked.risk", riskScore, "safety");
+    auditLog({
+      actor:     "autonomy_gate",
+      action:    "autonomy_blocked_high_risk",
+      patientId: decision.patientId,
+      riskScore,
+    });
+    return {
+      allowed:        false,
+      reason:         `Risk score ${riskScore.toFixed(2)} exceeds autonomy threshold ${MAX_RISK}`,
+      requiredAction: "physician_review",
+      inputs:         inputRecord,
+    };
+  }
+
+  if (uncertainty > MAX_UNCERTAINTY) {
+    logMetric("autonomy_gate.blocked.uncertainty", uncertainty, "safety");
+    auditLog({
+      actor:     "autonomy_gate",
+      action:    "autonomy_blocked_high_uncertainty",
+      patientId: decision.patientId,
+      riskScore,
+    });
+    return {
+      allowed:        false,
+      reason:         `Uncertainty ${uncertainty.toFixed(2)} too high for autonomous execution`,
+      requiredAction: "more_data",
+      inputs:         inputRecord,
+    };
+  }
+
+  if (decision.overallRisk === "moderate" || decision.overallRisk === "high") {
+    logMetric("autonomy_gate.blocked.overall_risk", 1, "safety");
+    auditLog({
+      actor:     "autonomy_gate",
+      action:    "autonomy_blocked_overall_risk",
+      patientId: decision.patientId,
+      riskScore,
+    });
+    return {
+      allowed:        false,
+      reason:         `Risk level "${decision.overallRisk}" requires physician oversight`,
+      requiredAction: "physician_review",
+      inputs:         inputRecord,
+    };
+  }
+
+  // ── Approved ──────────────────────────────────────────────────────────────
+
+  logMetric("autonomy_gate.allowed", 1, "safety");
+  auditLog({
+    actor:     "autonomy_gate",
+    action:    "autonomy_approved",
+    patientId: decision.patientId,
+    riskScore,
+  });
+
+  return {
+    allowed:        true,
+    reason:         `Within safe autonomy envelope (risk=${riskScore.toFixed(2)}, uncertainty=${uncertainty.toFixed(2)})`,
+    requiredAction: "none",
+    inputs:         inputRecord,
+  };
+}
+
+
+=================================================================================
+FILE: server/clinical/conflictResolver.ts
+=================================================================================
+/**
+ * server/clinical/conflictResolver.ts — Hybrid engine conflict arbitration
+ *
+ * FIX (Code Review Issue #14):
+ *   Previously only ER_NOW was hard-locked against probabilistic override.
+ *   URGENT_24H could theoretically be overridden by a high-confidence probabilistic
+ *   output that chose a lower acuity — even though escalationMax() provided a floor,
+ *   the resolution reason was mis-attributed and the safety boundary was implicit.
+ *
+ *   Fixed:
+ *   1. Hard-lock extended to all URGENT dispositions (ER_NOW + URGENT_24H).
+ *      Both are treated as deterministic safety outputs that probabilistic engines
+ *      cannot downgrade, regardless of confidence level.
+ *   2. Probabilistic CAN escalate beyond URGENT_24H (e.g. → ER_NOW) if confidence
+ *      exceeds the threshold — escalation-only, never de-escalation.
+ *   3. MONITOR is also locked when urgency is "high" or "critical" per rule engine flags.
+ *   4. Override reason taxonomy extended with DETERMINISTIC_URGENT_SAFETY.
+ *   5. escalationMax is now an explicit contract (never de-escalate) and its use
+ *      is annotated on every path so the logic is auditable.
+ */
+
+export type Disposition = "ER_NOW" | "URGENT_24H" | "ROUTINE_72H" | "SELF_CARE" | "MONITOR";
+
+export interface DeterministicOutput {
+  disposition:  Disposition;
+  diagnosis?:   string;
+  urgency?:     "critical" | "high" | "moderate" | "low";
+  flags?:       string[];
+  source?:      string;
+}
+
+export interface ProbabilisticOutput {
+  disposition?:  Disposition;
+  diagnosis?:    string;
+  confidence:    number;   // 0–1
+  differential?: Array<{ diagnosis: string; probability: number }>;
+  source?:       string;
+}
+
+export type OverrideReason =
+  | "DETERMINISTIC_HARD_SAFETY"    // ER_NOW — absolute: not negotiable under any condition
+  | "DETERMINISTIC_URGENT_SAFETY"  // URGENT_24H or flagged MONITOR — cannot be downgraded
+  | "PROBABILISTIC_HIGH_CONFIDENCE"// P > threshold and can only escalate (never de-escalate)
+  | "DETERMINISTIC_SAFE_DEFAULT"   // below-threshold confidence: always take conservative path
+  | "NO_PROBABILISTIC_INPUT";      // probabilistic engine produced no output
+
+export interface ConflictResolutionResult {
+  final:          DeterministicOutput | ProbabilisticOutput;
+  overrideReason: OverrideReason;
+  agreed:         boolean;
+  auditTrail: {
+    deterministic:       DeterministicOutput;
+    probabilistic:       ProbabilisticOutput | null;
+    confidenceThreshold: number;
+    resolvedAt:          string;
+    safetyLockApplied:   boolean;
+  };
+}
+
+const HIGH_CONFIDENCE_THRESHOLD = 0.85;
+
+/** Disposition severity rank (higher = more urgent) */
+const DISPOSITION_RANK: Record<Disposition, number> = {
+  ER_NOW:      4,
+  URGENT_24H:  3,
+  MONITOR:     2,
+  ROUTINE_72H: 1,
+  SELF_CARE:   0,
+};
+
+/** Return the more urgent of two dispositions — never de-escalate */
+function escalationMax(a: Disposition, b: Disposition | undefined): Disposition {
+  if (!b) return a;
+  return DISPOSITION_RANK[a] >= DISPOSITION_RANK[b] ? a : b;
+}
+
+/**
+ * isHardLocked — determines if the deterministic disposition must not be
+ * overridden or downgraded by probabilistic output.
+ *
+ * Hard-locked tiers (Issue #14 fix):
+ *   ER_NOW:     absolute lock — life-threatening, no override possible
+ *   URGENT_24H: urgent lock — high-acuity, probabilistic can only escalate further
+ *   MONITOR (with high/critical urgency flags): safety monitoring lock
+ */
+function isHardLocked(det: DeterministicOutput): boolean {
+  if (det.disposition === "ER_NOW")     return true;
+  if (det.disposition === "URGENT_24H") return true;
+  if (
+    det.disposition === "MONITOR" &&
+    (det.urgency === "high" || det.urgency === "critical")
+  ) return true;
+  return false;
+}
+
+/**
+ * resolveConflict — arbitrate between deterministic and probabilistic engines.
+ *
+ * Resolution hierarchy (strict, ordered):
+ *   1. Hard safety lock  — ER_NOW / URGENT_24H / flagged MONITOR: deterministic always wins
+ *      (probabilistic may escalate FURTHER, but never downgrade)
+ *   2. No probabilistic  — default to deterministic
+ *   3. High-confidence   — probabilistic wins, subject to escalation floor
+ *   4. Safe default      — deterministic wins (conservative)
+ */
+export function resolveConflict(input: {
+  deterministic:       DeterministicOutput;
+  probabilistic:       ProbabilisticOutput | null;
+  confidenceThreshold?: number;
+}): ConflictResolutionResult {
+  const { deterministic, probabilistic } = input;
+  const threshold  = input.confidenceThreshold ?? HIGH_CONFIDENCE_THRESHOLD;
+  const resolvedAt = new Date().toISOString();
+  const locked     = isHardLocked(deterministic);
+
+  // ── Rule 1: Hard safety lock (ER_NOW, URGENT_24H, flagged MONITOR) ────────
+  if (locked) {
+    // Even when locked, probabilistic CAN escalate further (e.g. URGENT_24H → ER_NOW)
+    // but NEVER downgrade the deterministic floor.
+    const probDisp = probabilistic?.disposition;
+    const finalDisp = probDisp
+      ? escalationMax(deterministic.disposition, probDisp)
+      : deterministic.disposition;
+
+    const reason: OverrideReason =
+      deterministic.disposition === "ER_NOW"
+        ? "DETERMINISTIC_HARD_SAFETY"
+        : "DETERMINISTIC_URGENT_SAFETY";
+
+    return {
+      final:          { ...deterministic, disposition: finalDisp },
+      overrideReason: reason,
+      agreed:         probabilistic?.disposition === finalDisp,
+      auditTrail: {
+        deterministic,
+        probabilistic:       probabilistic ?? null,
+        confidenceThreshold: threshold,
+        resolvedAt,
+        safetyLockApplied:   true,
+      },
+    };
+  }
+
+  // ── Rule 2: No probabilistic output ───────────────────────────────────────
+  if (!probabilistic || probabilistic.confidence === undefined) {
+    return {
+      final:          deterministic,
+      overrideReason: "NO_PROBABILISTIC_INPUT",
+      agreed:         false,
+      auditTrail: {
+        deterministic,
+        probabilistic:       null,
+        confidenceThreshold: threshold,
+        resolvedAt,
+        safetyLockApplied:   false,
+      },
+    };
+  }
+
+  // ── Rule 3: High-confidence probabilistic (escalation-only floor) ─────────
+  if (probabilistic.confidence >= threshold) {
+    const probDisp  = probabilistic.disposition ?? deterministic.disposition;
+    // SAFETY: probabilistic can escalate but never downgrade below deterministic floor
+    const finalDisp = escalationMax(deterministic.disposition, probDisp);
+
+    return {
+      final:          { ...probabilistic, disposition: finalDisp },
+      overrideReason: "PROBABILISTIC_HIGH_CONFIDENCE",
+      agreed:         deterministic.disposition === probDisp,
+      auditTrail: {
+        deterministic,
+        probabilistic,
+        confidenceThreshold: threshold,
+        resolvedAt,
+        safetyLockApplied:   false,
+      },
+    };
+  }
+
+  // ── Rule 4: Below-threshold confidence — take conservative deterministic ──
+  return {
+    final:          deterministic,
+    overrideReason: "DETERMINISTIC_SAFE_DEFAULT",
+    agreed:         deterministic.disposition === probabilistic.disposition,
+    auditTrail: {
+      deterministic,
+      probabilistic,
+      confidenceThreshold: threshold,
+      resolvedAt,
+      safetyLockApplied:   false,
+    },
+  };
+}
+
+
+=================================================================================
+FILE: server/clinical/finalDecisionEngine.ts
+=================================================================================
+/**
+ * Packet 12 — Canonical Final Decision Engine
+ *
+ * Single deterministic pipeline — strictly ordered, fail-closed, audit-ready.
+ * No competing authority paths; every step is explicit and traceable.
+ *
+ * Pipeline order:
+ *   1. Initial disposition  (deriveDisposition)
+ *   2. Risk override        (applyRiskOverride)
+ *   3. Safety gate          (clinicalSafetyGate)    — FAIL CLOSED
+ *   4. Physician checkpoint (createOrCheckCheckpoint) — FAIL CLOSED on timeout
+ *   5. Escalation advisory  (escalationControl)
+ *   6. Final disposition    (probabilityThreshold)
+ *   7. Record outcome       (recordDisposition)
+ */
+
+import {
+  type PosteriorAnalysis,
+  applyRiskOverride,
+  deriveDisposition,
+} from "./posteriorAnalysis";
+
+import {
+  clinicalSafetyGate,
+  type SafetyGateConfig,
+  DEFAULT_SAFETY_CONFIG,
+} from "./safetyGate";
+
+import {
+  requiresPhysicianApproval,
+  createPhysicianApprovalRequest,
+  getAllApprovals,
+  type PhysicianApprovalRecord,
+  DISPOSITIONS_REQUIRING_APPROVAL,
+} from "../compliance/physicianCheckpoint";
+
+import {
+  escalationControl,
+  recordDisposition,
+  type EscalationStore,
+  InMemoryEscalationStore,
+} from "./escalationGuard";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const MODEL_VERSION = "1.0.0";
+const ER_PROBABILITY_THRESHOLD = 0.5;
+
+export const FINAL_DECISION_MODEL_VERSION = MODEL_VERSION;
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface DecisionCheckpoint {
+  required: boolean;
+  status: "pending" | "approved" | "rejected" | "expired";
+  approvalId?: string;
+}
+
+export interface DecisionContext {
+  caseId: string;
+  patientId?: string;
+
+  posterior: PosteriorAnalysis;
+
+  initialDisposition: string;
+  riskOverrideApplied: boolean;
+
+  safety: {
+    allowed: boolean;
+    code: string;
+    reason: string;
+  };
+
+  checkpoint?: DecisionCheckpoint;
+
+  finalDisposition?: string;
+
+  trace: string[];
+}
+
+export interface FinalDecisionInput {
+  state: {
+    caseId: string;
+    patientId?: string;
+    symptoms: string[];
+    scores?: Record<string, number>;
+  };
+  posterior: PosteriorAnalysis;
+  erProbability: number;
+  store?: EscalationStore;
+  safetyConfig?: SafetyGateConfig;
+}
+
+// ── computeFinalDecision ──────────────────────────────────────────────────────
+//
+// FAIL-CLOSED: any blocked step terminates early and sets finalDisposition
+// to a safe value. Never silently drifts forward on uncertainty.
+
+export async function computeFinalDecision(
+  input: FinalDecisionInput,
+): Promise<DecisionContext> {
+  const store = input.store ?? new InMemoryEscalationStore();
+  const safetyConfig = input.safetyConfig ?? DEFAULT_SAFETY_CONFIG;
+
+  const ctx: DecisionContext = {
+    caseId: input.state.caseId,
+    patientId: input.state.patientId,
+    posterior: input.posterior,
+    initialDisposition: "",
+    riskOverrideApplied: false,
+    safety: { allowed: false, code: "", reason: "" },
+    trace: [],
+  };
+
+  // ── Step 1: Initial disposition ───────────────────────────────────────────
+  const clinicalDecision = deriveDisposition(
+    input.posterior,
+    input.state.symptoms,
+  );
+  ctx.initialDisposition = clinicalDecision.disposition;
+  ctx.trace.push(`Initial disposition: ${ctx.initialDisposition}`);
+
+  // ── Step 2: Risk override ─────────────────────────────────────────────────
+  if (applyRiskOverride(input.posterior)) {
+    ctx.initialDisposition = "ER_NOW";
+    ctx.riskOverrideApplied = true;
+    ctx.trace.push("Risk override applied → ER_NOW");
+  }
+
+  // ── Step 3: Safety gate — FAIL CLOSED ────────────────────────────────────
+  const safetyResult = clinicalSafetyGate(
+    {
+      riskScore: input.erProbability,
+      patientId: input.state.patientId,
+      action: "disposition",
+    },
+    safetyConfig,
+  );
+
+  ctx.safety = {
+    allowed: safetyResult.allowed,
+    code: safetyResult.requiredAction ?? (safetyResult.allowed ? "PASS" : "BLOCK"),
+    reason: safetyResult.reason,
+  };
+
+  ctx.trace.push(
+    `Safety gate: ${ctx.safety.code} — ${safetyResult.reason}`,
+  );
+
+  if (!safetyResult.allowed) {
+    ctx.finalDisposition = "BLOCKED";
+    ctx.trace.push("Safety gate blocked — fail-closed → BLOCKED");
+    return ctx;
+  }
+
+  // ── Step 4: Physician checkpoint — FAIL CLOSED on timeout/rejection ───────
+  if (requiresPhysicianApproval(ctx.initialDisposition)) {
+    const checkpoint = await createOrCheckCheckpoint(ctx);
+    ctx.checkpoint = checkpoint;
+    ctx.trace.push(`Checkpoint: ${checkpoint.status}`);
+
+    if (checkpoint.status === "pending") {
+      ctx.finalDisposition = "AWAITING_PHYSICIAN";
+      return ctx;
+    }
+
+    if (checkpoint.status === "rejected") {
+      ctx.finalDisposition = "REJECTED_BY_PHYSICIAN";
+      return ctx;
+    }
+
+    if (checkpoint.status === "expired") {
+      ctx.finalDisposition = "ESCALATED_NO_RESPONSE";
+      return ctx;
+    }
+    // status === "approved" — continue pipeline
+  }
+
+  // ── Step 5: Escalation advisory ───────────────────────────────────────────
+  const advisory = await escalationControl(store);
+  let finalProb = input.erProbability;
+
+  if (advisory.adjust) {
+    finalProb = Math.max(0, Math.min(1, finalProb + advisory.probabilityDelta));
+    ctx.trace.push(
+      `Escalation adjustment applied: Δ${advisory.probabilityDelta} — ${advisory.reason}`,
+    );
+  }
+
+  // ── Step 6: Final disposition ─────────────────────────────────────────────
+  ctx.finalDisposition =
+    finalProb >= ER_PROBABILITY_THRESHOLD ? "ER_NOW" : ctx.initialDisposition;
+  ctx.trace.push(`Final disposition: ${ctx.finalDisposition}`);
+
+  // ── Step 7: Record outcome ────────────────────────────────────────────────
+  await recordDisposition(ctx.finalDisposition, store);
+
+  return ctx;
+}
+
+// ── createOrCheckCheckpoint ──────────────────────────────────────────────────
+//
+// Key rules:
+//   • Never auto-approve
+//   • Timeout = ESCALATED_NO_RESPONSE (not approved)
+//   • Idempotent: re-uses existing pending record for the caseId
+
+export async function createOrCheckCheckpoint(
+  ctx: Pick<DecisionContext, "caseId" | "patientId" | "posterior" | "initialDisposition">,
+): Promise<DecisionCheckpoint> {
+  const existing = getAllApprovals().find(r => r.caseId === ctx.caseId);
+
+  if (existing) {
+    if (existing.status === "TIMED_OUT") {
+      return { required: true, status: "expired", approvalId: existing.approvalId };
+    }
+    if (existing.status === "APPROVED") {
+      return { required: true, status: "approved", approvalId: existing.approvalId };
+    }
+    if (existing.status === "OVERRIDDEN") {
+      return { required: true, status: "rejected", approvalId: existing.approvalId };
+    }
+    // PENDING — check if it has since timed out
+    if (Date.now() > new Date(existing.timeoutAt).getTime()) {
+      return { required: true, status: "expired", approvalId: existing.approvalId };
+    }
+    return { required: true, status: "pending", approvalId: existing.approvalId };
+  }
+
+  // No existing record — create a new checkpoint request
+  const record = await createPhysicianApprovalRequest({
+    caseId: ctx.caseId,
+    disposition: ctx.initialDisposition as any,
+    modelVersion: MODEL_VERSION,
+    agentWeights: {},
+    confidenceScore: ctx.posterior.topPosterior,
+    redFlagsEvaluated: [],
+  });
+
+  return { required: true, status: "pending", approvalId: record.approvalId };
+}
+
+// ── buildPatientResponse ─────────────────────────────────────────────────────
+//
+// Never exposes raw internal state. Clinical text only.
+
+export function buildPatientResponse(ctx: DecisionContext): string {
+  switch (ctx.finalDisposition) {
+    case "BLOCKED":
+      return "We need additional review before making a recommendation.";
+
+    case "AWAITING_PHYSICIAN":
+      return "A clinician is reviewing your case. Please wait.";
+
+    case "REJECTED_BY_PHYSICIAN":
+      return "A clinician has reviewed your case and recommended a different approach. Please follow up with your provider.";
+
+    case "ER_NOW":
+      return "Please seek emergency care immediately.";
+
+    case "ESCALATED_NO_RESPONSE":
+      return "We recommend urgent evaluation. Please go to the nearest emergency department.";
+
+    case "NEEDS_MORE_DATA":
+      return "We need a bit more information to give you accurate guidance.";
+
+    case "URGENT_CARE":
+      return "Based on your symptoms, we recommend being seen at an urgent care center today.";
+
+    case "HOME":
+      return "Based on your symptoms, home care is appropriate. Monitor your symptoms and follow up if they worsen.";
+
+    default:
+      return "We need additional review before making a recommendation.";
+  }
+}
+
+// ── getTestEscalationStore ────────────────────────────────────────────────────
+// Convenience factory for test harness use.
+
+export function getTestEscalationStore(): EscalationStore {
+  return new InMemoryEscalationStore();
+}
+
+
+=================================================================================
+FILE: server/clinical/decisionOrchestrator.ts
+=================================================================================
+import { clinicalSafetyGate } from "./safetyGate";
+import { escalationControl, recordDisposition, EscalationStore } from "./escalationGuard";
+import { getActiveSafetyConfig } from "./safetyConfigService";
+
+// ── decisionOrchestrator ──────────────────────────────────────────────────────
+//
+// Explicit, boring orchestration of the full clinical decision path.
+//
+// The goal is to make it impossible to misread hard_stop semantics or forget
+// to apply the escalation adjustment. The logic is sequenced, not distributed
+// across three callers who each hope the others did the right thing.
+//
+// Sequence:
+//  1. Load DB safety config (versioned, auditable)
+//  2. Run the safety gate — fail-closed, validates all inputs
+//  3. If blocked: return immediately, no escalation counters recorded
+//  4. If passed: query escalation advisory
+//  5. Apply probability delta (clamped to [0,1])
+//  6. Resolve final disposition
+//  7. Record the disposition for escalation monitoring
+//
+// Callers must inject an EscalationStore:
+//   - RedisEscalationStore (production, scoped to tenant/clinic)
+//   - InMemoryEscalationStore (dev/test)
+
+export interface DecisionInput {
+  patientId:              string;
+  actorId?:               string;
+  action:                 string;
+  riskScore:              number;
+  uncertainty?:           number;
+  erReferralProbability:  number;
+  proposedDisposition:    string;
+}
+
+export interface DecisionOutput {
+  allowed:                     boolean;
+  finalDisposition?:           string;
+  finalErReferralProbability?: number;
+  blockedReason?:              string;
+  gateCode?:                   string;   // requiredAction from gate result
+  gateConfigVersion?:          string;
+  escalationReason?:           string;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+export async function evaluateClinicalDecision(
+  input: DecisionInput,
+  store: EscalationStore,
+): Promise<DecisionOutput> {
+  // ── 1. Load versioned safety config from DB ───────────────────────────────
+  const config = await getActiveSafetyConfig();
+
+  // ── 2. Run fail-closed safety gate ───────────────────────────────────────
+  const gate = clinicalSafetyGate(
+    {
+      patientId:  input.patientId,
+      actorId:    input.actorId,
+      action:     input.action,
+      riskScore:  input.riskScore,
+      uncertainty: input.uncertainty,
+    },
+    config,
+  );
+
+  // ── 3. Return immediately if blocked — no counters, no escalation ─────────
+  if (!gate.allowed) {
+    return {
+      allowed:            false,
+      blockedReason:      gate.reason,
+      gateCode:           gate.requiredAction,
+      gateConfigVersion:  gate.configVersion,
+    };
+  }
+
+  // ── 4. Query escalation advisory ─────────────────────────────────────────
+  const advisory = await escalationControl(store);
+
+  // ── 5. Apply probability delta (clamped) ─────────────────────────────────
+  const adjustedProbability = advisory.adjust
+    ? clamp01(input.erReferralProbability + advisory.probabilityDelta)
+    : input.erReferralProbability;
+
+  // ── 6. Resolve final disposition ─────────────────────────────────────────
+  const finalDisposition =
+    adjustedProbability >= 0.5 ? "ER_NOW" : input.proposedDisposition;
+
+  // ── 7. Record disposition for escalation monitoring ───────────────────────
+  // Intentionally after gate passes — blocked decisions don't count toward
+  // the ER rate (they weren't AI decisions, they were safety overrides).
+  await recordDisposition(finalDisposition, store);
+
+  return {
+    allowed:                    true,
+    finalDisposition,
+    finalErReferralProbability: adjustedProbability,
+    gateConfigVersion:          gate.configVersion,
+    escalationReason:           advisory.reason,
+  };
+}
+
+
+=================================================================================
+FILE: server/clinical/guardrails.ts
+=================================================================================
+export interface ClinicalAction {
+  type: string;
+  riskScore: number;
+  requiresConsent?: boolean;
+  invasive?: boolean;
+  toolRequired?: string;
+  patientId?: string;
+}
+
+export interface GuardrailResult {
+  allowed: boolean;
+  reason?: string;
+  requiresPhysicianOverride?: boolean;
+  warnings?: string[];
+}
+
+const HIGH_RISK_THRESHOLD = 0.7;
+const MODERATE_RISK_THRESHOLD = 0.4;
+
+const INVASIVE_ACTIONS = new Set([
+  "otoscopy",
+  "oral_exam",
+  "swab",
+  "ekg_lead_placement",
+  "auscultation",
+  "blood_draw",
+]);
+
+export function clinicalSafetyCheck(action: ClinicalAction): GuardrailResult {
+  const warnings: string[] = [];
+
+  if (action.riskScore > HIGH_RISK_THRESHOLD) {
+    return {
+      allowed: false,
+      reason: `Risk score ${action.riskScore.toFixed(2)} exceeds threshold ${HIGH_RISK_THRESHOLD}`,
+      requiresPhysicianOverride: true,
+      warnings,
+    };
+  }
+
+  if (action.invasive && !action.requiresConsent) {
+    return {
+      allowed: false,
+      reason: "Invasive action requires documented patient consent",
+      requiresPhysicianOverride: false,
+      warnings,
+    };
+  }
+
+  if (INVASIVE_ACTIONS.has(action.type) && !action.toolRequired) {
+    warnings.push(`Action type '${action.type}' should specify required tool`);
+  }
+
+  if (action.riskScore > MODERATE_RISK_THRESHOLD) {
+    warnings.push(`Moderate risk score ${action.riskScore.toFixed(2)} — clinician oversight recommended`);
+  }
+
+  if (!action.patientId) {
+    warnings.push("No patient ID attached to action — ensure traceability");
+  }
+
+  return { allowed: true, warnings };
+}
+
+export function batchGuardrailCheck(actions: ClinicalAction[]): {
+  passed: ClinicalAction[];
+  blocked: Array<{ action: ClinicalAction; result: GuardrailResult }>;
+} {
+  const passed: ClinicalAction[] = [];
+  const blocked: Array<{ action: ClinicalAction; result: GuardrailResult }> = [];
+
+  for (const action of actions) {
+    const result = clinicalSafetyCheck(action);
+    if (result.allowed) passed.push(action);
+    else blocked.push({ action, result });
+  }
+
+  return { passed, blocked };
+}
+
+
+=================================================================================
+FILE: server/clinical/bayesianEngine.ts
+=================================================================================
+/**
+ * Bayesian Differential Diagnosis Engine
+ *
+ * Implements a Naive Bayes classifier for differential diagnosis.
+ * Can be used standalone or as a scoring layer within the
+ * hybrid-reasoning/hybridController.ts ensemble.
+ *
+ * The existing server/core/engines/bayesianEngine.ts handles training
+ * on outcomes. This module provides:
+ *  1. A symptom-to-diagnosis prior probability table (clinical literature)
+ *  2. Bayesian posterior update given observed symptoms
+ *  3. Ranked differential output with confidence bands
+ *
+ * Rewritten in this version (Packet 6):
+ *  - Symptoms are deduplicated before scoring to prevent accidental double-counting
+ *  - Globally unknown symptoms (absent from every prior) are skipped entirely
+ *    rather than applying a fake log(0.3) penalty that distorts rankings without
+ *    providing real clinical signal
+ *  - The missing-symptom floor was changed from 0.3 (original) to 0.01: if a
+ *    symptom is known somewhere in the model but absent for a specific diagnosis,
+ *    that diagnosis gets a small floor penalty, not a near-neutral one
+ *  - Priors with non-finite or zero baseProbability are skipped rather than
+ *    producing NaN log scores
+ *  - Correlation dampening: co-occurring symptoms in the same clinical cluster
+ *    (e.g. "fever" + "chills") get diminishing weight beyond the first feature
+ *    to mitigate naive Bayes over-confidence from correlated evidence
+ *  - If normalization fails (all exponents underflow), the engine falls back to
+ *    prior-only ranking instead of returning 0/NaN posteriors
+ *  - Confidence thresholds raised (0.7 high, 0.35 moderate) and now require
+ *    minimum matched feature counts — a single-symptom match cannot be "high"
+ *  - All existing exports (runDifferential, topDifferentials, setRuntimePriors,
+ *    bayesianUpdate, getSourceTrace, etc.) are backward-compatible
+ */
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface DiagnosisPrior {
+  diagnosis:          string;
+  baseProbability:    number;                     // P(D) — unconditional prevalence
+  featureLikelihoods: Record<string, number>;    // P(symptom | D)
+  // Provenance — populated when loaded from kb_diagnosis_rules
+  ruleId?:    string;
+  version?:   number;
+  tableName?: string;
+}
+
+export interface DifferentialResult {
+  diagnosis:        string;
+  posterior:        number;                     // P(D | symptoms), normalized
+  confidence:       "high" | "moderate" | "low";
+  matchedFeatures:  string[];
+  featureLikelihoods?: Record<string, number>;  // full likelihood map (for trace)
+  source?:          "KB_DB" | "FALLBACK_HARDCODED";
+  // Full provenance chain
+  ruleId?:    string;
+  version?:   number;
+  tableName?: string;
+}
+
+/** Source trace — which prior table is currently active in the Bayesian engine */
+export interface SourceTrace {
+  source:                "KB_DB" | "FALLBACK_HARDCODED";
+  priorCount:            number;
+  priorsWithLikelihoods: number;
+  fallbackReason:        string | null;
+  activatedAt:           string | null;
+}
+
+/**
+ * Options for the differential engine.
+ * All fields are optional — defaults are safe for production use.
+ */
+export interface RunDifferentialOptions {
+  /**
+   * Likelihood floor used when a symptom is known somewhere in the model
+   * but missing for a particular diagnosis.
+   *
+   * FIXED from original: was 0.3 (barely a penalty) → now 0.01 (realistic floor).
+   * 0.01 means "this symptom is very rare given this diagnosis" rather than "about
+   * 30% chance" which the original implied.
+   */
+  unseenLikelihood?: number;
+
+  /** Floor for clampProbability — prevents log(0) on edge-case priors. */
+  minBaseProbability?: number;
+
+  /**
+   * Clinical correlation groups. Symptoms in the same group get diminishing
+   * log-likelihood weight after the first: 1st = full, 2nd = dampening^1, etc.
+   *
+   * Example: [["fever", "chills", "rigors"], ["nausea", "vomiting"]]
+   */
+  correlatedFeatureGroups?: string[][];
+
+  /**
+   * Dampening factor for subsequent features in the same correlation group.
+   * 1.0 = no dampening. 0.6 = moderate (default, recommended for clinical use).
+   */
+  correlationDampening?: number;
+
+  /**
+   * Posterior threshold for "high" confidence.
+   * Default 0.7 — more conservative than original 0.35 (which was too low for
+   * a two-class model to produce "high" from a single symptom match).
+   */
+  highConfidencePosterior?: number;
+
+  /**
+   * Posterior threshold for "moderate" confidence.
+   * Default 0.35 — matches the old "high" threshold but now gated on >= 1 match.
+   */
+  moderateConfidencePosterior?: number;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Clamps a probability to [floor, 1-floor] and replaces non-finite values with floor.
+ * Prevents log(0) and log(negative) in the scoring loop.
+ */
+function clampProbability(value: number, floor: number): number {
+  if (!Number.isFinite(value)) return floor;
+  return Math.min(Math.max(value, floor), 1 - floor);
+}
+
+function inferSource(prior: DiagnosisPrior): "KB_DB" | "FALLBACK_HARDCODED" {
+  return prior.ruleId || prior.tableName || prior.version !== undefined
+    ? "KB_DB"
+    : "FALLBACK_HARDCODED";
+}
+
+/** Builds a feature → groupKey map for O(1) group membership lookup. */
+function buildFeatureGroupMap(groups: string[][]): Map<string, string> {
+  const map = new Map<string, string>();
+  groups.forEach((group, idx) => {
+    const key = `group_${idx}`;
+    for (const feature of group) map.set(feature, key);
+  });
+  return map;
+}
+
+/**
+ * Assigns a confidence band.
+ *
+ * FIXED from original: "high" now requires >= 2 matched features.
+ * A single-symptom match in a 12-diagnosis model should not produce "high"
+ * confidence — that is a display artefact, not a clinical signal.
+ *
+ * Note: These are heuristic display bands, not calibrated probabilities.
+ * They need validation against outcome data before clinical use.
+ */
+function classifyConfidence(
+  posterior:         number,
+  matchedCount:      number,
+  usedFeatureCount:  number,
+  highThreshold:     number,
+  moderateThreshold: number
+): "high" | "moderate" | "low" {
+  if (usedFeatureCount === 0) return "low";
+  if (posterior >= highThreshold    && matchedCount >= 2) return "high";
+  if (posterior >= moderateThreshold && matchedCount >= 1) return "moderate";
+  return "low";
+}
+
+/**
+ * Fallback when evidence normalization fails.
+ * Returns prior-only ranking (normalized baseProbabilities) so callers
+ * always get a ranked list rather than an empty result or NaN posteriors.
+ */
+function normalizeByBaseProbability(
+  priors: DiagnosisPrior[],
+  opts:   Required<Pick<RunDifferentialOptions, "minBaseProbability" | "highConfidencePosterior" | "moderateConfidencePosterior">>,
+  sourceTag?: "KB_DB" | "FALLBACK_HARDCODED"
+): DifferentialResult[] {
+  const usable = priors
+    .filter(p => Number.isFinite(p.baseProbability) && p.baseProbability > 0)
+    .map(p => ({
+      prior: p,
+      base:  clampProbability(p.baseProbability, opts.minBaseProbability),
+    }));
+
+  const total = usable.reduce((sum, x) => sum + x.base, 0);
+  if (total <= 0 || !Number.isFinite(total)) return [];
+
+  return usable
+    .map(({ prior, base }) => {
+      const posterior = base / total;
+      return {
+        diagnosis:        prior.diagnosis,
+        posterior:        Number(posterior.toFixed(4)),
+        confidence:       classifyConfidence(posterior, 0, 0, opts.highConfidencePosterior, opts.moderateConfidencePosterior),
+        matchedFeatures:  [],
+        featureLikelihoods: prior.featureLikelihoods,
+        source:           sourceTag ?? inferSource(prior),
+        ruleId:           prior.ruleId,
+        version:          prior.version,
+        tableName:        prior.tableName,
+      } satisfies DifferentialResult;
+    })
+    .sort((a, b) => b.posterior - a.posterior);
+}
+
+// ── Core scoring ──────────────────────────────────────────────────────────────
+
+interface InternalScore {
+  diagnosis:         string;
+  logScore:          number;
+  matchedFeatures:   string[];
+  prior:             DiagnosisPrior;
+  source:            "KB_DB" | "FALLBACK_HARDCODED";
+}
+
+/**
+ * Core Bayesian scoring function.
+ * Takes an explicit priors list and symptoms — the public API wrappers
+ * (bayesianUpdate, runDifferential) select the active priors and merge options.
+ */
+function runDifferentialCore(
+  rawSymptoms: string[],
+  priors:      DiagnosisPrior[],
+  options:     RunDifferentialOptions = {},
+  sourceTag?:  "KB_DB" | "FALLBACK_HARDCODED"
+): DifferentialResult[] {
+  if (!Array.isArray(rawSymptoms) || !Array.isArray(priors) || priors.length === 0) {
+    return [];
+  }
+
+  const unseenLikelihood         = options.unseenLikelihood         ?? 0.01;
+  const minBaseProbability       = options.minBaseProbability       ?? 1e-6;
+  const correlationDampening     = options.correlationDampening     ?? 0.6;
+  const highConfidencePosterior  = options.highConfidencePosterior  ?? 0.7;
+  const moderateConfidencePosterior = options.moderateConfidencePosterior ?? 0.35;
+
+  const fallbackOpts = { minBaseProbability, highConfidencePosterior, moderateConfidencePosterior };
+
+  // Deduplicate and sanitize — trim whitespace, lowercase for case-insensitive match,
+  // remove blanks. Prevents the same symptom entered twice from doubling its evidence.
+  const uniqueSymptoms = Array.from(
+    new Set(
+      rawSymptoms
+        .map(s => s?.toLowerCase().trim())
+        .filter((s): s is string => Boolean(s))
+    )
+  );
+
+  if (uniqueSymptoms.length === 0) {
+    return normalizeByBaseProbability(priors, fallbackOpts, sourceTag);
+  }
+
+  // Build the global vocabulary of symptoms that the model knows about.
+  // FIXED: symptoms absent from every prior are skipped entirely — they carry
+  // no information (neither for nor against any diagnosis) and only introduce
+  // numeric noise via the fake log(0.01) penalty applied uniformly.
+  const globallyKnownSymptoms = new Set<string>();
+  for (const prior of priors) {
+    for (const feature of Object.keys(prior.featureLikelihoods ?? {})) {
+      globallyKnownSymptoms.add(feature.toLowerCase());
+    }
+  }
+
+  const modeledSymptoms = uniqueSymptoms.filter(s => globallyKnownSymptoms.has(s));
+
+  // None of the entered symptoms appear anywhere in the KB →
+  // return prior-only ranking (honest: we have no evidence to update on).
+  if (modeledSymptoms.length === 0) {
+    return normalizeByBaseProbability(priors, fallbackOpts, sourceTag);
+  }
+
+  const groupMap = buildFeatureGroupMap(options.correlatedFeatureGroups ?? []);
+
+  const scored: InternalScore[] = [];
+
+  for (const prior of priors) {
+    // Skip degenerate priors rather than producing NaN log scores.
+    if (!Number.isFinite(prior.baseProbability) || prior.baseProbability <= 0) continue;
+
+    let logScore = Math.log(clampProbability(prior.baseProbability, minBaseProbability));
+    const matchedFeatures: string[] = [];
+    const seenPerGroup = new Map<string, number>();
+
+    // Normalize likelihood keys to lowercase for case-insensitive comparison.
+    const likelihoods: Record<string, number> = {};
+    for (const [k, v] of Object.entries(prior.featureLikelihoods ?? {})) {
+      likelihoods[k.toLowerCase()] = v;
+    }
+
+    for (const symptom of modeledSymptoms) {
+      const rawLikelihood = likelihoods[symptom];
+
+      // Use configured floor when symptom is globally known but not in this prior.
+      const likelihood = rawLikelihood !== undefined
+        ? clampProbability(rawLikelihood, unseenLikelihood)
+        : unseenLikelihood;
+
+      // Correlation dampening: symptoms in the same clinical group get
+      // diminishing weight after the first to prevent over-confidence from
+      // correlated evidence (e.g. fever + chills both amplifying Flu).
+      let weight = 1;
+      const groupKey = groupMap.get(symptom);
+      if (groupKey) {
+        const alreadySeen = seenPerGroup.get(groupKey) ?? 0;
+        weight = alreadySeen === 0 ? 1 : Math.pow(correlationDampening, alreadySeen);
+        seenPerGroup.set(groupKey, alreadySeen + 1);
+      }
+
+      logScore += Math.log(likelihood) * weight;
+
+      if (rawLikelihood !== undefined) {
+        matchedFeatures.push(symptom);
+      }
+    }
+
+    if (Number.isFinite(logScore)) {
+      scored.push({
+        diagnosis:       prior.diagnosis,
+        logScore,
+        matchedFeatures,
+        prior,
+        source:          sourceTag ?? inferSource(prior),
+      });
+    }
+  }
+
+  if (scored.length === 0) {
+    return normalizeByBaseProbability(priors, fallbackOpts, sourceTag);
+  }
+
+  // Log-sum-exp: subtract maxLog before exp to prevent underflow.
+  // The subtraction cancels in the final ratio so it does not affect posteriors.
+  const maxLog = Math.max(...scored.map(s => s.logScore));
+  if (!Number.isFinite(maxLog)) {
+    return normalizeByBaseProbability(priors, fallbackOpts, sourceTag);
+  }
+
+  const withExp = scored.map(s => ({
+    ...s,
+    expScore: Math.exp(s.logScore - maxLog),
+  }));
+
+  const total = withExp.reduce((sum, s) => sum + (Number.isFinite(s.expScore) ? s.expScore : 0), 0);
+
+  // If normalization denominator is 0 or NaN, fall back to prior-only ranking.
+  if (!Number.isFinite(total) || total <= Number.EPSILON) {
+    return normalizeByBaseProbability(priors, fallbackOpts, sourceTag);
+  }
+
+  return withExp
+    .map(s => {
+      const posterior = Number.isFinite(s.expScore) ? s.expScore / total : 0;
+      return {
+        diagnosis:          s.diagnosis,
+        posterior:          Number(posterior.toFixed(4)),
+        confidence:         classifyConfidence(
+          posterior,
+          s.matchedFeatures.length,
+          modeledSymptoms.length,
+          highConfidencePosterior,
+          moderateConfidencePosterior
+        ),
+        matchedFeatures:    s.matchedFeatures,
+        featureLikelihoods: s.prior.featureLikelihoods,
+        source:             s.source,
+        ruleId:             s.prior.ruleId,
+        version:            s.prior.version,
+        tableName:          s.prior.tableName,
+      } satisfies DifferentialResult;
+    })
+    .sort((a, b) => b.posterior - a.posterior);
+}
+
+// ── Prior probability table (ENT/Flu-slice + Musculoskeletal scope) ──────────
+
+export const PRIORS_COUNT = 12;  // updated when new entries are added to PRIORS below
+
+const PRIORS: DiagnosisPrior[] = [
+  {
+    diagnosis: "Influenza A",
+    baseProbability: 0.18,
+    featureLikelihoods: {
+      "fever":            0.92, "body aches":        0.85,
+      "headache":         0.75, "cough":             0.80,
+      "fatigue":          0.88, "sore throat":       0.50,
+      "runny nose":       0.55, "chills":            0.78,
+    },
+  },
+  {
+    diagnosis: "COVID-19",
+    baseProbability: 0.14,
+    featureLikelihoods: {
+      "fever":              0.88, "cough":              0.75,
+      "loss of smell":      0.65, "loss of taste":      0.60,
+      "fatigue":            0.82, "shortness of breath": 0.45,
+      "headache":           0.60, "sore throat":        0.52,
+    },
+  },
+  {
+    diagnosis: "Strep Pharyngitis",
+    baseProbability: 0.12,
+    featureLikelihoods: {
+      "sore throat":       0.96, "fever":              0.78,
+      "tonsillar exudate": 0.70, "lymphadenopathy":    0.75,
+      "headache":          0.45, "absence of cough":   0.80,
+    },
+  },
+  {
+    diagnosis: "Viral URI",
+    baseProbability: 0.25,
+    featureLikelihoods: {
+      "runny nose":        0.90, "congestion":         0.88,
+      "sore throat":       0.70, "cough":              0.65,
+      "mild fever":        0.35, "sneezing":           0.80,
+    },
+  },
+  {
+    diagnosis: "Sinusitis",
+    baseProbability: 0.10,
+    featureLikelihoods: {
+      "sinus pressure":     0.88, "facial pain":        0.75,
+      "congestion":         0.82, "headache":           0.65,
+      "purulent discharge": 0.70, "fever":              0.30,
+      "post-nasal drip":    0.72,
+    },
+  },
+  {
+    diagnosis: "Otitis Media",
+    baseProbability: 0.08,
+    featureLikelihoods: {
+      "ear pain":      0.95, "fever":        0.65,
+      "hearing loss":  0.55, "ear fullness": 0.72,
+      "discharge":     0.35,
+    },
+  },
+  {
+    diagnosis: "Pneumonia",
+    baseProbability: 0.06,
+    featureLikelihoods: {
+      "fever":               0.88, "productive cough":   0.82,
+      "shortness of breath": 0.72, "chest pain":         0.55,
+      "fatigue":             0.78, "rigors":             0.60,
+    },
+  },
+  {
+    diagnosis: "Allergic Rhinitis",
+    baseProbability: 0.07,
+    featureLikelihoods: {
+      "sneezing":        0.88, "runny nose":       0.85,
+      "itchy eyes":      0.80, "congestion":       0.78,
+      "no fever":        0.90, "seasonal pattern": 0.70,
+    },
+  },
+
+  // ── Musculoskeletal / Shoulder ────────────────────────────────────────────
+  {
+    diagnosis: "Rotator Cuff Injury",
+    baseProbability: 0.30,
+    featureLikelihoods: {
+      "shoulder pain":             0.95, "painful arc":               0.82,
+      "weakness":                  0.75, "lateral pain":              0.78,
+      "no trauma":                 0.60, "gradual onset":             0.70,
+      "night pain":                0.68, "overhead activity pain":    0.80,
+      "age over 40":               0.72, "loss of external rotation": 0.55,
+    },
+  },
+  {
+    diagnosis: "Shoulder Dislocation",
+    baseProbability: 0.08,
+    featureLikelihoods: {
+      "trauma":                    0.92, "deformity":                 0.85,
+      "arm held at side":          0.80, "severe pain":               0.90,
+      "loss of external rotation": 0.75, "young male":                0.55,
+      "shoulder pain":             0.95, "inability to move arm":     0.88,
+    },
+  },
+  {
+    diagnosis: "AC Joint Injury",
+    baseProbability: 0.12,
+    featureLikelihoods: {
+      "trauma":                       0.88, "top of shoulder tender":     0.92,
+      "step deformity":               0.70, "direct fall onto shoulder":  0.80,
+      "shoulder pain":                0.95, "arm adduction pain":         0.72,
+      "cross-body pain":              0.68,
+    },
+  },
+  {
+    diagnosis: "Cervical Radiculopathy",
+    baseProbability: 0.15,
+    featureLikelihoods: {
+      "neck pain":         0.85, "arm pain":          0.82,
+      "tingling":          0.78, "numbness fingers":  0.75,
+      "shoulder pain":     0.70, "weakness arm":      0.65,
+      "radiation to hand": 0.72, "no trauma":         0.60,
+    },
+  },
+];
+
+// ── Default correlation groups for the embedded PRIORS table ────────────────
+//
+// These groups dampen over-confident posteriors when co-occurring syndrome
+// symptoms are entered together. Each group is a set of symptoms that often
+// co-occur in the same clinical presentation.
+
+const CLINICAL_CORRELATION_GROUPS: string[][] = [
+  ["fever", "chills", "rigors"],             // systemic infection cluster
+  ["runny nose", "congestion"],              // upper airway cluster
+  ["loss of smell", "loss of taste"],        // COVID-specific cluster
+  ["shortness of breath", "chest pain"],     // cardiorespiratory cluster
+  ["shoulder pain", "arm pain"],             // shoulder/radiculopathy overlap
+  ["nausea", "vomiting"],                    // GI cluster (future-proof)
+];
+
+// ── Runtime prior management (KB hot-swap) ────────────────────────────────────
+
+let _runtimePriors:     DiagnosisPrior[] | null = null;
+let _priorsActivatedAt: string | null = null;
+
+export function setRuntimePriors(priors: DiagnosisPrior[]): void {
+  const withLikelihoods = priors.filter(p => Object.keys(p.featureLikelihoods || {}).length > 0);
+  if (withLikelihoods.length > 0) {
+    _runtimePriors = withLikelihoods;
+    _priorsActivatedAt = new Date().toISOString();
+    (global as any).__kbPriorsCount = withLikelihoods.length;
+    console.info(
+      `[BayesianEngine] Runtime priors set from KB: ${withLikelihoods.length} ` +
+      `(${priors.length - withLikelihoods.length} skipped — no featureLikelihoods)`
+    );
+  } else {
+    _runtimePriors = null;
+    _priorsActivatedAt = null;
+    console.warn(
+      `[BayesianEngine] KB priors have no featureLikelihoods — FALLBACK to hardcoded PRIORS table. ` +
+      `Seed via POST /api/kb/seed to restore KB authority.`
+    );
+  }
+}
+
+export function clearRuntimePriors(): void {
+  _runtimePriors = null;
+  _priorsActivatedAt = null;
+}
+
+export function getActivePriors(): DiagnosisPrior[] {
+  return _runtimePriors && _runtimePriors.length > 0 ? _runtimePriors : PRIORS;
+}
+
+export function getSourceTrace(): SourceTrace {
+  if (_runtimePriors && _runtimePriors.length > 0) {
+    return {
+      source:                "KB_DB",
+      priorCount:            _runtimePriors.length,
+      priorsWithLikelihoods: _runtimePriors.length,
+      fallbackReason:        null,
+      activatedAt:           _priorsActivatedAt,
+    };
+  }
+  return {
+    source:                "FALLBACK_HARDCODED",
+    priorCount:            PRIORS.length,
+    priorsWithLikelihoods: PRIORS.filter(p => Object.keys(p.featureLikelihoods).length > 0).length,
+    fallbackReason:        _runtimePriors === null
+      ? "KB priors not yet loaded — call POST /api/kb/seed + POST /api/kb/cache-reload"
+      : "No KB priors had featureLikelihoods — run kbSeeder.upsertBayesianPriors()",
+    activatedAt:           null,
+  };
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Perform a Bayesian posterior update across all diagnoses
+ * given a list of observed symptoms.
+ *
+ * This function is kept for backward compatibility.
+ * Internally calls the improved runDifferentialCore.
+ */
+export function bayesianUpdate(
+  priors:   DiagnosisPrior[],
+  evidence: string[],
+  options?: RunDifferentialOptions
+): DifferentialResult[] {
+  return runDifferentialCore(evidence, priors, options);
+}
+
+/**
+ * Run the differential engine against the active prior table (KB or fallback).
+ * Accepts optional options for correlation dampening and confidence tuning.
+ *
+ * When using the embedded PRIORS table, clinical correlation groups are
+ * applied automatically. When using KB-loaded priors, pass custom
+ * correlatedFeatureGroups via options.
+ */
+export function runDifferential(
+  symptoms: string[],
+  options?: RunDifferentialOptions
+): DifferentialResult[] {
+  const usingKb    = Boolean(_runtimePriors && _runtimePriors.length > 0);
+  const sourceTag: "KB_DB" | "FALLBACK_HARDCODED" = usingKb ? "KB_DB" : "FALLBACK_HARDCODED";
+
+  if (!usingKb) {
+    console.warn("[BayesianEngine] FALLBACK — differential using hardcoded PRIORS, not KB_DB");
+  }
+
+  const mergedOptions: RunDifferentialOptions = {
+    // Apply built-in correlation groups when using embedded PRIORS — KB priors
+    // may have their own correlation topology (future work: infer from KB data).
+    correlatedFeatureGroups: usingKb
+      ? (options?.correlatedFeatureGroups ?? [])
+      : (options?.correlatedFeatureGroups ?? CLINICAL_CORRELATION_GROUPS),
+    ...options,
+  };
+
+  return runDifferentialCore(symptoms, getActivePriors(), mergedOptions, sourceTag);
+}
+
+/**
+ * Return the top N differentials above a minimum confidence threshold.
+ * Preserves existing caller contract: topDifferentials(symptoms, n, minPosterior).
+ */
+export function topDifferentials(
+  symptoms:    string[],
+  n            = 5,
+  minPosterior = 0.03,
+  options?:    RunDifferentialOptions
+): DifferentialResult[] {
+  return runDifferential(symptoms, options)
+    .filter(d => d.posterior >= minPosterior)
+    .slice(0, n);
+}
+
+
+=================================================================================
+FILE: server/reasoning/bayesianEngine.ts
+=================================================================================
+/**
+ * server/reasoning/bayesianEngine.ts — Lightweight Bayesian update engine
+ *
+ * FIX (Code Review Issue #16 — absent-evidence inversion):
+ *   The COMPLAINT_EVIDENCE table defaulted ALL evidence entries to `present: false`.
+ *   When runBayesianUpdate() processed evidence with `present: false`, it applied
+ *   `1 / likelihoodRatio` — systematically penalizing diagnoses for the absence
+ *   of findings that were never actually checked in the patient encounter.
+ *
+ *   Concretely: "chest pain" had two evidence entries both defaulting to false:
+ *   - diaphoresis: LR=4.0, present=false → applied 1/4.0 = 0.25 multiplier to MI
+ *   - radiation:   LR=3.0, present=false → applied 1/3.0 = 0.33 multiplier to MI
+ *   Every chest pain patient had their MI probability reduced ~8x before any actual
+ *   findings were considered — purely because the COMPLAINT_EVIDENCE template
+ *   expressed "we expect these features" as "these features are absent."
+ *
+ *   Fixed:
+ *   1. COMPLAINT_EVIDENCE entries removed — the template-based approach of
+ *      pre-filling absent evidence is clinically incorrect. Evidence must come
+ *      from actual observed findings, not from a complaint lookup table.
+ *
+ *   2. buildEvidenceFromResult() now builds evidence ONLY from explicitly provided
+ *      positive findings (present: true). No negative evidence is inserted by default.
+ *      Callers who want to include negative findings (explicitly documented absence)
+ *      must pass them explicitly with present: false.
+ *
+ *   3. The Bayesian update itself is preserved — it correctly handles both positive
+ *      (present: true → multiply by LR) and negative (present: false → multiply by
+ *      1/LR) evidence when that evidence is explicitly provided.
+ *
+ *   Architecture note (Issue #15):
+ *   This module provides a simple LR-based Bayesian update (for hybrid reasoning).
+ *   server/clinical/bayesianEngine.ts provides the full Naive Bayes differential
+ *   engine (for KB-driven differentials). They serve different purposes and are
+ *   not duplicates, but callers should be explicit about which engine they use.
+ */
+
+export interface DiagnosisPrior {
+  diagnosis: string;
+  prior:     number;
+}
+
+export interface Evidence {
+  feature:         string;
+  likelihoodRatio: number;
+  present:         boolean;   // true = observed, false = explicitly documented absent
+}
+
+export interface BayesianResult {
+  diagnosis: string;
+  prior:     number;
+  posterior: number;
+  delta:     number;
+}
+
+/**
+ * runBayesianUpdate — update diagnosis priors given a list of evidence items.
+ *
+ * Only call with evidence that has been explicitly observed or explicitly documented
+ * as absent. Do NOT pre-populate evidence with assumed defaults.
+ */
+export function runBayesianUpdate(params: {
+  priors:   DiagnosisPrior[];
+  evidence: Evidence[];
+}): BayesianResult[] {
+  const { priors, evidence } = params;
+
+  const updated = priors.map(p => {
+    const safePrior = Math.max(0.001, Math.min(0.999, p.prior));
+    let odds = safePrior / (1 - safePrior);
+
+    for (const e of evidence) {
+      const lr = Math.max(0.01, e.likelihoodRatio);
+      odds *= e.present ? lr : 1 / lr;
+    }
+
+    const posterior = odds / (1 + odds);
+    return {
+      diagnosis: p.diagnosis,
+      prior:     safePrior,
+      posterior,
+      delta:     posterior - safePrior,
+    };
+  });
+
+  const total = updated.reduce((s, d) => s + d.posterior, 0) || 1;
+
+  return updated
+    .map(d => ({
+      ...d,
+      posterior: Math.round((d.posterior / total) * 1000) / 1000,
+      delta:     Math.round(d.delta * 1000) / 1000,
+    }))
+    .sort((a, b) => b.posterior - a.posterior);
+}
+
+/**
+ * buildEvidenceFromResult — extract positive-only evidence from a structured result.
+ *
+ * FIX (Issue #16): Previously used COMPLAINT_EVIDENCE to inject pre-fabricated
+ * absent evidence for every complaint. This systematically biased all Bayesian
+ * updates by penalizing diagnoses before any actual findings were considered.
+ *
+ * Fixed: this function now only produces positive evidence (present: true) from
+ * explicitly observed findings in the result object. It does NOT insert negative
+ * evidence for unobserved features — absence of evidence ≠ evidence of absence
+ * unless the clinician explicitly documented that a finding was assessed and absent.
+ *
+ * To add negative evidence, use buildEvidenceWithNegatives() and pass explicit
+ * "documented absent" findings.
+ */
+export function buildEvidenceFromResult(result: any): Evidence[] {
+  const evidence: Evidence[] = [];
+
+  // Extract positive evidence from commonly structured result fields
+  const findings: string[] = [];
+
+  if (Array.isArray(result.symptoms))    findings.push(...result.symptoms);
+  if (Array.isArray(result.findings))    findings.push(...result.findings);
+  if (Array.isArray(result.redFlags))    findings.push(...result.redFlags);
+  if (typeof result.complaint === "string") findings.push(result.complaint);
+
+  // Each finding becomes a positive evidence item with a default LR
+  // Callers can override by building Evidence[] directly for more control
+  for (const finding of findings) {
+    if (!finding || typeof finding !== "string") continue;
+    evidence.push({
+      feature:         finding.toLowerCase().trim(),
+      likelihoodRatio: 2.0,   // neutral default — callers should provide calibrated LRs
+      present:         true,
+    });
+  }
+
+  return evidence;
+}
+
+/**
+ * buildEvidenceWithNegatives — build evidence including explicitly documented
+ * absent findings.
+ *
+ * Use this variant ONLY when the clinical record explicitly documents that a
+ * finding was assessed and found to be absent (e.g. "no diaphoresis on exam").
+ * Do NOT infer absent evidence from the absence of a field in the result object.
+ */
+export function buildEvidenceWithNegatives(
+  positiveFindings:       string[],
+  documentedAbsentFindings: string[],
+  likelihoods:             Record<string, number> = {},
+): Evidence[] {
+  const evidence: Evidence[] = [];
+
+  for (const finding of positiveFindings) {
+    evidence.push({
+      feature:         finding.toLowerCase().trim(),
+      likelihoodRatio: likelihoods[finding.toLowerCase()] ?? 2.0,
+      present:         true,
+    });
+  }
+
+  for (const finding of documentedAbsentFindings) {
+    evidence.push({
+      feature:         finding.toLowerCase().trim(),
+      likelihoodRatio: likelihoods[finding.toLowerCase()] ?? 2.0,
+      present:         false,   // explicitly documented as absent — not inferred
+    });
+  }
+
+  return evidence;
+}
+
+
+=================================================================================
+FILE: server/clinical/escalationGuard.ts
+=================================================================================
+import { logSecureEvent } from "../ops/secureAudit";
+import { buildEscalationKey, DEFAULT_ESCALATION_SCOPE, EscalationScope } from "./escalationScope";
+
+// ── Store interface — injectable for Redis, in-memory, or test mocks ──────────
+//
+// FIXED: original used a module-level in-memory object. With multiple server
+// instances (normal in any container or PM2 deployment), each instance sees
+// its own independent counters, so a 60% ER referral rate looks like 30% to
+// each instance — the safety threshold never fires. A restart zeros everything.
+//
+// Fix: injectable EscalationStore. In production, inject a RedisEscalationStore
+// constructed with a scoped EscalationScope. In dev, InMemoryEscalationStore
+// is the default. In tests, pass a fresh InMemoryEscalationStore per test.
+
+export interface EscalationStore {
+  incrementTotal(): Promise<number>;
+  incrementEr():    Promise<number>;
+  getCounts():      Promise<{ erCount: number; totalCount: number } | null>;
+  reset():          Promise<void>;
+}
+
+// ── In-memory store ───────────────────────────────────────────────────────────
+// Single-instance only. Use for local dev and unit tests.
+
+export class InMemoryEscalationStore implements EscalationStore {
+  private erCount    = 0;
+  private totalCount = 0;
+  private lastReset  = Date.now();
+  private windowMs:  number;
+
+  constructor(windowMs = 60 * 60 * 1000) {
+    this.windowMs = windowMs;
+  }
+
+  private maybeReset() {
+    if (Date.now() - this.lastReset > this.windowMs) {
+      this.erCount = 0;
+      this.totalCount = 0;
+      this.lastReset = Date.now();
+    }
+  }
+
+  async incrementTotal() { this.maybeReset(); return ++this.totalCount; }
+  async incrementEr()    { this.maybeReset(); return ++this.erCount; }
+  async getCounts()      { this.maybeReset(); return { erCount: this.erCount, totalCount: this.totalCount }; }
+  async reset()          { this.erCount = 0; this.totalCount = 0; this.lastReset = Date.now(); }
+}
+
+// ── Redis client interface (minimal surface) ──────────────────────────────────
+export interface RedisClient {
+  incr(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<void>;
+  mget(...keys: string[]): Promise<(string | null)[]>;
+  del(...keys: string[]): Promise<void>;
+}
+
+// ── Redis store — production implementation ───────────────────────────────────
+//
+// FIXED: original used global keys (escalation:total, escalation:er).
+// Multi-tenant contamination: clinic A's referral rate suppresses clinic B.
+//
+// Fix: keys are derived from EscalationScope via buildEscalationKey().
+// One clinic's behaviour is strictly isolated from every other clinic's.
+//
+// INCR + EXPIRE is atomic per key. TTL is set only on first increment to avoid
+// resetting the window on every call.
+
+export class RedisEscalationStore implements EscalationStore {
+  private readonly windowSec: number;
+
+  constructor(
+    private readonly redis:  RedisClient,
+    private readonly scope:  EscalationScope = DEFAULT_ESCALATION_SCOPE,
+    windowMs = 60 * 60 * 1000,
+  ) {
+    this.windowSec = Math.floor(windowMs / 1000);
+  }
+
+  private totalKey() { return buildEscalationKey(this.scope, "total"); }
+  private erKey()    { return buildEscalationKey(this.scope, "er");    }
+
+  async incrementTotal(): Promise<number> {
+    const count = await this.redis.incr(this.totalKey());
+    if (count === 1) await this.redis.expire(this.totalKey(), this.windowSec);
+    return count;
+  }
+
+  async incrementEr(): Promise<number> {
+    const count = await this.redis.incr(this.erKey());
+    if (count === 1) await this.redis.expire(this.erKey(), this.windowSec);
+    return count;
+  }
+
+  async getCounts(): Promise<{ erCount: number; totalCount: number }> {
+    const [total, er] = await this.redis.mget(this.totalKey(), this.erKey());
+    return {
+      totalCount: total ? parseInt(total, 10) : 0,
+      erCount:    er    ? parseInt(er,    10) : 0,
+    };
+  }
+
+  async reset(): Promise<void> {
+    await this.redis.del(this.totalKey(), this.erKey());
+  }
+}
+
+// ── Escalation configuration ──────────────────────────────────────────────────
+
+export interface EscalationConfig {
+  /** Block if ER referral rate exceeds this fraction. Default: 0.40 */
+  erRateThreshold:  number;
+  /** Block if raw ER count exceeds this per window. Default: 120 */
+  erHourlyCap:      number;
+  /**
+   * Minimum cases in the window before rate-based suppression can fire.
+   *
+   * FIXED: original had no denominator guard. With 1 total / 1 ER, the live
+   * rate is 100% and advisory adjustment triggered immediately — a one-case
+   * weather vane steering the ship. Now requires minCasesPerWindow samples.
+   */
+  minCasesPerWindow: number;
+  /**
+   * Probability delta applied to the ER referral probability AFTER base scoring.
+   *
+   * FIXED: original returned factor: -0.2 with no explanation of what it meant.
+   * Renamed to probabilityDelta and documented: add this value to the raw ER
+   * referral probability (clamped to [0,1]). Negative = suppress referrals.
+   */
+  probabilityDelta: number;
+}
+
+export const DEFAULT_ESCALATION_CONFIG: EscalationConfig = {
+  erRateThreshold:   0.40,
+  erHourlyCap:       120,
+  minCasesPerWindow: 50,
+  probabilityDelta:  -0.20,
+};
+
+export interface EscalationAdjustment {
+  adjust:          boolean;
+  /** Probability delta to add to raw ER referral probability. Clamped to [0,1] by caller. */
+  probabilityDelta: number;
+  /** @deprecated Use probabilityDelta. Kept for backward compat with callers reading .factor */
+  factor:           number;
+  reason:           string;
+  currentRate:      number;
+  hourlyErCount:    number;
+  totalCount:       number;
+  recommendation:   string;
+}
+
+// ── recordDisposition ─────────────────────────────────────────────────────────
+//
+// Call for EVERY disposition, not just ER referrals, so the denominator is accurate.
+// Both store calls are independent: a failure on one is logged but does not
+// suppress the other — a counter failure must never block clinical flow.
+// The escalation guard is a monitoring layer, not a gate.
+
+export async function recordDisposition(
+  disposition: string,
+  store: EscalationStore,
+): Promise<void> {
+  try {
+    await store.incrementTotal();
+    if (disposition.toUpperCase() === "ER_NOW") {
+      await store.incrementEr();
+    }
+  } catch (err) {
+    console.error("[EscalationGuard] Failed to record disposition:", err);
+    logSecureEvent({
+      type:   "ESCALATION_COUNTER_ERROR",
+      action: "RECORD_FAILED",
+      error:  err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── escalationControl ─────────────────────────────────────────────────────────
+//
+// ADVISORY — informs the caller that the AI may be over-referring.
+// Does not block decisions by itself. The safety gate handles blocking.
+//
+// In a multi-instance deployment, counts come from Redis and reflect the
+// true system-wide rate, not per-instance state.
+
+export async function escalationControl(
+  store: EscalationStore,
+  config: EscalationConfig = DEFAULT_ESCALATION_CONFIG,
+): Promise<EscalationAdjustment> {
+  let counts = { erCount: 0, totalCount: 0 };
+
+  try {
+    counts = (await store.getCounts()) ?? { erCount: 0, totalCount: 0 };
+  } catch (err) {
+    console.error("[EscalationGuard] Failed to read counts:", err);
+    logSecureEvent({ type: "ESCALATION_READ_ERROR", action: "GET_COUNTS_FAILED" });
+    // Fail safe: if we can't read counts, assume normal — do not suppress
+    // referrals blindly on a monitoring failure.
+    return {
+      adjust:          false,
+      probabilityDelta: 0,
+      factor:           0,
+      reason:           "counts_unavailable",
+      currentRate:      0,
+      hourlyErCount:    0,
+      totalCount:       0,
+      recommendation:   "Escalation counts unavailable. No advisory suppression applied.",
+    };
+  }
+
+  const { erCount, totalCount } = counts;
+  const liveRate   = totalCount > 0 ? erCount / totalCount : 0;
+  const enoughData = totalCount >= config.minCasesPerWindow;
+
+  const rateExceeded = enoughData && liveRate > config.erRateThreshold;
+  const capExceeded  = erCount > config.erHourlyCap;
+
+  if (rateExceeded || capExceeded) {
+    const reason =
+      rateExceeded && capExceeded ? "rate_and_cap_exceeded"
+      : rateExceeded              ? "over_escalation_rate"
+      :                             "hourly_er_cap_exceeded";
+
+    logSecureEvent({
+      type:          "ESCALATION_CONTROL",
+      action:        "REDUCE",
+      erRate:        liveRate,
+      hourlyErCount: erCount,
+      totalCount,
+      probabilityDelta: config.probabilityDelta,
+      reason,
+    });
+
+    return {
+      adjust:           true,
+      probabilityDelta: config.probabilityDelta,
+      factor:           config.probabilityDelta,  // backward compat alias
+      reason,
+      currentRate:      +liveRate.toFixed(3),
+      hourlyErCount:    erCount,
+      totalCount,
+      recommendation:
+        `Advisory adjustment active (${reason}). ` +
+        `Apply probability delta ${config.probabilityDelta} to ER referral probability after base scoring.`,
+    };
+  }
+
+  return {
+    adjust:           false,
+    probabilityDelta: 0,
+    factor:           0,                          // backward compat alias
+    reason:           enoughData ? "within_normal_range" : "insufficient_sample_size",
+    currentRate:      +liveRate.toFixed(3),
+    hourlyErCount:    erCount,
+    totalCount,
+    recommendation:   enoughData
+      ? "No escalation adjustment needed."
+      : `Only ${totalCount} cases in current window (min ${config.minCasesPerWindow}). Not enough data for rate suppression.`,
+  };
+}
+
+// ── Legacy sync API ───────────────────────────────────────────────────────────
+//
+// Kept for backward compatibility with callers that haven't migrated to the
+// injectable async API. Uses a module-level InMemoryEscalationStore.
+//
+// In production these callers should be migrated to pass a RedisEscalationStore.
+// Until then, this ensures they continue to function while the risk is documented.
+
+const _legacyStore = new InMemoryEscalationStore();
+
+/**
+ * @deprecated Sync fire-and-forget wrapper. Migrate to async recordDisposition(store).
+ */
+export function recordDispositionSync(disposition: string): void {
+  recordDisposition(disposition, _legacyStore).catch(err =>
+    console.error("[EscalationGuard] Legacy recordDisposition failed:", err)
+  );
+}
+
+/**
+ * @deprecated Returns in-memory stats only. Migrate to async escalationControl(store).
+ */
+export function getEscalationStats(): {
+  active: boolean;
+  erRate: number;
+  erCount: number;
+  totalCount: number;
+  threshold: number;
+} {
+  // Sync read from in-memory store — legacyStore.getCounts() is async but
+  // the internal values are synchronously accessible through the class fields.
+  // Cast is safe because InMemoryEscalationStore state is always current.
+  const store = _legacyStore as any;
+  const erCount    = store.erCount    ?? 0;
+  const totalCount = store.totalCount ?? 0;
+  const rate = totalCount > 0 ? +(erCount / totalCount).toFixed(3) : 0;
+  return {
+    active:     true,
+    erRate:     rate,
+    erCount,
+    totalCount,
+    threshold:  DEFAULT_ESCALATION_CONFIG.erRateThreshold,
+  };
+}
+
+
+=================================================================================
+FILE: server/clinical/acuityPreClassifier.ts
+=================================================================================
+export type AcuitySignal =
+  | 'possible_stemi'
+  | 'possible_stroke'
+  | 'possible_sepsis'
+  | 'severe_dyspnea'
+  | 'altered_mental_status'
+  | 'sudden_severe_headache'
+  | 'anaphylaxis'
+  | 'ectopic_pregnancy_rupture'
+  | 'testicular_torsion'
+  | 'meningitis_or_meningococcal_sepsis'
+  | 'aortic_dissection'
+  | 'carbon_monoxide_poisoning'
+  | 'adult_epiglottitis'
+  | 'pediatric_intussusception'
+  | 'none';
+
+export type ErNowSpecificityFlag =
+  | 'absolute_immediate'
+  | 'recheck_in_30m_if_worse';
+
+export interface IntakeSnapshot {
+  chiefComplaint?: string;
+  symptoms: string[];
+  age?: number;
+  sex?: 'male' | 'female' | 'other';
+  history?: string[];
+  vitals?: {
+    heartRate?: number;
+    systolicBP?: number;
+    spo2?: number;
+    temperatureF?: number;
+    respiratoryRate?: number;
+  };
+  modifiers?: Record<string, string | number | boolean | undefined>;
+}
+
+export interface AcuityDecision {
+  matched: boolean;
+  signal: AcuitySignal;
+  confidence: number;
+  rationale: string[];
+  disposition: 'ER_NOW' | 'CONTINUE_PIPELINE';
+  specificityFlag?: ErNowSpecificityFlag;
+  erNowMessage?: string;
+}
+
+function hasAny(haystack: string[], needles: string[]): boolean {
+  const normalized = haystack.map(s => s.toLowerCase());
+  return needles.some(needle => normalized.some(s => s.includes(needle.toLowerCase())));
+}
+
+export function classifyAcuity(snapshot: IntakeSnapshot): AcuityDecision {
+  const symptoms = snapshot.symptoms ?? [];
+  const history = snapshot.history ?? [];
+  const rationale: string[] = [];
+  const { vitals } = snapshot;
+
+  const chestPain    = hasAny(symptoms, ['chest pain', 'pressure in chest', 'chest tightness']);
+  const diaphoresis  = hasAny(symptoms, ['sweating', 'diaphoresis', 'clammy']);
+  const armJawPain   = hasAny(symptoms, ['jaw pain', 'left arm pain', 'arm pain']);
+  const sob          = hasAny(symptoms, ['shortness of breath', 'trouble breathing', 'difficulty breathing']);
+  const facialDroop  = hasAny(symptoms, ['facial droop', 'drooping face']);
+  const armWeakness  = hasAny(symptoms, ['arm weakness', 'leg weakness', 'one-sided weakness']);
+  const speech       = hasAny(symptoms, ['slurred speech', 'trouble speaking', 'aphasia']);
+  const severeHa     = hasAny(symptoms, ['worst headache', 'thunderclap headache', 'sudden severe headache']);
+  const confusion    = hasAny(symptoms, ['confusion', 'altered mental status', 'not acting right']);
+  const fever        = vitals?.temperatureF !== undefined && vitals.temperatureF >= 100.4;
+  const tachycardia  = vitals?.heartRate !== undefined && vitals.heartRate >= 120;
+  const hypotension  = vitals?.systolicBP !== undefined && vitals.systolicBP < 90;
+  const hypoxia      = vitals?.spo2 !== undefined && vitals.spo2 < 90;
+  const tachypnea    = vitals?.respiratoryRate !== undefined && vitals.respiratoryRate >= 30;
+  const rashSwelling = hasAny(symptoms, ['hives', 'facial swelling', 'tongue swelling', 'lip swelling']);
+
+  if (chestPain && (diaphoresis || armJawPain || sob)) {
+    rationale.push('High-risk chest pain constellation detected');
+    return {
+      matched: true, signal: 'possible_stemi', confidence: 0.99, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this symptom pattern requires immediate cardiac evaluation.',
+    };
+  }
+
+  if ((facialDroop && armWeakness) || (speech && armWeakness) || (speech && facialDroop)) {
+    rationale.push('Stroke FAST-pattern detected');
+    return {
+      matched: true, signal: 'possible_stroke', confidence: 0.99, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — stroke symptoms require immediate imaging and intervention.',
+    };
+  }
+
+  if (hypoxia || (sob && tachypnea) || (sob && hasAny(symptoms, ['at rest', 'cannot speak full sentences']))) {
+    rationale.push('Severe dyspnea pattern detected');
+    return {
+      matched: true, signal: 'severe_dyspnea', confidence: 0.98, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — breathing difficulty at this severity requires immediate evaluation.',
+    };
+  }
+
+  if ((confusion && fever && (tachycardia || hypotension)) || (fever && hypotension && tachypnea)) {
+    rationale.push('Possible sepsis physiology detected');
+    return {
+      matched: true, signal: 'possible_sepsis', confidence: 0.97, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this presentation may indicate a life-threatening infection.',
+    };
+  }
+
+  if (confusion && (hypotension || hypoxia)) {
+    rationale.push('Altered mental status with unstable physiology');
+    return {
+      matched: true, signal: 'altered_mental_status', confidence: 0.96, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — altered awareness with unstable vitals requires immediate care.',
+    };
+  }
+
+  if (severeHa && hasAny(symptoms, ['sudden', 'thunderclap', 'neck stiffness', 'passed out'])) {
+    rationale.push('Sudden severe headache with dangerous modifiers');
+    return {
+      matched: true, signal: 'sudden_severe_headache', confidence: 0.97, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this headache pattern requires immediate evaluation.',
+    };
+  }
+
+  if (rashSwelling && (sob || hasAny(symptoms, ['wheezing', 'throat closing', 'difficulty swallowing']))) {
+    rationale.push('Possible anaphylaxis pattern detected');
+    return {
+      matched: true, signal: 'anaphylaxis', confidence: 0.98, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this allergic reaction pattern can become life-threatening within minutes.',
+    };
+  }
+
+  if (
+    snapshot.sex === 'female' &&
+    hasAny(symptoms, ['abdominal pain', 'lower abdominal']) &&
+    hasAny(symptoms, ['missed period', 'vaginal bleeding', 'shoulder pain', 'syncope', 'fainted'])
+  ) {
+    rationale.push('Ectopic pregnancy rupture risk pattern — female + abdominal pain + danger modifiers');
+    return {
+      matched: true, signal: 'ectopic_pregnancy_rupture', confidence: 0.97, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this symptom pattern requires immediate evaluation to rule out a surgical emergency.',
+    };
+  }
+
+  if (
+    snapshot.sex === 'male' &&
+    hasAny(symptoms, ['scrotal pain', 'testicle pain', 'testicular pain']) &&
+    hasAny(symptoms, ['sudden', 'acute', 'severe', 'under 6 hours', 'started suddenly'])
+  ) {
+    rationale.push('Testicular torsion pattern — male + acute scrotal pain');
+    return {
+      matched: true, signal: 'testicular_torsion', confidence: 0.96, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — sudden scrotal pain requires immediate evaluation. Time-sensitive.',
+    };
+  }
+
+  if (
+    hasAny(symptoms, ['severe headache', 'headache']) &&
+    hasAny(symptoms, ['fever', 'temperature']) &&
+    hasAny(symptoms, ['neck stiffness', 'stiff neck', 'photophobia', 'light sensitivity', 'rash', 'altered mental status', 'immunocompromised'])
+  ) {
+    rationale.push('Meningitis/meningococcal pattern — headache + fever + meningeal signs');
+    return {
+      matched: true, signal: 'meningitis_or_meningococcal_sepsis', confidence: 0.97, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this combination of symptoms requires immediate evaluation for meningitis.',
+    };
+  }
+
+  if (
+    hasAny(symptoms, ['tearing chest pain', 'ripping chest pain', 'tearing back pain', 'ripping back pain', 'tearing pain', 'ripping pain']) &&
+    hasAny([...symptoms, ...history], ['hypertension', 'high blood pressure', 'marfan', 'aorta', 'aortic'])
+  ) {
+    rationale.push('Aortic dissection pattern — tearing pain + hypertension/Marfan history');
+    return {
+      matched: true, signal: 'aortic_dissection', confidence: 0.96, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — tearing chest or back pain with this history requires urgent imaging.',
+    };
+  }
+
+  if (
+    hasAny(symptoms, ['headache']) &&
+    hasAny(symptoms, ['nausea', 'vomiting', 'dizziness']) &&
+    hasAny([...symptoms, ...history], ['enclosed space', 'garage', 'heater', 'furnace', 'generator', 'winter', 'multiple people sick', 'carbon monoxide'])
+  ) {
+    rationale.push('Carbon monoxide poisoning pattern — headache + nausea + exposure history');
+    return {
+      matched: true, signal: 'carbon_monoxide_poisoning', confidence: 0.96, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — and leave the building immediately. This may be carbon monoxide poisoning.',
+    };
+  }
+
+  if (
+    hasAny(symptoms, ['sore throat', 'throat pain']) &&
+    hasAny(symptoms, ['drooling', 'cannot swallow', 'unable to swallow', 'stridor', 'muffled voice', 'hot potato voice'])
+  ) {
+    rationale.push('Adult epiglottitis pattern — sore throat + drooling/stridor/dysphagia');
+    return {
+      matched: true, signal: 'adult_epiglottitis', confidence: 0.96, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — throat swelling that interferes with swallowing requires immediate evaluation.',
+    };
+  }
+
+  if (
+    (snapshot.age ?? 99) < 3 &&
+    hasAny(symptoms, ['abdominal pain', 'stomach pain', 'episodic pain', 'drawing up legs', 'pulling up legs', 'knees to chest']) &&
+    hasAny(symptoms, ['bloody stool', 'blood in stool', 'currant jelly stool', 'vomiting', 'lethargy', 'lethargic', 'limp'])
+  ) {
+    rationale.push('Pediatric intussusception pattern — child <3 + episodic abdominal pain + danger signs');
+    return {
+      matched: true, signal: 'pediatric_intussusception', confidence: 0.95, rationale, disposition: 'ER_NOW',
+      specificityFlag: 'absolute_immediate',
+      erNowMessage: 'Go to the ER now — this pain pattern in a young child requires immediate evaluation.',
+    };
+  }
+
+  return {
+    matched: false,
+    signal: 'none',
+    confidence: 0.2,
+    rationale: ['No fast-path life-threatening signature detected'],
+    disposition: 'CONTINUE_PIPELINE',
+  };
+}
+
+
+=================================================================================
+FILE: server/hybrid-reasoning/safetyLayer.ts
+=================================================================================
+export interface SafetyCheckResult {
+  override: boolean;
+  disposition?: "er_now";
+  triggered_flags: string[];
+  reason: string;
+  severity: "critical" | "none";
+}
+
+const RED_FLAGS: Record<string, string[]> = {
+  chest_pain:     ["radiates_left_arm","diaphoresis","shortness_of_breath","syncope","hypotension","tachycardia_rest","severe_pressure"],
+  sore_throat:    ["drooling","muffled_voice","trismus","stridor","inability_to_swallow","neck_stiffness"],
+  abdominal_pain: ["rebound_tenderness","rigidity","guarding","vaginal_bleeding","positive_pregnancy_test","peritonitis_signs","severe_rlq"],
+  headache:       ["worst_headache_of_life","sudden_onset","neurologic_deficit","neck_stiffness","fever","vision_changes","papilledema"],
+  fever:          ["neck_stiffness","photophobia","confusion","petechiae","non_blanching","rigors_sepsis","high_fever_infant"],
+  cough:          ["hemoptysis","hypoxia","cyanosis","severe_respiratory_distress","stridor","drooling"],
+  rash:           ["petechiae","non_blanching","angioedema","anaphylaxis_signs","meningismus"],
+  uti:            ["fever","rigors","confusion","sepsis_signs","urosepsis"],
+  ear_pain:       ["post_auricular_swelling","facial_vesicles","severe_headache","mastoid_erythema"],
+  sinus_pressure: ["periorbital_swelling","vision_changes","severe_headache","altered_consciousness"],
+  anxiety:        ["tachycardia","shortness_of_breath","pleuritic_pain","recent_immobility"],
+  back_pain:      ["tearing_pain","radiation_to_back","hypertensive","pulsatile_mass"],
+  dizziness:      ["diplopia","dysarthria","ataxia","new_onset_elderly","facial_droop"],
+};
+
+const UNIVERSAL_RED_FLAGS = [
+  "altered_consciousness","confusion","sepsis","hypotension","cyanosis",
+  "severe_respiratory_distress","unstable_vital_signs","active_hemorrhage",
+  "loss_of_consciousness","anaphylaxis_signs",
+];
+
+export function runSafetyCheck(complaint: string, features: string[]): SafetyCheckResult {
+  const featureSet = new Set(features.map(f => f.toLowerCase().replace(/\s+/g,"_")));
+  const triggered: string[] = [];
+
+  for (const uf of UNIVERSAL_RED_FLAGS) {
+    if (featureSet.has(uf)) triggered.push(uf);
+  }
+
+  const complaintFlags = RED_FLAGS[complaint.toLowerCase()] ?? [];
+  for (const flag of complaintFlags) {
+    if (featureSet.has(flag)) triggered.push(flag);
+  }
+
+  if (triggered.length > 0) {
+    return {
+      override: true,
+      disposition: "er_now",
+      triggered_flags: triggered,
+      reason: `Safety red flag(s) triggered: ${triggered.join(", ")}. Immediate emergency evaluation required.`,
+      severity: "critical",
+    };
+  }
+
+  return { override: false, triggered_flags: [], reason: "No safety flags triggered.", severity: "none" };
+}
+
+export function getRedFlagsForComplaint(complaint: string): string[] {
+  return RED_FLAGS[complaint.toLowerCase()] ?? [];
+}
+
+export function getAllRedFlags(): Record<string, string[]> {
+  return { ...RED_FLAGS, universal: UNIVERSAL_RED_FLAGS };
+}
+
+
+=================================================================================
+FILE: server/hybrid-reasoning/hybridController.ts
+=================================================================================
+import { loadDataset, ClinicalCase } from "./clinicalDataset";
+import { runSafetyCheck, SafetyCheckResult } from "./safetyLayer";
+import { extractFeatures, extractFromCase, jaccardSimilarity } from "./featureExtractor";
+import { globalProbEngine, ProbabilisticResult } from "./probabilisticEngine";
+import OpenAI from "openai";
+
+export interface SimilarCaseResult {
+  case_id: string;
+  complaint: string;
+  top_diagnosis: string;
+  expected_disposition: string;
+  similarity: number;
+  matched_features: string[];
+  adversarial: boolean;
+}
+
+export interface HybridEvaluationResult {
+  caseId: string;
+  complaint: string;
+  features: string[];
+  age?: number;
+  sex?: string;
+
+  layer1_safety: SafetyCheckResult;
+  layer2_similar_cases: SimilarCaseResult[];
+  layer2_similarity_votes: Array<{ diagnosis: string; votes: number; pct: number }>;
+  layer2_disposition_votes: Array<{ disposition: string; votes: number; pct: number }>;
+  layer3_probabilistic: ProbabilisticResult;
+  layer3_ensemble_differential: Array<{ diagnosis: string; combined_score: number; similarity_score: number; bayesian_score: number }>;
+
+  disposition: string;
+  confidence: number;
+  need_more_info: boolean;
+  next_question: string | null;
+
+  layer4_explanation: string;
+  explanation_generating: boolean;
+
+  reasoning_path: string[];
+  timestamp: string;
+}
+
+let _initialized = false;
+let _caseFeatures: Map<string, ReturnType<typeof extractFromCase>> = new Map();
+let _dataset: ClinicalCase[] = [];
+
+async function ensureInitialized() {
+  if (_initialized) return;
+  _dataset = await loadDataset();
+
+  for (const c of _dataset) {
+    _caseFeatures.set(c.case_id, extractFromCase(c));
+  }
+
+  globalProbEngine.train(_dataset);
+  _initialized = true;
+}
+
+function findSimilarCases(complaint: string, features: string[], age?: number, sex?: string, topK = 5): SimilarCaseResult[] {
+  const queryFeatures = extractFeatures(complaint, features, age, sex);
+
+  return _dataset
+    .map(c => {
+      const cf = _caseFeatures.get(c.case_id)!;
+      const complaintBoost = c.complaint === complaint ? 0.15 : 0;
+      const sim = Math.min(1, jaccardSimilarity(queryFeatures.raw, cf.raw) + complaintBoost);
+      const matched = features.filter(f =>
+        cf.raw.has(`symptom:${f.toLowerCase().replace(/\s+/g,"_")}`)
+      );
+      return { case_id: c.case_id, complaint: c.complaint, top_diagnosis: c.expected_differential[0], expected_disposition: c.expected_disposition, similarity: Math.round(sim * 100) / 100, matched_features: matched, adversarial: !!c.adversarial };
+    })
+    .filter(r => r.similarity > 0.05)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topK);
+}
+
+function computeEnsemble(
+  similarCases: SimilarCaseResult[],
+  probResult: ProbabilisticResult,
+  similarityWeight = 0.35,
+  bayesianWeight = 0.65
+): Array<{ diagnosis: string; combined_score: number; similarity_score: number; bayesian_score: number }> {
+  const simScores: Record<string, number> = {};
+  for (const s of similarCases) {
+    simScores[s.top_diagnosis] = (simScores[s.top_diagnosis] ?? 0) + s.similarity;
+  }
+  const simTotal = Object.values(simScores).reduce((a, b) => a + b, 0.001);
+
+  const allDx = new Set([
+    ...Object.keys(simScores),
+    ...probResult.probabilities.map(p => p.diagnosis),
+  ]);
+
+  return Array.from(allDx).map(dx => {
+    const simS = (simScores[dx] ?? 0) / simTotal;
+    const bayS = probResult.probabilities.find(p => p.diagnosis === dx)?.probability ?? 0;
+    const combined = similarityWeight * simS + bayesianWeight * bayS;
+    return {
+      diagnosis: dx,
+      combined_score: Math.round(combined * 1000) / 1000,
+      similarity_score: Math.round(simS * 1000) / 1000,
+      bayesian_score: Math.round(bayS * 1000) / 1000,
+    };
+  }).sort((a, b) => b.combined_score - a.combined_score).slice(0, 8);
+}
+
+function deriveDisposition(ensemble: ReturnType<typeof computeEnsemble>, probResult: ProbabilisticResult): { disposition: string; confidence: number } {
+  const ER_DX = new Set(["acute_coronary_syndrome","STEMI","pulmonary_embolism","appendicitis","ectopic_pregnancy","subarachnoid_hemorrhage","bacterial_meningitis","meningococcemia","peritonsillar_abscess","aortic_dissection","sepsis","urosepsis","mastoiditis","orbital_cellulitis","cavernous_sinus_thrombosis"]);
+  const URGENT_DX = new Set(["pneumonia","strep_pharyngitis","pyelonephritis","asthma","COPD_exacerbation","herpes_zoster","Ramsay_Hunt_syndrome","cholecystitis","nephrolithiasis"]);
+
+  const top = ensemble[0]?.diagnosis ?? "";
+  const confidence = ensemble[0]?.combined_score ?? 0;
+
+  if (ER_DX.has(top)) return { disposition: "er_now", confidence };
+  if (URGENT_DX.has(top)) return { disposition: "urgent_care", confidence };
+  if (confidence < 0.15 || probResult.isUncertain) return { disposition: "uncertain", confidence };
+  return { disposition: "home_care", confidence };
+}
+
+async function generateExplanation(
+  complaint: string,
+  features: string[],
+  ensemble: Array<{ diagnosis: string; combined_score: number }>,
+  safetyResult: SafetyCheckResult
+): Promise<string> {
+  try {
+    const client = new OpenAI();
+    const topDx = ensemble.slice(0, 3).map(e => `${e.diagnosis} (${(e.combined_score * 100).toFixed(0)}%)`).join(", ");
+
+    const prompt = `You are a clinical reasoning assistant. Given a patient's presenting complaint and symptoms, explain briefly (2-3 sentences) why the top diagnoses are likely. Be concise and clinical.
+
+Complaint: ${complaint.replace(/_/g," ")}
+Symptoms: ${features.join(", ")}
+${safetyResult.override ? `Safety flags triggered: ${safetyResult.triggered_flags.join(", ")}` : ""}
+Top diagnoses: ${topDx}
+
+Provide a brief clinical explanation for why these diagnoses are ranked in this order.`;
+
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 150,
+      temperature: 0.3,
+    });
+    return response.choices[0]?.message?.content?.trim() ?? "Explanation unavailable.";
+  } catch {
+    return `The symptom pattern of ${features.slice(0, 3).join(", ")} associated with ${complaint.replace(/_/g," ")} is consistent with the ranked differential diagnoses based on clinical case memory and probabilistic inference.`;
+  }
+}
+
+export async function evaluateCase(params: {
+  caseId?: string;
+  complaint: string;
+  features: string[];
+  age?: number;
+  sex?: string;
+  generateExplanation?: boolean;
+}): Promise<HybridEvaluationResult> {
+  await ensureInitialized();
+
+  const { complaint, features, age, sex } = params;
+  const caseId = params.caseId ?? `HC_${Date.now()}`;
+  const reasoningPath: string[] = [];
+
+  const layer1 = runSafetyCheck(complaint, features);
+  reasoningPath.push(`L1 Safety: ${layer1.override ? `OVERRIDE → ${layer1.disposition}` : "Pass"}`);
+
+  const similarCases = findSimilarCases(complaint, features, age, sex);
+  const dxVotes: Record<string, number> = {};
+  const dispVotes: Record<string, number> = {};
+  for (const s of similarCases) {
+    dxVotes[s.top_diagnosis] = (dxVotes[s.top_diagnosis] ?? 0) + 1;
+    dispVotes[s.expected_disposition] = (dispVotes[s.expected_disposition] ?? 0) + 1;
+  }
+  const total = similarCases.length || 1;
+  const similarityVotes = Object.entries(dxVotes).map(([diagnosis, votes]) => ({ diagnosis, votes, pct: Math.round(votes / total * 100) })).sort((a, b) => b.votes - a.votes);
+  const dispositionVotes = Object.entries(dispVotes).map(([disposition, votes]) => ({ disposition, votes, pct: Math.round(votes / total * 100) })).sort((a, b) => b.votes - a.votes);
+  reasoningPath.push(`L2 Similarity: ${similarCases.length} cases found, top Dx: ${similarityVotes[0]?.diagnosis ?? "none"}`);
+
+  const probResult = globalProbEngine.evaluate(features, complaint);
+  reasoningPath.push(`L3 Bayes: top Dx ${probResult.topDiagnosis} (${(probResult.topProbability * 100).toFixed(0)}%), entropy=${probResult.uncertaintyScore}`);
+
+  if (layer1.override) {
+    const explanation = params.generateExplanation !== false
+      ? await generateExplanation(complaint, features, [{ diagnosis: "emergency_condition", combined_score: 1 }], layer1)
+      : layer1.reason;
+
+    return {
+      caseId, complaint, features, age, sex,
+      layer1_safety: layer1,
+      layer2_similar_cases: similarCases,
+      layer2_similarity_votes: similarityVotes,
+      layer2_disposition_votes: dispositionVotes,
+      layer3_probabilistic: probResult,
+      layer3_ensemble_differential: [],
+      disposition: "er_now",
+      confidence: 1.0,
+      need_more_info: false,
+      next_question: null,
+      layer4_explanation: `⚠ ${layer1.reason}`,
+      explanation_generating: false,
+      reasoning_path: [...reasoningPath, "Safety override applied → ER_NOW"],
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  if (probResult.isUncertain && probResult.nextBestQuestion) {
+    reasoningPath.push(`Uncertain (entropy=${probResult.uncertaintyScore}) → requesting more info`);
+    return {
+      caseId, complaint, features, age, sex,
+      layer1_safety: layer1,
+      layer2_similar_cases: similarCases,
+      layer2_similarity_votes: similarityVotes,
+      layer2_disposition_votes: dispositionVotes,
+      layer3_probabilistic: probResult,
+      layer3_ensemble_differential: [],
+      disposition: "need_more_info",
+      confidence: probResult.topProbability,
+      need_more_info: true,
+      next_question: probResult.nextBestQuestion,
+      layer4_explanation: "Diagnosis is uncertain. Please answer the next question to improve accuracy.",
+      explanation_generating: false,
+      reasoning_path: reasoningPath,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  const ensemble = computeEnsemble(similarCases, probResult);
+  reasoningPath.push(`Ensemble: top ${ensemble[0]?.diagnosis} (combined=${ensemble[0]?.combined_score?.toFixed(2)})`);
+
+  const { disposition, confidence } = layer1.override
+    ? { disposition: "er_now", confidence: 1.0 }
+    : deriveDisposition(ensemble, probResult);
+  reasoningPath.push(`Disposition: ${disposition} (confidence=${(confidence * 100).toFixed(0)}%)`);
+
+  const explanation = params.generateExplanation !== false
+    ? await generateExplanation(complaint, features, ensemble, layer1)
+    : "Explanation skipped.";
+
+  return {
+    caseId, complaint, features, age, sex,
+    layer1_safety: layer1,
+    layer2_similar_cases: similarCases,
+    layer2_similarity_votes: similarityVotes,
+    layer2_disposition_votes: dispositionVotes,
+    layer3_probabilistic: probResult,
+    layer3_ensemble_differential: ensemble,
+    disposition,
+    confidence: Math.round(confidence * 100) / 100,
+    need_more_info: false,
+    next_question: null,
+    layer4_explanation: explanation,
+    explanation_generating: false,
+    reasoning_path: reasoningPath,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+export async function getHybridEngineStats() {
+  await ensureInitialized();
+  return {
+    dataset_size: _dataset.length,
+    probabilistic_trained: globalProbEngine.isTrained(),
+    adversarial_cases: _dataset.filter(c => c.adversarial).length,
+    complaints_covered: [...new Set(_dataset.map(c => c.complaint))].length,
+  };
+}
+
+export function updateProbabilisticFromOutcome(symptoms: string[], finalDx: string): void {
+  globalProbEngine.updateFromOutcome(symptoms, finalDx);
+}
+
+
+=================================================================================
+FILE: server/hybrid-reasoning/lockedSafetyRegistry.ts
+=================================================================================
+import * as fs from "fs/promises";
+import * as path from "path";
+
+const REGISTRY_FILE = path.join("data", "locked_safety_registry.json");
+
+export interface LockedSafetyRule {
+  id: string;
+  complaint: string;
+  trigger_features: string[];
+  mandatory_disposition: "er_now";
+  rationale: string;
+  version: string;
+  locked_at: string;
+  locked_by: string;
+  immutable: true;
+  audit_hash: string;
+}
+
+export interface RegistryMeta {
+  version: string;
+  locked_at: string;
+  total_rules: number;
+  complaints_covered: number;
+  note: string;
+}
+
+export interface SafetyRegistry {
+  meta: RegistryMeta;
+  rules: LockedSafetyRule[];
+}
+
+function hashRule(rule: Omit<LockedSafetyRule, "audit_hash">): string {
+  const str = [rule.id, rule.complaint, rule.trigger_features.sort().join(","), rule.mandatory_disposition, rule.rationale].join("|");
+  let h = 0;
+  for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+}
+
+const SEED_RULES: Omit<LockedSafetyRule, "audit_hash">[] = [
+  { id: "SR-001", complaint: "chest_pain",     trigger_features: ["radiates_left_arm"],        mandatory_disposition: "er_now", rationale: "Radiation to left arm is a cardinal sign of ACS. Life-threatening if missed.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-002", complaint: "chest_pain",     trigger_features: ["diaphoresis"],              mandatory_disposition: "er_now", rationale: "Diaphoresis with chest pain strongly suggests acute myocardial infarction.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-003", complaint: "chest_pain",     trigger_features: ["shortness_of_breath"],      mandatory_disposition: "er_now", rationale: "Chest pain with dyspnea: PE, ACS, or tension pneumothorax must be excluded emergently.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-004", complaint: "sore_throat",    trigger_features: ["drooling"],                 mandatory_disposition: "er_now", rationale: "Drooling indicates inability to manage secretions — epiglottitis or peritonsillar abscess with airway compromise.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-005", complaint: "sore_throat",    trigger_features: ["muffled_voice"],            mandatory_disposition: "er_now", rationale: "Hot potato voice indicates peritonsillar abscess or deep neck infection. Airway at risk.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-006", complaint: "headache",       trigger_features: ["worst_headache"],           mandatory_disposition: "er_now", rationale: "Thunderclap / worst-ever headache must be treated as subarachnoid hemorrhage until proven otherwise.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-007", complaint: "headache",       trigger_features: ["neck_stiffness"],           mandatory_disposition: "er_now", rationale: "Headache + neck stiffness = meningitis until proven otherwise. Delay = death.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-008", complaint: "headache",       trigger_features: ["confusion"],                mandatory_disposition: "er_now", rationale: "Headache + altered consciousness: hemorrhage, encephalitis, or herniation.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-009", complaint: "abdominal_pain", trigger_features: ["vaginal_bleeding","positive_pregnancy_test"], mandatory_disposition: "er_now", rationale: "Abdominal pain + positive pregnancy test + bleeding = ectopic until proven otherwise. Potentially fatal.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-010", complaint: "abdominal_pain", trigger_features: ["abdominal_rigidity"],       mandatory_disposition: "er_now", rationale: "Board-like rigidity suggests peritonitis or perforated viscus — surgical emergency.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-011", complaint: "fever",          trigger_features: ["neck_stiffness","petechiae"], mandatory_disposition: "er_now", rationale: "Fever + petechiae + neck stiffness = meningococcemia. Highest-urgency medical emergency.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-012", complaint: "fever",          trigger_features: ["confusion"],                mandatory_disposition: "er_now", rationale: "Fever + confusion = septic encephalopathy or CNS infection. Sepsis protocol required.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-013", complaint: "rash",           trigger_features: ["petechiae"],                mandatory_disposition: "er_now", rationale: "Non-blanching petechial rash = meningococcemia until proven otherwise. Minutes matter.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-014", complaint: "cough",          trigger_features: ["hypoxia"],                  mandatory_disposition: "er_now", rationale: "Hypoxia with cough = respiratory failure risk. Immediate O2 assessment required.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-015", complaint: "dizziness",      trigger_features: ["confusion"],                mandatory_disposition: "er_now", rationale: "Dizziness + confusion in elderly: posterior stroke or vertebrobasilar event until proven otherwise.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-016", complaint: "anxiety",        trigger_features: ["tachycardia","shortness_of_breath","recent_immobility"], mandatory_disposition: "er_now", rationale: "Classic PE masquerade: anxiety + tachycardia + SOB after immobility. Wells score required.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-017", complaint: "anxiety",        trigger_features: ["tachycardia","unilateral_leg_swelling"], mandatory_disposition: "er_now", rationale: "DVT-PE axis: tachycardia + unilateral leg swelling cannot be dismissed as anxiety.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-018", complaint: "syncope",        trigger_features: ["chest_tightness"],          mandatory_disposition: "er_now", rationale: "Syncope + chest symptoms = cardiac arrhythmia or structural heart disease. ECG mandatory.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-019", complaint: "back_pain",      trigger_features: ["tachycardia","diaphoresis"], mandatory_disposition: "er_now", rationale: "Tearing back pain + tachycardia + diaphoresis = aortic dissection until proven otherwise.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+  { id: "SR-020", complaint: "shortness_of_breath", trigger_features: ["tachycardia","pleuritic_pain"], mandatory_disposition: "er_now", rationale: "SOB + tachycardia + pleuritic pain = pulmonary embolism rule-out mandatory.", version: "1.0.0", locked_at: "2025-01-01T00:00:00Z", locked_by: "clinical-governance", immutable: true },
+];
+
+function buildRegistry(): SafetyRegistry {
+  const rules: LockedSafetyRule[] = SEED_RULES.map(r => ({
+    ...r,
+    audit_hash: hashRule(r),
+  }));
+  return {
+    meta: {
+      version: "1.0.0",
+      locked_at: "2025-01-01T00:00:00Z",
+      total_rules: rules.length,
+      complaints_covered: [...new Set(rules.map(r => r.complaint))].length,
+      note: "These rules are immutable. No AI learning process may modify them. Changes require a clinical governance review and version bump.",
+    },
+    rules,
+  };
+}
+
+let _registry: SafetyRegistry | null = null;
+
+export async function getLockedRegistry(): Promise<SafetyRegistry> {
+  if (_registry) return _registry;
+  try {
+    const raw = await fs.readFile(REGISTRY_FILE, "utf8");
+    _registry = JSON.parse(raw);
+  } catch {
+    _registry = buildRegistry();
+    await fs.mkdir("data", { recursive: true });
+    await fs.writeFile(REGISTRY_FILE, JSON.stringify(_registry, null, 2), "utf8");
+  }
+  return _registry!;
+}
+
+export async function checkLockedRules(complaint: string, features: string[]): Promise<{
+  triggered: boolean;
+  rules: LockedSafetyRule[];
+  disposition: "er_now" | null;
+  reason: string;
+}> {
+  const registry = await getLockedRegistry();
+  const featureSet = new Set(features.map(f => f.toLowerCase().replace(/\s+/g, "_")));
+  const triggered: LockedSafetyRule[] = [];
+
+  for (const rule of registry.rules) {
+    if (rule.complaint !== complaint && rule.complaint !== "universal") continue;
+    const allMatch = rule.trigger_features.every(tf => featureSet.has(tf));
+    const anyMatch = rule.trigger_features.some(tf => featureSet.has(tf));
+    if (rule.trigger_features.length === 1 ? anyMatch : allMatch) {
+      triggered.push(rule);
+    }
+  }
+
+  return {
+    triggered: triggered.length > 0,
+    rules: triggered,
+    disposition: triggered.length > 0 ? "er_now" : null,
+    reason: triggered.length > 0
+      ? triggered.map(r => `[${r.id}] ${r.rationale}`).join(" | ")
+      : "",
+  };
+}
+
+export async function verifyRuleIntegrity(): Promise<{ valid: boolean; violations: string[] }> {
+  const registry = await getLockedRegistry();
+  const violations: string[] = [];
+  for (const rule of registry.rules) {
+    const expected = hashRule(rule);
+    if (rule.audit_hash !== expected) {
+      violations.push(`Rule ${rule.id} hash mismatch — possible tampering detected.`);
+    }
+  }
+  return { valid: violations.length === 0, violations };
+}
+
+
+=================================================================================
+FILE: server/agent/safety/supervisor.ts
+=================================================================================
+import type { CaseState } from "../../../shared/agentTypes";
+import { detectRedFlags } from "./redFlags";
+
+export type SupervisorDecision =
+  | { allow: true }
+  | { allow: false; reason: string; forceState?: CaseState["routing"]["state"] };
+
+export function supervisorGate(state: CaseState): SupervisorDecision {
+  // Always recompute red flags (state may have been mutated async)
+  const liveFlags = detectRedFlags(state);
+  if (liveFlags.length > 0 || state.redFlags.length > 0) {
+    return { allow: false, reason: "Red flags present", forceState: "EMERGENT_ESCALATION" };
+  }
+  if (!state.disposition) {
+    return { allow: false, reason: "No disposition set", forceState: "REVIEW_REQUIRED" };
+  }
+  return { allow: true };
+}
+
+
+=================================================================================
+FILE: server/agent/scoring/chestPainScore.ts
+=================================================================================
+import type { CaseState } from "../../../shared/agentTypes";
+
+type Tri = "yes" | "no" | "not_sure";
+
+function tri(v: unknown): Tri | null {
+  if (v === "yes" || v === "no" || v === "not_sure") return v;
+  return null;
+}
+
+export interface ChestPainScoringResult {
+  chest_pain_score: number;
+  acs_score: number;
+  pe_score: number;
+  dissection_score: number;
+  pericarditis_score: number;
+  pneumonia_score: number;
+  gerd_score: number;
+  msk_score: number;
+  anxiety_score: number;
+  inputsUsed: string[];
+  cluster: string;
+}
+
+export function computeChestPainScore(state: CaseState): ChestPainScoringResult {
+  const a = state.answers;
+
+  const exertional = tri(a["Q_CP_EXERTIONAL"]);
+  const radiates = tri(a["Q_CP_RADIATES"]);
+  const diaphoresis = tri(a["Q_CP_DIAPHORESIS"]);
+  const sob = tri(a["Q_CP_SOB"]);
+  const syncope = tri(a["Q_CP_SYNCOPE"]);
+  const palpitations = tri(a["Q_CP_PALPITATIONS"]);
+  const reproducible = tri(a["Q_CP_REPRODUCIBLE"]);
+  const pleuritic = tri(a["Q_CP_PLEURITIC"]);
+  const calfSwelling = tri(a["Q_CP_CALF_SWELL"]);
+  const immobility = tri(a["Q_CP_IMMOBILITY"]);
+  const tearing = tri(a["Q_CP_TEARING"]);
+  const neuroSymptoms = tri(a["Q_CP_NEURO"]);
+  const worseFlat = tri(a["Q_CP_WORSE_FLAT"]);
+  const recentViral = tri(a["Q_CP_RECENT_VIRAL"]);
+  const fever = tri(a["Q_CP_FEVER"]);
+  const cough = tri(a["Q_CP_COUGH"]);
+  const antacidRelief = tri(a["Q_CP_ANTACID_RELIEF"]);
+  const burning = tri(a["Q_CP_BURNING"]);
+  const htnSymptoms = tri(a["Q_CP_HTN_SYMPTOMS"]);
+  const stressTrigger = tri(a["Q_CP_STRESS_TRIGGER"]);
+  const tingling = tri(a["Q_CP_TINGLING"]);
+
+  const used = [
+    "Q_CP_EXERTIONAL", "Q_CP_RADIATES", "Q_CP_DIAPHORESIS", "Q_CP_SOB",
+    "Q_CP_SYNCOPE", "Q_CP_PALPITATIONS", "Q_CP_REPRODUCIBLE", "Q_CP_PLEURITIC",
+    "Q_CP_CALF_SWELL", "Q_CP_IMMOBILITY", "Q_CP_TEARING", "Q_CP_NEURO",
+    "Q_CP_WORSE_FLAT", "Q_CP_RECENT_VIRAL", "Q_CP_FEVER", "Q_CP_COUGH",
+    "Q_CP_ANTACID_RELIEF", "Q_CP_BURNING", "Q_CP_HTN_SYMPTOMS",
+    "Q_CP_STRESS_TRIGGER", "Q_CP_TINGLING",
+  ];
+
+  let acs = 0;
+  if (exertional === "yes") acs += 3;
+  if (radiates === "yes") acs += 2;
+  if (diaphoresis === "yes") acs += 3;
+  if (sob === "yes") acs += 1;
+  if (syncope === "yes") acs += 2;
+  if (reproducible === "yes") acs -= 2;
+  if (acs < 0) acs = 0;
+
+  let pe = 0;
+  if (pleuritic === "yes") pe += 2;
+  if (sob === "yes") pe += 3;
+  if (calfSwelling === "yes") pe += 3;
+  if (immobility === "yes") pe += 2;
+
+  let dissection = 0;
+  if (tearing === "yes") dissection += 4;
+  if (neuroSymptoms === "yes") dissection += 3;
+  if (sob === "yes") dissection += 1;
+
+  let pericarditis = 0;
+  if (worseFlat === "yes") pericarditis += 3;
+  if (recentViral === "yes") pericarditis += 2;
+  if (fever === "yes") pericarditis += 1;
+  if (pleuritic === "yes") pericarditis += 1;
+
+  let pneumonia = 0;
+  if (fever === "yes") pneumonia += 3;
+  if (cough === "yes") pneumonia += 2;
+  if (pleuritic === "yes") pneumonia += 1;
+  if (sob === "yes") pneumonia += 1;
+
+  let gerd = 0;
+  if (burning === "yes") gerd += 3;
+  if (antacidRelief === "yes") gerd += 3;
+  if (exertional === "no") gerd += 1;
+  if (sob === "no") gerd += 1;
+
+  let msk = 0;
+  if (reproducible === "yes") msk += 4;
+  if (exertional === "no") msk += 1;
+  if (sob === "no") msk += 1;
+  if (diaphoresis === "no") msk += 1;
+  if (syncope === "no") msk += 1;
+
+  let anxiety = 0;
+  if (stressTrigger === "yes") anxiety += 3;
+  if (tingling === "yes") anxiety += 2;
+  if (palpitations === "yes") anxiety += 1;
+  if (exertional === "no") anxiety += 1;
+  if (sob === "no") anxiety += 1;
+
+  const allScores: Record<string, number> = {
+    CL_CARD_ACS: acs,
+    CL_CARD_PE: pe,
+    CL_CARD_DISSECTION: dissection,
+    CL_CARD_PERICARDITIS: pericarditis,
+    CL_CARD_PNEUMONIA: pneumonia,
+    CL_CARD_GERD: gerd,
+    CL_CARD_MSK: msk,
+    CL_CARD_ANXIETY: anxiety,
+  };
+
+  let cluster = "UNCLASSIFIED";
+  let maxScore = 0;
+  for (const [cid, pts] of Object.entries(allScores)) {
+    if (pts > maxScore) {
+      maxScore = pts;
+      cluster = cid;
+    }
+  }
+
+  const composite = Math.max(acs, pe, dissection, pericarditis, pneumonia, gerd, msk, anxiety);
+
+  return {
+    chest_pain_score: composite,
+    acs_score: acs,
+    pe_score: pe,
+    dissection_score: dissection,
+    pericarditis_score: pericarditis,
+    pneumonia_score: pneumonia,
+    gerd_score: gerd,
+    msk_score: msk,
+    anxiety_score: anxiety,
+    inputsUsed: used,
+    cluster,
+  };
+}
+
+
+=================================================================================
+FILE: server/agent/scoring/headacheScore.ts
+=================================================================================
+import type { CaseState } from "../../../shared/agentTypes";
+
+type Tri = "yes" | "no" | "not_sure";
+
+function tri(v: unknown): Tri | null {
+  if (v === "yes" || v === "no" || v === "not_sure") return v;
+  return null;
+}
+
+export interface HeadacheScoringResult {
+  headache_score: number;
+  tension_score: number;
+  migraine_score: number;
+  sah_score: number;
+  meningitis_ha_score: number;
+  stroke_ha_score: number;
+  gca_score: number;
+  co_toxin_score: number;
+  trauma_ha_score: number;
+  htn_ha_score: number;
+  cluster_ha_score: number;
+  inputsUsed: string[];
+  cluster: string;
+}
+
+export function computeHeadacheScore(state: CaseState): HeadacheScoringResult {
+  const a = state.answers;
+
+  const bilateral = tri(a["Q_HA_BILATERAL"]);
+  const bandLike = tri(a["Q_HA_BAND_LIKE"]);
+  const stress = tri(a["Q_HA_STRESS"]);
+  const unilateral = tri(a["Q_HA_UNILATERAL"]);
+  const throbbing = tri(a["Q_HA_THROBBING"]);
+  const photophobia = tri(a["Q_HA_PHOTOPHOBIA"]);
+  const nausea = tri(a["Q_HA_NAUSEA"]);
+  const priorMigraines = tri(a["Q_HA_PRIOR_MIGRAINES"]);
+  const thunderclap = tri(a["Q_HA_THUNDERCLAP"]);
+  const worstEver = tri(a["Q_HA_WORST_EVER"]);
+  const fever = tri(a["Q_HA_FEVER"]);
+  const neckStiff = tri(a["Q_HA_NECK_STIFF"]);
+  const confusion = tri(a["Q_HA_CONFUSION"]);
+  const weakness = tri(a["Q_HA_WEAKNESS"]);
+  const numbness = tri(a["Q_HA_NUMBNESS"]);
+  const speechChanges = tri(a["Q_HA_SPEECH_CHANGES"]);
+  const ageOver50 = tri(a["Q_HA_AGE_OVER_50"]);
+  const newHeadache = tri(a["Q_HA_NEW_HEADACHE"]);
+  const jawClaudication = tri(a["Q_HA_JAW_CLAUDICATION"]);
+  const visionChanges = tri(a["Q_HA_VISION_CHANGES"]);
+  const householdSick = tri(a["Q_HA_HOUSEHOLD_SICK"]);
+  const trauma = tri(a["Q_HA_TRAUMA"]);
+  const vomiting = tri(a["Q_HA_VOMITING"]);
+  const anticoag = tri(a["Q_HA_ANTICOAG"]);
+  const neuroSymptoms = tri(a["Q_HA_NEURO_SYMPTOMS"]);
+  const orbital = tri(a["Q_HA_ORBITAL"]);
+  const tearing = tri(a["Q_HA_TEARING"]);
+  const restless = tri(a["Q_HA_RESTLESS"]);
+  const recurrentPattern = tri(a["Q_HA_RECURRENT_PATTERN"]);
+
+  const used = [
+    "Q_HA_BILATERAL", "Q_HA_BAND_LIKE", "Q_HA_STRESS", "Q_HA_UNILATERAL",
+    "Q_HA_THROBBING", "Q_HA_PHOTOPHOBIA", "Q_HA_NAUSEA", "Q_HA_PRIOR_MIGRAINES",
+    "Q_HA_THUNDERCLAP", "Q_HA_WORST_EVER", "Q_HA_FEVER", "Q_HA_NECK_STIFF",
+    "Q_HA_CONFUSION", "Q_HA_WEAKNESS", "Q_HA_NUMBNESS", "Q_HA_SPEECH_CHANGES",
+    "Q_HA_AGE_OVER_50", "Q_HA_NEW_HEADACHE", "Q_HA_JAW_CLAUDICATION",
+    "Q_HA_VISION_CHANGES", "Q_HA_HOUSEHOLD_SICK", "Q_HA_TRAUMA", "Q_HA_VOMITING",
+    "Q_HA_ANTICOAG", "Q_HA_NEURO_SYMPTOMS", "Q_HA_ORBITAL", "Q_HA_TEARING",
+    "Q_HA_RESTLESS", "Q_HA_RECURRENT_PATTERN",
+  ];
+
+  let tension = 0;
+  if (bilateral === "yes") tension += 3;
+  if (bandLike === "yes") tension += 3;
+  if (stress === "yes") tension += 2;
+  if (throbbing === "no") tension += 1;
+
+  let migraine = 0;
+  if (unilateral === "yes") migraine += 3;
+  if (throbbing === "yes") migraine += 2;
+  if (photophobia === "yes") migraine += 2;
+  if (nausea === "yes") migraine += 1;
+  if (priorMigraines === "yes") migraine += 2;
+
+  let sah = 0;
+  if (thunderclap === "yes") sah += 5;
+  if (worstEver === "yes") sah += 4;
+  if (neckStiff === "yes") sah += 2;
+  if (vomiting === "yes") sah += 1;
+
+  let meningitisHa = 0;
+  if (fever === "yes") meningitisHa += 4;
+  if (neckStiff === "yes") meningitisHa += 4;
+  if (photophobia === "yes") meningitisHa += 1;
+  if (confusion === "yes") meningitisHa += 2;
+
+  let strokeHa = 0;
+  if (weakness === "yes") strokeHa += 4;
+  if (numbness === "yes") strokeHa += 3;
+  if (speechChanges === "yes") strokeHa += 4;
+  if (visionChanges === "yes") strokeHa += 1;
+
+  let gca = 0;
+  if (ageOver50 === "yes") gca += 3;
+  if (newHeadache === "yes") gca += 2;
+  if (jawClaudication === "yes") gca += 3;
+  if (visionChanges === "yes") gca += 3;
+
+  let coToxin = 0;
+  if (householdSick === "yes") coToxin += 4;
+  if (nausea === "yes") coToxin += 2;
+  if (bilateral === "yes") coToxin += 1;
+
+  let traumaHa = 0;
+  if (trauma === "yes") traumaHa += 4;
+  if (vomiting === "yes") traumaHa += 2;
+  if (confusion === "yes") traumaHa += 3;
+  if (anticoag === "yes") traumaHa += 3;
+
+  let htnHa = 0;
+  if (neuroSymptoms === "yes") htnHa += 3;
+  if (visionChanges === "yes") htnHa += 3;
+  if (nausea === "yes") htnHa += 1;
+
+  let clusterHa = 0;
+  if (orbital === "yes") clusterHa += 4;
+  if (tearing === "yes") clusterHa += 3;
+  if (restless === "yes") clusterHa += 2;
+  if (recurrentPattern === "yes") clusterHa += 2;
+  if (unilateral === "yes") clusterHa += 1;
+
+  const allScores: Record<string, number> = {
+    CL_NEURO_TENSION: tension,
+    CL_NEURO_MIGRAINE: migraine,
+    CL_NEURO_SAH: sah,
+    CL_NEURO_MENINGITIS_HA: meningitisHa,
+    CL_NEURO_STROKE_HA: strokeHa,
+    CL_NEURO_GCA: gca,
+    CL_NEURO_CO_TOXIN: coToxin,
+    CL_NEURO_TRAUMA_HA: traumaHa,
+    CL_NEURO_HTN_HA: htnHa,
+    CL_NEURO_CLUSTER_HA: clusterHa,
+  };
+
+  let cluster = "UNCLASSIFIED";
+  let maxScore = 0;
+  for (const [cid, pts] of Object.entries(allScores)) {
+    if (pts > maxScore) {
+      maxScore = pts;
+      cluster = cid;
+    }
+  }
+
+  const composite = Math.max(
+    tension, migraine, sah, meningitisHa, strokeHa,
+    gca, coToxin, traumaHa, htnHa, clusterHa
+  );
+
+  return {
+    headache_score: composite,
+    tension_score: tension,
+    migraine_score: migraine,
+    sah_score: sah,
+    meningitis_ha_score: meningitisHa,
+    stroke_ha_score: strokeHa,
+    gca_score: gca,
+    co_toxin_score: coToxin,
+    trauma_ha_score: traumaHa,
+    htn_ha_score: htnHa,
+    cluster_ha_score: clusterHa,
+    inputsUsed: used,
+    cluster,
+  };
+}
+
+
+=================================================================================
+FILE: server/agent/scoring/abdPainScore.ts
+=================================================================================
+import type { CaseState } from "../../../shared/agentTypes";
+
+type Tri = "yes" | "no" | "not_sure";
+
+function tri(v: unknown): Tri | null {
+  if (v === "yes" || v === "no" || v === "not_sure") return v;
+  return null;
+}
+
+export interface AbdPainScoringResult {
+  abd_pain_score: number;
+  gastroenteritis_score: number;
+  appendicitis_score: number;
+  cholecystitis_score: number;
+  pancreatitis_score: number;
+  gi_bleed_score: number;
+  aaa_score: number;
+  diverticulitis_score: number;
+  renal_colic_score: number;
+  ectopic_score: number;
+  mesenteric_score: number;
+  inputsUsed: string[];
+  cluster: string;
+}
+
+export function computeAbdPainScore(state: CaseState): AbdPainScoringResult {
+  const a = state.answers;
+
+  const fever = tri(a["Q_AP_FEVER"]);
+  const nausea = tri(a["Q_AP_NAUSEA"]);
+  const vomiting = tri(a["Q_AP_VOMITING"]);
+  const diarrhea = tri(a["Q_AP_DIARRHEA"]);
+  const constipation = tri(a["Q_AP_CONSTIPATION"]);
+  const bloodyStool = tri(a["Q_AP_BLOODY_STOOL"]);
+  const hematemesis = tri(a["Q_AP_HEMATEMESIS"]);
+  const rlqPain = tri(a["Q_AP_RLQ"]);
+  const ruqPain = tri(a["Q_AP_RUQ"]);
+  const llqPain = tri(a["Q_AP_LLQ"]);
+  const epigastric = tri(a["Q_AP_EPIGASTRIC"]);
+  const fattyTrigger = tri(a["Q_AP_FATTY_TRIGGER"]);
+  const backRadiation = tri(a["Q_AP_BACK_RADIATION"]);
+  const missedPeriod = tri(a["Q_AP_MISSED_PERIOD"]);
+  const flankToGroin = tri(a["Q_AP_FLANK_GROIN"]);
+  const hematuria = tri(a["Q_AP_HEMATURIA"]);
+  const hypotension = tri(a["Q_AP_HYPOTENSION"]);
+  const postprandial = tri(a["Q_AP_POSTPRANDIAL"]);
+  const afib = tri(a["Q_AP_AFIB"]);
+
+  const used = [
+    "Q_AP_FEVER", "Q_AP_NAUSEA", "Q_AP_VOMITING", "Q_AP_DIARRHEA",
+    "Q_AP_CONSTIPATION", "Q_AP_BLOODY_STOOL", "Q_AP_HEMATEMESIS",
+    "Q_AP_RLQ", "Q_AP_RUQ", "Q_AP_LLQ", "Q_AP_EPIGASTRIC",
+    "Q_AP_FATTY_TRIGGER", "Q_AP_BACK_RADIATION", "Q_AP_MISSED_PERIOD",
+    "Q_AP_FLANK_GROIN", "Q_AP_HEMATURIA", "Q_AP_HYPOTENSION",
+    "Q_AP_POSTPRANDIAL", "Q_AP_AFIB",
+  ];
+
+  let gastroenteritis = 0;
+  if (diarrhea === "yes") gastroenteritis += 3;
+  if (nausea === "yes") gastroenteritis += 1;
+  if (vomiting === "yes") gastroenteritis += 1;
+  if (fever === "no") gastroenteritis += 1;
+  if (bloodyStool === "no") gastroenteritis += 1;
+
+  let appendicitis = 0;
+  if (rlqPain === "yes") appendicitis += 4;
+  if (fever === "yes") appendicitis += 2;
+  if (nausea === "yes") appendicitis += 1;
+  if (vomiting === "yes") appendicitis += 1;
+
+  let cholecystitis = 0;
+  if (ruqPain === "yes") cholecystitis += 3;
+  if (fattyTrigger === "yes") cholecystitis += 2;
+  if (fever === "yes") cholecystitis += 2;
+  if (nausea === "yes") cholecystitis += 1;
+
+  let pancreatitis = 0;
+  if (epigastric === "yes") pancreatitis += 3;
+  if (backRadiation === "yes") pancreatitis += 3;
+  if (vomiting === "yes") pancreatitis += 2;
+
+  let giBleed = 0;
+  if (bloodyStool === "yes") giBleed += 4;
+  if (hematemesis === "yes") giBleed += 4;
+  if (hypotension === "yes") giBleed += 2;
+
+  let aaa = 0;
+  if (hypotension === "yes") aaa += 3;
+  if (backRadiation === "yes") aaa += 2;
+  if (epigastric === "yes") aaa += 1;
+
+  let diverticulitis = 0;
+  if (llqPain === "yes") diverticulitis += 3;
+  if (fever === "yes") diverticulitis += 2;
+  if (constipation === "yes") diverticulitis += 1;
+
+  let renalColic = 0;
+  if (flankToGroin === "yes") renalColic += 4;
+  if (hematuria === "yes") renalColic += 3;
+  if (nausea === "yes") renalColic += 1;
+
+  let ectopic = 0;
+  if (missedPeriod === "yes") ectopic += 4;
+  if (rlqPain === "yes" || llqPain === "yes") ectopic += 2;
+  if (hypotension === "yes") ectopic += 2;
+
+  let mesenteric = 0;
+  if (afib === "yes") mesenteric += 3;
+  if (postprandial === "yes") mesenteric += 3;
+  if (hypotension === "yes") mesenteric += 2;
+
+  const allScores: Record<string, number> = {
+    CL_GI_GASTROENTERITIS: gastroenteritis,
+    CL_GI_APPENDICITIS: appendicitis,
+    CL_GI_CHOLECYSTITIS: cholecystitis,
+    CL_GI_PANCREATITIS: pancreatitis,
+    CL_GI_GI_BLEED: giBleed,
+    CL_GI_AAA: aaa,
+    CL_GI_DIVERTICULITIS: diverticulitis,
+    CL_GI_RENAL_COLIC: renalColic,
+    CL_GI_ECTOPIC: ectopic,
+    CL_GI_MESENTERIC: mesenteric,
+  };
+
+  let cluster = "UNCLASSIFIED";
+  let maxScore = 0;
+  for (const [cid, pts] of Object.entries(allScores)) {
+    if (pts > maxScore) {
+      maxScore = pts;
+      cluster = cid;
+    }
+  }
+
+  const composite = Math.max(
+    gastroenteritis, appendicitis, cholecystitis, pancreatitis,
+    giBleed, aaa, diverticulitis, renalColic, ectopic, mesenteric
+  );
+
+  return {
+    abd_pain_score: composite,
+    gastroenteritis_score: gastroenteritis,
+    appendicitis_score: appendicitis,
+    cholecystitis_score: cholecystitis,
+    pancreatitis_score: pancreatitis,
+    gi_bleed_score: giBleed,
+    aaa_score: aaa,
+    diverticulitis_score: diverticulitis,
+    renal_colic_score: renalColic,
+    ectopic_score: ectopic,
+    mesenteric_score: mesenteric,
+    inputsUsed: used,
+    cluster,
+  };
+}
+
+
+=================================================================================
+FILE: server/assistant/differentialAggregator.ts
+=================================================================================
+export interface DifferentialCandidate {
+  diagnosis: string
+  score: number
+  signals: string[]
+  icdHint?: string
+}
+
+interface SignalRule {
+  symptom: string
+  boost: number
+  signal: string
+}
+
+const COMPLAINT_RULES: Record<string, {
+  baseSet: Array<{ diagnosis: string; base: number; icd?: string }>
+  signals: SignalRule[]
+  ageBoosts?: Array<{ diagnosis: string; minAge?: number; maxAge?: number; boost: number }>
+  sexBoosts?: Array<{ diagnosis: string; sex: string; boost: number }>
+}> = {
+  sore_throat: {
+    baseSet: [
+      { diagnosis: "Strep Pharyngitis", base: 0.40, icd: "J02.0" },
+      { diagnosis: "Viral Pharyngitis", base: 0.50, icd: "J02.9" },
+      { diagnosis: "Infectious Mononucleosis", base: 0.15, icd: "B27.9" },
+      { diagnosis: "Peritonsillar Abscess", base: 0.05, icd: "J36" },
+      { diagnosis: "Epiglottitis", base: 0.03, icd: "J05.1" },
+    ],
+    signals: [
+      { symptom: "fever", boost: 0.30, signal: "fever present" },
+      { symptom: "white patches", boost: 0.25, signal: "tonsillar exudate" },
+      { symptom: "swollen glands", boost: 0.20, signal: "anterior cervical LAD" },
+      { symptom: "no cough", boost: 0.20, signal: "cough absent (Centor)" },
+      { symptom: "cough", boost: -0.15, signal: "cough present (viral)" },
+      { symptom: "fatigue", boost: 0.10, signal: "systemic fatigue" },
+      { symptom: "difficulty swallowing", boost: 0.15, signal: "odynophagia" },
+      { symptom: "drooling", boost: 0.25, signal: "possible epiglottitis" },
+      { symptom: "uvular deviation", boost: 0.35, signal: "peritonsillar abscess" },
+      { symptom: "trismus", boost: 0.30, signal: "jaw trismus" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Strep Pharyngitis", minAge: 5, maxAge: 15, boost: 0.15 },
+      { diagnosis: "Infectious Mononucleosis", minAge: 15, maxAge: 30, boost: 0.20 },
+    ],
+  },
+
+  cough: {
+    baseSet: [
+      { diagnosis: "Viral Upper Respiratory Infection", base: 0.55, icd: "J06.9" },
+      { diagnosis: "Viral Bronchitis", base: 0.40, icd: "J20.9" },
+      { diagnosis: "Community Acquired Pneumonia", base: 0.15, icd: "J18.9" },
+      { diagnosis: "Asthma Exacerbation", base: 0.10, icd: "J45.901" },
+      { diagnosis: "COVID-19", base: 0.10, icd: "U07.1" },
+      { diagnosis: "Pertussis", base: 0.05, icd: "A37.90" },
+    ],
+    signals: [
+      { symptom: "fever", boost: 0.25, signal: "fever (bacterial vs viral)" },
+      { symptom: "shortness of breath", boost: 0.30, signal: "dyspnea" },
+      { symptom: "chest pain", boost: 0.20, signal: "pleuritic chest pain" },
+      { symptom: "productive", boost: 0.15, signal: "productive cough" },
+      { symptom: "green", boost: 0.15, signal: "purulent sputum" },
+      { symptom: "yellow", boost: 0.10, signal: "colored sputum" },
+      { symptom: "wheezing", boost: 0.25, signal: "wheezing" },
+      { symptom: "paroxysmal", boost: 0.20, signal: "paroxysmal cough (whooping)" },
+      { symptom: "whooping", boost: 0.35, signal: "whooping cough" },
+      { symptom: "night sweats", boost: 0.15, signal: "night sweats (TB/lymphoma)" },
+      { symptom: "hemoptysis", boost: 0.30, signal: "hemoptysis" },
+      { symptom: "travel", boost: 0.10, signal: "travel history" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Community Acquired Pneumonia", minAge: 65, boost: 0.20 },
+      { diagnosis: "Pertussis", maxAge: 6, boost: 0.30 },
+    ],
+  },
+
+  headache: {
+    baseSet: [
+      { diagnosis: "Tension Headache", base: 0.50, icd: "G44.209" },
+      { diagnosis: "Migraine", base: 0.30, icd: "G43.909" },
+      { diagnosis: "Sinusitis", base: 0.20, icd: "J01.90" },
+      { diagnosis: "Hypertensive Headache", base: 0.10, icd: "R51" },
+      { diagnosis: "Subarachnoid Hemorrhage", base: 0.02, icd: "I60.9" },
+      { diagnosis: "Meningitis", base: 0.03, icd: "G03.9" },
+    ],
+    signals: [
+      { symptom: "worst headache", boost: 0.50, signal: "thunderclap headache → SAH" },
+      { symptom: "thunderclap", boost: 0.55, signal: "thunderclap onset" },
+      { symptom: "stiff neck", boost: 0.40, signal: "meningismus" },
+      { symptom: "neck stiffness", boost: 0.40, signal: "neck stiffness" },
+      { symptom: "photophobia", boost: 0.25, signal: "photophobia" },
+      { symptom: "nausea", boost: 0.15, signal: "nausea/vomiting" },
+      { symptom: "aura", boost: 0.30, signal: "migraine aura" },
+      { symptom: "unilateral", boost: 0.20, signal: "unilateral pain (migraine)" },
+      { symptom: "throbbing", boost: 0.20, signal: "throbbing character" },
+      { symptom: "sinus pressure", boost: 0.25, signal: "frontal sinus pressure" },
+      { symptom: "band-like", boost: 0.20, signal: "band-like tension character" },
+      { symptom: "fever", boost: 0.20, signal: "fever with headache" },
+      { symptom: "vision changes", boost: 0.20, signal: "visual symptoms" },
+      { symptom: "confusion", boost: 0.35, signal: "altered mentation" },
+    ],
+  },
+
+  fever: {
+    baseSet: [
+      { diagnosis: "Viral Syndrome", base: 0.50, icd: "B34.9" },
+      { diagnosis: "Influenza", base: 0.30, icd: "J11.1" },
+      { diagnosis: "COVID-19", base: 0.20, icd: "U07.1" },
+      { diagnosis: "Bacterial Infection (unspecified)", base: 0.15, icd: "A49.9" },
+      { diagnosis: "Urinary Tract Infection", base: 0.10, icd: "N39.0" },
+    ],
+    signals: [
+      { symptom: "myalgia", boost: 0.25, signal: "myalgias (influenza)" },
+      { symptom: "body aches", boost: 0.20, signal: "body aches" },
+      { symptom: "rigors", boost: 0.20, signal: "rigors (bacterial)" },
+      { symptom: "dysuria", boost: 0.35, signal: "dysuria → UTI" },
+      { symptom: "cough", boost: 0.15, signal: "respiratory symptoms" },
+      { symptom: "sore throat", boost: 0.15, signal: "pharyngeal involvement" },
+      { symptom: "rash", boost: 0.20, signal: "exanthem" },
+      { symptom: "petechiae", boost: 0.45, signal: "petechiae → meningococcal" },
+      { symptom: "stiff neck", boost: 0.40, signal: "meningismus" },
+      { symptom: "confusion", boost: 0.35, signal: "altered mentation" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Influenza", minAge: 65, boost: 0.15 },
+      { diagnosis: "Bacterial Infection (unspecified)", maxAge: 3, boost: 0.30 },
+    ],
+  },
+
+  ear_pain: {
+    baseSet: [
+      { diagnosis: "Acute Otitis Media", base: 0.45, icd: "H66.9" },
+      { diagnosis: "Otitis Externa", base: 0.35, icd: "H60.9" },
+      { diagnosis: "TMJ Syndrome", base: 0.15, icd: "M26.60" },
+      { diagnosis: "Referred Pain (dental/throat)", base: 0.10, icd: "H92.0" },
+    ],
+    signals: [
+      { symptom: "discharge", boost: 0.25, signal: "ear discharge" },
+      { symptom: "hearing loss", boost: 0.20, signal: "conductive hearing loss" },
+      { symptom: "fever", boost: 0.25, signal: "fever → AOM" },
+      { symptom: "swimming", boost: 0.30, signal: "swimmer's ear" },
+      { symptom: "jaw pain", boost: 0.25, signal: "TMJ involvement" },
+      { symptom: "itching", boost: 0.20, signal: "pruritus → OE" },
+      { symptom: "dizziness", boost: 0.15, signal: "vestibular symptoms" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Acute Otitis Media", maxAge: 6, boost: 0.25 },
+    ],
+  },
+
+  abdominal_pain: {
+    baseSet: [
+      { diagnosis: "Gastroenteritis", base: 0.40, icd: "K59.1" },
+      { diagnosis: "Irritable Bowel Syndrome", base: 0.25, icd: "K58.9" },
+      { diagnosis: "Appendicitis", base: 0.10, icd: "K37" },
+      { diagnosis: "Peptic Ulcer Disease", base: 0.10, icd: "K27.9" },
+      { diagnosis: "Cholecystitis", base: 0.08, icd: "K81.9" },
+      { diagnosis: "Kidney Stone", base: 0.08, icd: "N20.0" },
+    ],
+    signals: [
+      { symptom: "right lower quadrant", boost: 0.35, signal: "RLQ pain → appendicitis" },
+      { symptom: "periumbilical", boost: 0.20, signal: "periumbilical → appendicitis" },
+      { symptom: "right upper quadrant", boost: 0.30, signal: "RUQ → cholecystitis" },
+      { symptom: "rebound", boost: 0.35, signal: "rebound tenderness → peritonitis" },
+      { symptom: "vomiting", boost: 0.15, signal: "nausea/vomiting" },
+      { symptom: "diarrhea", boost: 0.25, signal: "diarrhea → gastroenteritis" },
+      { symptom: "bloody stool", boost: 0.30, signal: "hematochezia" },
+      { symptom: "fever", boost: 0.20, signal: "fever → infectious/surgical" },
+      { symptom: "flank", boost: 0.25, signal: "flank pain → urolithiasis" },
+      { symptom: "radiation", boost: 0.20, signal: "radiating pain → colic" },
+      { symptom: "fatty food", boost: 0.25, signal: "fat-related → biliary" },
+    ],
+    sexBoosts: [
+      { diagnosis: "Cholecystitis", sex: "female", boost: 0.10 },
+    ],
+  },
+
+  chest_pain: {
+    baseSet: [
+      { diagnosis: "Musculoskeletal Chest Pain", base: 0.45, icd: "M94.0" },
+      { diagnosis: "GERD / Esophageal Spasm", base: 0.25, icd: "K21.0" },
+      { diagnosis: "Acute Coronary Syndrome", base: 0.10, icd: "I25.10" },
+      { diagnosis: "Pulmonary Embolism", base: 0.05, icd: "I26.99" },
+      { diagnosis: "Pericarditis", base: 0.05, icd: "I30.9" },
+    ],
+    signals: [
+      { symptom: "crushing", boost: 0.35, signal: "crushing chest pain → ACS" },
+      { symptom: "radiation arm", boost: 0.35, signal: "radiation to arm → ACS" },
+      { symptom: "diaphoresis", boost: 0.30, signal: "diaphoresis → ACS" },
+      { symptom: "shortness of breath", boost: 0.25, signal: "dyspnea" },
+      { symptom: "pleuritic", boost: 0.25, signal: "pleuritic → PE/pericarditis" },
+      { symptom: "worse lying flat", boost: 0.20, signal: "positional → pericarditis" },
+      { symptom: "heartburn", boost: 0.30, signal: "burning → GERD" },
+      { symptom: "palpitations", boost: 0.20, signal: "palpitations" },
+      { symptom: "leg swelling", boost: 0.20, signal: "DVT → PE" },
+      { symptom: "recent surgery", boost: 0.25, signal: "recent surgery → PE" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Acute Coronary Syndrome", minAge: 45, boost: 0.20 },
+    ],
+    sexBoosts: [
+      { diagnosis: "Acute Coronary Syndrome", sex: "male", boost: 0.10 },
+    ],
+  },
+
+  urinary: {
+    baseSet: [
+      { diagnosis: "Urinary Tract Infection", base: 0.55, icd: "N39.0" },
+      { diagnosis: "Pyelonephritis", base: 0.15, icd: "N10" },
+      { diagnosis: "Kidney Stone", base: 0.15, icd: "N20.0" },
+      { diagnosis: "Prostatitis", base: 0.10, icd: "N41.0" },
+      { diagnosis: "Interstitial Cystitis", base: 0.08, icd: "N30.10" },
+    ],
+    signals: [
+      { symptom: "dysuria", boost: 0.30, signal: "dysuria → UTI/STI" },
+      { symptom: "frequency", boost: 0.25, signal: "urinary frequency" },
+      { symptom: "fever", boost: 0.30, signal: "fever → pyelonephritis" },
+      { symptom: "flank pain", boost: 0.35, signal: "CVA tenderness → pyelonephritis" },
+      { symptom: "hematuria", boost: 0.25, signal: "hematuria → stone/tumor" },
+      { symptom: "colicky", boost: 0.30, signal: "colicky → urolithiasis" },
+      { symptom: "discharge", boost: 0.30, signal: "urethral discharge → STI" },
+    ],
+    sexBoosts: [
+      { diagnosis: "Prostatitis", sex: "male", boost: 0.20 },
+      { diagnosis: "Urinary Tract Infection", sex: "female", boost: 0.10 },
+    ],
+  },
+
+  rash: {
+    baseSet: [
+      { diagnosis: "Contact Dermatitis", base: 0.35, icd: "L25.9" },
+      { diagnosis: "Eczema", base: 0.25, icd: "L30.9" },
+      { diagnosis: "Viral Exanthem", base: 0.20, icd: "B09" },
+      { diagnosis: "Urticaria", base: 0.20, icd: "L50.9" },
+      { diagnosis: "Cellulitis", base: 0.10, icd: "L03.90" },
+      { diagnosis: "Tinea Corporis", base: 0.10, icd: "B35.4" },
+    ],
+    signals: [
+      { symptom: "itching", boost: 0.20, signal: "pruritic → allergic/eczema" },
+      { symptom: "fever", boost: 0.25, signal: "fever → viral/infectious" },
+      { symptom: "spreading", boost: 0.20, signal: "spreading → cellulitis" },
+      { symptom: "warmth", boost: 0.20, signal: "warm → cellulitis" },
+      { symptom: "bullseye", boost: 0.50, signal: "target lesion → Lyme disease" },
+      { symptom: "blisters", boost: 0.25, signal: "vesicular → varicella/zoster" },
+      { symptom: "shingles", boost: 0.40, signal: "dermatomal → herpes zoster" },
+      { symptom: "contact", boost: 0.30, signal: "contact exposure" },
+      { symptom: "ring", boost: 0.25, signal: "annular → tinea" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Eczema", maxAge: 12, boost: 0.15 },
+    ],
+  },
+
+  dizziness: {
+    baseSet: [
+      { diagnosis: "Benign Paroxysmal Positional Vertigo", base: 0.35, icd: "H81.10" },
+      { diagnosis: "Vestibular Neuritis", base: 0.20, icd: "H81.20" },
+      { diagnosis: "Meniere's Disease", base: 0.10, icd: "H81.0" },
+      { diagnosis: "Orthostatic Hypotension", base: 0.20, icd: "I95.1" },
+      { diagnosis: "Labyrinthitis", base: 0.15, icd: "H83.09" },
+      { diagnosis: "Central Vertigo (CVA/TIA)", base: 0.05, icd: "R42" },
+    ],
+    signals: [
+      { symptom: "positional", boost: 0.30, signal: "positional → BPPV" },
+      { symptom: "spinning", boost: 0.20, signal: "true vertigo" },
+      { symptom: "hearing loss", boost: 0.25, signal: "sensorineural hearing loss" },
+      { symptom: "tinnitus", boost: 0.25, signal: "tinnitus → Meniere's" },
+      { symptom: "nausea", boost: 0.15, signal: "nausea" },
+      { symptom: "on standing", boost: 0.30, signal: "orthostatic" },
+      { symptom: "double vision", boost: 0.35, signal: "diplopia → central" },
+      { symptom: "facial numbness", boost: 0.35, signal: "cranial nerve → central" },
+      { symptom: "ataxia", boost: 0.35, signal: "ataxia → cerebellar" },
+    ],
+  },
+
+  back_pain: {
+    baseSet: [
+      { diagnosis: "Lumbar Muscle Strain", base: 0.50, icd: "M54.5" },
+      { diagnosis: "Lumbar Disc Herniation", base: 0.20, icd: "M51.16" },
+      { diagnosis: "Lumbar Spinal Stenosis", base: 0.10, icd: "M48.06" },
+      { diagnosis: "Pyelonephritis", base: 0.08, icd: "N10" },
+      { diagnosis: "Vertebral Compression Fracture", base: 0.05, icd: "M80.08" },
+    ],
+    signals: [
+      { symptom: "radiation leg", boost: 0.30, signal: "radiculopathy" },
+      { symptom: "sciatica", boost: 0.35, signal: "sciatic distribution" },
+      { symptom: "fever", boost: 0.30, signal: "fever → infectious/discitis" },
+      { symptom: "dysuria", boost: 0.30, signal: "urinary symptoms → pyelonephritis" },
+      { symptom: "bowel", boost: 0.40, signal: "bowel/bladder → cauda equina" },
+      { symptom: "bladder", boost: 0.40, signal: "bladder dysfunction → cauda equina" },
+      { symptom: "numbness", boost: 0.25, signal: "neurological deficit" },
+      { symptom: "weakness", boost: 0.30, signal: "motor weakness" },
+      { symptom: "trauma", boost: 0.25, signal: "traumatic mechanism" },
+      { symptom: "osteoporosis", boost: 0.25, signal: "osteoporosis → compression fracture" },
+    ],
+    ageBoosts: [
+      { diagnosis: "Vertebral Compression Fracture", minAge: 65, boost: 0.20 },
+      { diagnosis: "Lumbar Spinal Stenosis", minAge: 60, boost: 0.15 },
+    ],
+  },
+}
+
+function symMatch(symptoms: string, symptom: string): boolean {
+  return symptoms.toLowerCase().includes(symptom.toLowerCase())
+}
+
+export function aggregateDifferential(params: {
+  complaint: string
+  symptoms: string
+  age?: number
+  sex?: string
+  features?: string[]
+  similarityVotes?: Array<{ diagnosis: string; score: number }>
+}): DifferentialCandidate[] {
+  const { complaint, symptoms, age, sex, similarityVotes = [] } = params
+  const symsLower = symptoms.toLowerCase()
+
+  const ruleset = COMPLAINT_RULES[complaint]
+  if (!ruleset) {
+    return [{ diagnosis: "Unknown Complaint", score: 0.5, signals: ["complaint not in registry"] }]
+  }
+
+  const scores: Record<string, { score: number; signals: string[]; icd?: string }> = {}
+
+  for (const base of ruleset.baseSet) {
+    scores[base.diagnosis] = { score: base.base, signals: [], icd: base.icd }
+  }
+
+  for (const rule of ruleset.signals) {
+    if (symMatch(symsLower, rule.symptom)) {
+      for (const dx of ruleset.baseSet) {
+        if (scores[dx.diagnosis]) {
+          scores[dx.diagnosis].score += rule.boost
+          scores[dx.diagnosis].signals.push(rule.signal)
+        }
+      }
+    }
+  }
+
+  if (age !== undefined && ruleset.ageBoosts) {
+    for (const ab of ruleset.ageBoosts) {
+      if (scores[ab.diagnosis]) {
+        const inRange =
+          (ab.minAge === undefined || age >= ab.minAge) &&
+          (ab.maxAge === undefined || age <= ab.maxAge)
+        if (inRange) {
+          scores[ab.diagnosis].score += ab.boost
+          scores[ab.diagnosis].signals.push(`age ${age} in range`)
+        }
+      }
+    }
+  }
+
+  if (sex && ruleset.sexBoosts) {
+    for (const sb of ruleset.sexBoosts) {
+      if (scores[sb.diagnosis] && sex.toLowerCase().startsWith(sb.sex)) {
+        scores[sb.diagnosis].score += sb.boost
+        scores[sb.diagnosis].signals.push(`sex: ${sex}`)
+      }
+    }
+  }
+
+  for (const vote of similarityVotes) {
+    const name = vote.diagnosis.toLowerCase()
+    for (const dx of Object.keys(scores)) {
+      if (dx.toLowerCase().includes(name) || name.includes(dx.toLowerCase().split(" ")[0])) {
+        scores[dx].score += vote.score * 0.4
+        scores[dx].signals.push(`similar case vote (${vote.score.toFixed(2)})`)
+      }
+    }
+  }
+
+  return Object.entries(scores)
+    .map(([diagnosis, v]) => ({
+      diagnosis,
+      score: Math.min(1, Math.max(0, v.score)),
+      signals: [...new Set(v.signals)],
+      icdHint: v.icd,
+    }))
+    .sort((a, b) => b.score - a.score)
+}
+
+
+=================================================================================
+FILE: server/assistant/clinicalFusionEngine.ts
+=================================================================================
+export type FusionPriority = "routine" | "urgent" | "emergency";
+
+export interface FusionInput {
+  differential: Array<{ diagnosis: string; confidence: number; urgency?: string }>;
+  safetyAlerts: Array<{ message: string; severity: string }>;
+  urgency: { level: string; score: number };
+  contradictions: Array<{ diagnosis: string; conflict: string }>;
+  debateWinner?: { agentId: string; conclusion: string; confidence: number } | null;
+  uncertainty: number;
+}
+
+export interface FusionOutput {
+  finalPriority: FusionPriority;
+  dominantSignal: string;
+  reasoningSummary: string;
+  conflictsDetected: string[];
+  reinforcingSignals: string[];
+  overrideApplied: boolean;
+}
+
+export function runClinicalFusion(input: FusionInput): FusionOutput {
+  const { safetyAlerts, urgency, differential, contradictions, debateWinner, uncertainty } = input;
+
+  const conflicts: string[] = [];
+  const reinforcing: string[] = [];
+
+  // ───── 1. SAFETY DOMINATES EVERYTHING ─────────────────────────────────────
+  if (safetyAlerts.length > 0) {
+    // Cross-check: debate also says emergency?
+    if (debateWinner?.conclusion === "emergency" || debateWinner?.agentId === "safety_engine") {
+      reinforcing.push("debate_confirms_emergency");
+    }
+    // Cross-check: differential mentions high-urgency dx?
+    const highUrgencyDx = differential.find(d => d.urgency === "emergency" || d.urgency === "critical");
+    if (highUrgencyDx) reinforcing.push(`high_urgency_dx:${highUrgencyDx.diagnosis}`);
+
+    return {
+      finalPriority: "emergency",
+      dominantSignal: "safety_alert",
+      reasoningSummary: `Safety alerts present — clinical fusion forces emergency: ${safetyAlerts.slice(0, 2).map(a => a.message).join("; ")}`,
+      conflictsDetected: conflicts,
+      reinforcingSignals: reinforcing,
+      overrideApplied: true,
+    };
+  }
+
+  // ───── 2. DEBATE WINNER SAYS EMERGENCY (even without formal safety alert) ──
+  if (debateWinner?.conclusion === "emergency" && (debateWinner?.confidence ?? 0) >= 0.70) {
+    reinforcing.push("agent_debate_emergency_winner");
+    return {
+      finalPriority: "emergency",
+      dominantSignal: "debate_engine",
+      reasoningSummary: `Agent debate produced emergency winner (${debateWinner.agentId}, confidence ${(debateWinner.confidence * 100).toFixed(0)}%)`,
+      conflictsDetected: conflicts,
+      reinforcingSignals: reinforcing,
+      overrideApplied: true,
+    };
+  }
+
+  // ───── 3. CONTRADICTION + HIGH UNCERTAINTY → ESCALATE ────────────────────
+  if (contradictions.length > 0 && uncertainty > 0.55) {
+    conflicts.push(...contradictions.slice(0, 2).map(c => `${c.diagnosis}: ${c.conflict}`));
+    return {
+      finalPriority: "urgent",
+      dominantSignal: "contradiction_uncertainty",
+      reasoningSummary: `${contradictions.length} clinical contradiction(s) with high uncertainty (${(uncertainty * 100).toFixed(0)}%) — escalated to urgent`,
+      conflictsDetected: conflicts,
+      reinforcingSignals: reinforcing,
+      overrideApplied: false,
+    };
+  }
+
+  // ───── 4. URGENCY SCORE ───────────────────────────────────────────────────
+  if (urgency.level === "urgent" || urgency.level === "emergency" || urgency.level === "critical" || urgency.score >= 0.60) {
+    if (differential.length > 0 && differential[0].confidence > 0.55) {
+      reinforcing.push(`differential_supports:${differential[0].diagnosis}`);
+    }
+    if (debateWinner?.conclusion === "urgent") reinforcing.push("debate_confirms_urgent");
+    return {
+      finalPriority: "urgent",
+      dominantSignal: "urgency_score",
+      reasoningSummary: `High urgency score (${(urgency.score * 100).toFixed(0)}%) — level: ${urgency.level}`,
+      conflictsDetected: conflicts,
+      reinforcingSignals: reinforcing,
+      overrideApplied: false,
+    };
+  }
+
+  // ───── 5. CONFLICT: low urgency but high uncertainty ─────────────────────
+  if (urgency.score < 0.40 && uncertainty > 0.55) {
+    conflicts.push(`low_urgency(${(urgency.score * 100).toFixed(0)}%) + high_uncertainty(${(uncertainty * 100).toFixed(0)}%) mismatch`);
+  }
+
+  // ───── 6. DIFFERENTIAL-DRIVEN ─────────────────────────────────────────────
+  const topDx = differential[0]?.diagnosis ?? "unknown";
+  if (differential.length > 0 && differential[0].confidence > 0.65) {
+    reinforcing.push(`strong_differential:${topDx}`);
+  }
+
+  return {
+    finalPriority: "routine",
+    dominantSignal: "differential",
+    reasoningSummary: `Routine — top differential: ${topDx} (${differential.length > 0 ? (differential[0].confidence * 100).toFixed(0) + "% confidence" : "no differential"})`,
+    conflictsDetected: conflicts,
+    reinforcingSignals: reinforcing,
+    overrideApplied: false,
+  };
+}
+
+
+=================================================================================
+FILE: server/routes/intakeFlowRoutes.ts
+=================================================================================
+import { Router } from "express";
+import { listEnabledComplaints } from "../services/complaintMatchService";
+import { getRequiredQuestions } from "../services/questionFlowService";
+import { buildTelegramMiniAppSchema } from "../integrations/telegramBot";
+import { buildWhatsAppFlow } from "../integrations/whatsappFlow";
+import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
+
+export const intakeFlowRouter = Router();
+
+function mapAnswerType(at: string): "yes_no" | "single_select" | "free_text" {
+  if (at === "number") return "single_select";
+  if (at === "enum") return "single_select";
+  return "yes_no";
+}
+
+intakeFlowRouter.get("/complaints", (_req, res) => {
+  try {
+    const all = listEnabledComplaints();
+    res.json({
+      complaints: all.map((c: any) => ({
+        slug: c.CC_ID,
+        label: c.LABEL,
+        aliases: c.ALIASES ? c.ALIASES.split(";").map((a: string) => a.trim()).filter(Boolean) : [],
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+intakeFlowRouter.get("/telegram-flow/:complaintId", (req, res) => {
+  try {
+    const slug = req.params.complaintId;
+    const questions = getRequiredQuestions(slug);
+
+    if (!questions.length) {
+      return res.status(404).json({ error: `No questions found for complaint: ${slug}` });
+    }
+
+    const complaints = listEnabledComplaints() as any[];
+    const meta = complaints.find((c) => c.CC_ID === slug);
+    const title = meta?.LABEL ?? slug.replace(/_/g, " ");
+
+    const telegramQuestions = questions.map((q) => {
+      const type = mapAnswerType(q.ANSWER_TYPE);
+      let options: string[] | undefined;
+      if (q.ANSWER_TYPE === "number") {
+        options = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+      } else if (type === "yes_no") {
+        options = ["Yes", "No"];
+      }
+      return { id: q.Q_ID, text: q.QUESTION_TEXT, type, options };
+    });
+
+    const schema = buildTelegramMiniAppSchema(slug, title, telegramQuestions);
+
+    res.json({
+      complaintSlug: slug,
+      complaintLabel: title,
+      questionCount: questions.length,
+      schema,
+      deepLink: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? "AuralynBot"}?start=${slug}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+intakeFlowRouter.get("/whatsapp-flow/:complaintId", (req, res) => {
+  try {
+    const slug = req.params.complaintId;
+    const questions = getRequiredQuestions(slug);
+
+    if (!questions.length) {
+      return res.status(404).json({ error: `No questions found for complaint: ${slug}` });
+    }
+
+    const complaints = listEnabledComplaints() as any[];
+    const meta = complaints.find((c) => c.CC_ID === slug);
+    const title = meta?.LABEL ?? slug.replace(/_/g, " ");
+
+    const waQuestions = questions.map((q) => {
+      let options: string[] | undefined;
+      if (q.ANSWER_TYPE === "number") {
+        options = ["1 — Mild", "2", "3", "4", "5", "6", "7", "8", "9", "10 — Severe"];
+      } else {
+        options = ["Yes", "No"];
+      }
+      return { id: q.Q_ID, text: q.QUESTION_TEXT, options };
+    });
+
+    const flow = buildWhatsAppFlow(slug, title, waQuestions);
+
+    res.json({
+      complaintSlug: slug,
+      complaintLabel: title,
+      questionCount: questions.length,
+      flow,
+      twilioFormat: {
+        note: "For Twilio WhatsApp, questions are delivered sequentially with numbered replies.",
+        preview: waQuestions.slice(0, 3).map((q, i) => ({
+          questionNumber: i + 1,
+          message: `${q.text}\n\n${(q.options ?? []).map((o, j) => `${j + 1}️⃣ ${o}`).join("\n")}\n\nReply with a number.`,
+        })),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+intakeFlowRouter.post("/submit", async (req, res) => {
+  try {
+    const { complaintSlug, answers } = req.body as {
+      complaintSlug: string;
+      answers: Record<string, unknown>;
+    };
+
+    if (!complaintSlug) return res.status(400).json({ error: "complaintSlug is required" });
+
+    const triage = await runOrchestratorTriage({
+      complaintSlug,
+      answers: answers ?? {},
+    });
+
+    const dispositionLabel: Record<string, string> = {
+      er_send: "Emergency — Go to ER",
+      urgent_care: "Go to Urgent Care",
+      pcp: "See Your Doctor",
+      self_care: "Self-Care at Home",
+    };
+
+    res.json({
+      disposition: triage.disposition,
+      dispositionLabel: dispositionLabel[triage.disposition] ?? triage.disposition,
+      topCluster: triage.topCluster,
+      confidence: triage.confidence,
+      rfTriggered: triage.rfTriggered ?? [],
+      consistencyFlags: triage.consistencyFlags ?? [],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+=================================================================================
+FILE: server/routes/complaintIntake.routes.ts
+=================================================================================
+import { Router, Request, Response } from "express";
+import { runComplaintGraph } from "../services/complaintNodeRunner";
+import { CaseStateSchema } from "../../shared/agentTypes";
+
+const router = Router();
+
+const activeSessions = new Map<string, any>();
+
+function getOrCreateState(conversationId: string, overrides?: any): any {
+  let state = activeSessions.get(conversationId);
+  if (!state) {
+    state = CaseStateSchema.parse({
+      caseId: conversationId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      chiefComplaint: "",
+      answers: {},
+      routing: { state: "INTAKE_PENDING" },
+    });
+  }
+  if (overrides) {
+    if (overrides.chiefComplaint) state.chiefComplaint = overrides.chiefComplaint;
+    if (overrides.demographics) state.demographics = { ...(state.demographics || {}), ...overrides.demographics };
+    if (overrides.modifiers) state.modifiers = { ...(state.modifiers || {}), ...overrides.modifiers };
+  }
+  return state;
+}
+
+router.post("/start", async (req: Request, res: Response) => {
+  try {
+    const { conversationId, chiefComplaintText, demographics, modifiers } = req.body;
+
+    if (!conversationId || !chiefComplaintText) {
+      return res.status(400).json({ ok: false, error: "conversationId and chiefComplaintText are required" });
+    }
+
+    const state = getOrCreateState(conversationId, {
+      chiefComplaint: chiefComplaintText,
+      demographics,
+      modifiers,
+    });
+
+    const ccId = chiefComplaintText.toLowerCase().trim().replace(/[\s-]+/g, "_");
+
+    const result = await runComplaintGraph(state, ccId);
+    activeSessions.set(conversationId, result.state);
+
+    res.json({
+      ok: true,
+      done: result.done,
+      pendingAction: result.pendingAction || null,
+      routing: result.state.routing,
+      currentNode: result.currentNode,
+      events: result.events.slice(-5),
+    });
+  } catch (e: any) {
+    console.error("[complaintIntake/start] error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "Server error" });
+  }
+});
+
+router.post("/answer", async (req: Request, res: Response) => {
+  try {
+    const { conversationId, questionId, answer } = req.body;
+
+    if (!conversationId || !questionId || answer === undefined) {
+      return res.status(400).json({ ok: false, error: "conversationId, questionId, and answer are required" });
+    }
+
+    const state = activeSessions.get(conversationId);
+    if (!state) {
+      return res.status(404).json({ ok: false, error: "Session not found. Call /start first." });
+    }
+
+    state.answers = state.answers || {};
+    state.answers[questionId] = answer;
+    state.updatedAt = new Date().toISOString();
+
+    if (state.questionQueue) {
+      state.questionQueue = state.questionQueue.map((q: any) =>
+        q.questionId === questionId ? { ...q, answered: true } : q
+      );
+    }
+
+    if (state.redFlagGate?.evaluated) {
+      state.redFlagGate.evaluated = false;
+    }
+    state.scores = {};
+    state.disposition = undefined;
+    state.dispositionReasonCodes = [];
+    state.recommendedActions = [];
+    (state as any).caseConfidence = undefined;
+    (state as any).activeClusters = [];
+
+    const ccId = state.normalizedComplaint || state.chiefComplaint?.toLowerCase().trim().replace(/[\s-]+/g, "_") || "";
+
+    const result = await runComplaintGraph(state, ccId);
+    activeSessions.set(conversationId, result.state);
+
+    res.json({
+      ok: true,
+      done: result.done,
+      pendingAction: result.pendingAction || null,
+      routing: result.state.routing,
+      currentNode: result.currentNode,
+      disposition: result.state.disposition,
+      scores: result.state.scores,
+      events: result.events.slice(-5),
+    });
+  } catch (e: any) {
+    console.error("[complaintIntake/answer] error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "Server error" });
+  }
+});
+
+router.get("/session/:conversationId", async (req: Request, res: Response) => {
+  try {
+    const { conversationId } = req.params;
+    const state = activeSessions.get(conversationId);
+    if (!state) {
+      return res.status(404).json({ ok: false, error: "Session not found" });
+    }
+
+    res.json({
+      ok: true,
+      caseId: state.caseId,
+      chiefComplaint: state.chiefComplaint,
+      normalizedComplaint: state.normalizedComplaint,
+      routing: state.routing,
+      disposition: state.disposition,
+      scores: state.scores,
+      activeClusters: state.activeClusters,
+      answeredCount: Object.keys(state.answers || {}).length,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || "Server error" });
+  }
+});
+
+export default router;
+
+
+=================================================================================
+FILE: server/clinical/finalPipeline.ts
+=================================================================================
+/**
+ * Final Governed Pipeline (Section 8) — v1.1.0
+ *
+ * 8-stage authoritative clinical flow:
+ *   1. NLP Intake              — normalise free-text → canonical ICD-10
+ *   1.5 Multi-Complaint Fusion — detect high-acuity compound syndromes (NEW)
+ *   2. Hybrid Reasoning        — deterministic fusion first, Bayesian fallback
+ *   3. Safety Pipeline         — Sepsis / PEWS / OB / Mental-Health gate
+ *   4. Explainability          — 1-line physician summary
+ *   5. Versioned RLHF Proposal — never autonomous, always gated
+ *   6. Security Log            — audit every invocation
+ *   7. Human-Factors Emit      — INTAKE_REVIEWED telemetry
+ *   8. FHIR Sync Trigger       — async publish to EHR worker (non-blocking)
+ */
+
+import { structuredIntake }           from "./nlpIntake";
+import { hybridReasoning }            from "./hybridReasoning";
+import { safetyPipeline }             from "./safetyPipeline";
+import { generateSummary }            from "./physicianSummary";
+import { fuseComplaints }             from "./multiComplaintFusion";
+import { proposeWeightUpdate }        from "../learning/versionedRLHF";
+import { logSecurityEvent }           from "../ops/security";
+import { trackPhysicianInteraction }  from "./humanFactors";
+import { canLearn }                   from "../release/modelFreeze";
+import { publish }                    from "../events/bus";
+import { Topics }                     from "../events/topics";
+import { recordFlywheelEntry, inferSpecialty } from "../moat/flywheelEngine";
+import { recordNetworkContribution }           from "../moat/networkLearning";
+import { evaluateRarity }                      from "../moat/rareCaseEngine";
+import { updateClinicValue }                   from "../moat/clinicLockIn";
+
+export interface FinalPipelineInput {
+  freeText?:    string;
+  complaint?:   string;
+  symptoms?:    string[];
+  vitals?:      Record<string, number>;
+  history?:     string[];
+  patientId?:   string;
+  encounterId?: string;
+  physicianId?: string;
+  clinicId?:    string;
+  ageYears?:    number;
+  isPregnant?:  boolean;
+  actualOutcome?: string;
+  [key: string]: any;
+}
+
+export interface FinalPipelineOutput {
+  encounterId:        string;
+  patientId:          string;
+  normalizedInput:    ReturnType<typeof structuredIntake>;
+  fusionResult:       { suspicion: string; priority: string; rationale: string; matchedSigns: string[] } | null;
+  topDiagnosis:       string;
+  confidence:         number;
+  differential:       Array<{ dx: string; id?: string; score: number; label?: string }>;
+  explainability:     string;
+  safetyDisposition:  string;
+  safetyFlags:        string[];
+  physicianSummary:   string;
+  rlhfProposal:       { accepted: boolean; proposalId: string; reason?: string } | null;
+  durationMs:         number;
+  pipelineVersion:    string;
+  governedAt:         string;
+  fhirSyncQueued:     boolean;
+  /** Per-stage latency breakdown — every stage is timed, none is omitted */
+  stageTimings:       Record<string, number>;
+  /** True if any non-critical stage failed — does not block clinical output */
+  degraded:           boolean;
+  /** Set when FHIR sync fails — operations must investigate */
+  fhirError?:         string;
+}
+
+const PIPELINE_VERSION = "1.3.0";
+
+// ── Per-stage timing helpers ──────────────────────────────────────────────────
+// timedStage: critical stage — any error propagates up and aborts the pipeline.
+// timedOptional: non-critical stage — error is captured, never thrown.
+
+function timedStage<T>(
+  stageName: string,
+  timings:   Record<string, number>,
+  fn:        () => T
+): T {
+  const t0 = Date.now();
+  try {
+    return fn();
+  } finally {
+    timings[stageName] = Date.now() - t0;
+  }
+}
+
+function timedOptional<T>(
+  stageName: string,
+  timings:   Record<string, number>,
+  fn:        () => T,
+  fallback:  T
+): { value: T; failed: boolean; error?: string } {
+  const t0 = Date.now();
+  try {
+    const value = fn();
+    timings[stageName] = Date.now() - t0;
+    return { value, failed: false };
+  } catch (err) {
+    timings[stageName] = Date.now() - t0;
+    const message = err instanceof Error ? err.message : String(err);
+    return { value: fallback, failed: true, error: message };
+  }
+}
+
+// ── RLHF governance gate ──────────────────────────────────────────────────────
+// RUNTIME assertion — "never autonomous, always gated" is a comment; this is
+// a contractual check. Any RLHF proposal that doesn't pass this assertion is
+// not stored and not returned in the pipeline output.
+
+export function assertRlhfGated(proposal: unknown): void {
+  if (!proposal || typeof proposal !== "object") {
+    throw new Error("[RLHF] Proposal is not an object");
+  }
+  const p = proposal as Record<string, unknown>;
+  if (p.requiresHumanApproval !== true) {
+    throw new Error(
+      `[RLHF] GOVERNANCE VIOLATION: requiresHumanApproval=${p.requiresHumanApproval}. ` +
+      `All RLHF proposals must require human approval before application.`
+    );
+  }
+}
+
+export function runFinalPipeline(input: FinalPipelineInput): FinalPipelineOutput {
+  const start       = Date.now();
+  const encounterId = input.encounterId ?? `ENC-${Date.now()}`;
+  const patientId   = input.patientId   ?? "unknown";
+  const timings: Record<string, number> = {};
+  let   degraded = false;
+
+  // ── 1. NLP Intake — CRITICAL ───────────────────────────────────────────────
+  // Short-circuits if complaint is empty. An empty complaint cannot safely
+  // proceed through clinical stages — the patient would receive a "no issues
+  // found" result for a complaint the system never actually processed.
+  const normalizedInput = timedStage("stage1_nlp_intake", timings, () => {
+    const result = structuredIntake({
+      ...input,
+      freeText: input.freeText ?? input.complaint ?? "",
+    });
+    const rawText = input.freeText ?? input.complaint ?? "";
+    if (!result.complaintLabel && !rawText.trim()) {
+      throw new Error(
+        `[Pipeline] Stage 1 NLP produced empty complaint. ` +
+        `Pipeline cannot proceed without a parseable complaint.`
+      );
+    }
+    return result;
+  });
+
+  const symptoms = [
+    ...(normalizedInput.symptomCodes ?? []).map((s: any) => s.raw as string),
+    ...(input.symptoms ?? []),
+  ].filter(Boolean);
+
+  // ── 1.5 Multi-Complaint Fusion (compound syndrome detection) ──────────────
+  let fusionResult: FinalPipelineOutput["fusionResult"] = null;
+  let fusionEscalation = false;
+  const fusionStage = timedOptional("stage1_5_fusion", timings, () => {
+    const vitals = input.vitals ?? {};
+    const fusion = fuseComplaints({
+      symptoms,
+      age:    input.ageYears,
+      vitals: {
+        heartRate: vitals.heartRate ?? vitals.hr,
+        tempC:     vitals.tempC ?? vitals.temp,
+        sbp:       vitals.sbp ?? vitals.systolicBP,
+        o2Sat:     vitals.o2Sat ?? vitals.spo2,
+        respRate:  vitals.respRate ?? vitals.respiratoryRate,
+      },
+    });
+    return fusion ?? null;
+  }, null);
+  if (!fusionStage.failed && fusionStage.value) {
+    const f = fusionStage.value;
+    fusionResult     = { suspicion: f.suspicion, priority: f.priority, rationale: f.rationale, matchedSigns: f.matchedSigns };
+    fusionEscalation = f.priority === "CRITICAL" || f.priority === "HIGH";
+  }
+  if (fusionStage.failed) degraded = true;
+
+  // ── 2. Hybrid Reasoning — CRITICAL ────────────────────────────────────────
+  const reasoning = timedStage("stage2_reasoning", timings, () =>
+    hybridReasoning({
+      symptoms,
+      complaint: normalizedInput.complaintLabel ?? input.complaint ?? "",
+      vitals:    input.vitals ?? {},
+    })
+  );
+
+  // ── 3. Safety Pipeline Gate — CRITICAL ────────────────────────────────────
+  let safetyDisposition = "ROUTINE";
+  const safetyFlags: string[] = [];
+
+  if (fusionEscalation && fusionResult) {
+    safetyDisposition = fusionResult.priority === "CRITICAL" ? "ER_NOW" : "URGENT";
+    safetyFlags.push(`FUSION:${fusionResult.suspicion}`);
+  }
+
+  const safetyStage = timedOptional("stage3_safety", timings, () =>
+    safetyPipeline({
+      symptoms,
+      vitals:     input.vitals  ?? {},
+      history:    input.history ?? [],
+      ageYears:   input.ageYears,
+      isPregnant: input.isPregnant ?? false,
+    }),
+  null);
+  if (!safetyStage.failed && safetyStage.value) {
+    const sr = safetyStage.value;
+    if (sr.disposition === "ER_NOW" || safetyDisposition === "ROUTINE") safetyDisposition = sr.disposition;
+    if ((sr as any).flags)     safetyFlags.push(...(sr as any).flags);
+    if ((sr as any).triggered) safetyFlags.push((sr as any).triggered);
+  }
+  if (safetyStage.failed) degraded = true;
+
+  // ── 4. Physician 1-Line Summary — OPTIONAL ────────────────────────────────
+  const summaryStage = timedOptional("stage4_physician_summary", timings, () => {
+    const s = generateSummary({
+      topDiagnosis: fusionResult?.suspicion ?? reasoning.topDiagnosis,
+      disposition:  safetyDisposition,
+      confidence:   reasoning.confidence,
+      differential: reasoning.differential.map((d) => ({ dx: d.dx, score: d.score })),
+    });
+    let headline = s.headline;
+    if (fusionResult) {
+      headline = `⚠ ${fusionResult.suspicion.toUpperCase()} suspected [${fusionResult.priority}]. ${headline}`;
+    }
+    return headline;
+  }, `Likely ${reasoning.topDiagnosis} — confidence ${(reasoning.confidence * 100).toFixed(0)}%.`);
+  const physicianSummary = summaryStage.value;
+  if (summaryStage.failed) degraded = true;
+
+  // ── 5. Versioned RLHF Proposal — OPTIONAL + GATED ─────────────────────────
+  // RUNTIME governance assertion: "never autonomous, always gated" is enforced
+  // by assertRlhfGated(). Any proposal that doesn't pass this assertion is
+  // not stored and not returned. A governance violation is logged as critical.
+  let rlhfProposal: FinalPipelineOutput["rlhfProposal"] = null;
+  const rlhfStage = timedOptional("stage5_rlhf", timings, () => {
+    if (!canLearn() || !reasoning.topDiagnosis) return null;
+    const raw = proposeWeightUpdate({
+      diagnosisKey: (reasoning as any).topDiagnosisId ?? reasoning.topDiagnosis,
+      delta:        0.005,
+      rationale:    `Governed pipeline proposal for encounter ${encounterId}`,
+      proposedBy:   `governed_pipeline_v${PIPELINE_VERSION}`,
+      outcome:      input.actualOutcome,
+    });
+    // Tag the proposal with the governance fields the gate requires.
+    // If proposeWeightUpdate() ever returns a different shape, the assertion catches it.
+    const tagged = { ...raw, requiresHumanApproval: true as const, status: "pending_review" as const };
+    assertRlhfGated(tagged);
+    return tagged;
+  }, null);
+  if (!rlhfStage.failed) {
+    rlhfProposal = rlhfStage.value;
+  } else {
+    degraded = true;
+    if (rlhfStage.error?.includes("GOVERNANCE VIOLATION")) {
+      console.error("[Pipeline] RLHF GOVERNANCE VIOLATION:", rlhfStage.error);
+    }
+  }
+
+  const durationMs = Date.now() - start;
+
+  // ── 6. Security / Access Log — OPTIONAL ───────────────────────────────────
+  const secLogStage = timedOptional("stage6_security_log", timings, () =>
+    logSecurityEvent({
+      type:     "PIPELINE_RUN",
+      userId:   input.physicianId,
+      clinicId: input.clinicId,
+      path:     "/governed-pipeline/run",
+      detail:   { encounterId, durationMs, topDx: reasoning.topDiagnosis, fusion: fusionResult?.suspicion },
+    }),
+  undefined);
+  if (secLogStage.failed) degraded = true;
+
+  // ── 7. Human Factors Telemetry — OPTIONAL ─────────────────────────────────
+  if (input.physicianId) {
+    const hfStage = timedOptional("stage7_human_factors", timings, () =>
+      trackPhysicianInteraction({
+        physicianId: input.physicianId!,
+        encounterId,
+        action:      "INTAKE_REVIEWED",
+        durationMs,
+        success:     true,
+      }),
+    undefined);
+    if (hfStage.failed) degraded = true;
+  } else {
+    timings["stage7_human_factors"] = 0;
+  }
+
+  // ── 8. FHIR Sync Trigger — NON-BLOCKING, error captured ───────────────────
+  // "Non-blocking" means the patient response is not held for FHIR.
+  // But errors are explicitly captured and surfaced — a FHIR failure is a
+  // data integrity issue that operations must know about.
+  let fhirSyncQueued = false;
+  let fhirError: string | undefined;
+  const fhirStage = timedOptional("stage8_fhir_sync", timings, () =>
+    publish(Topics.FhirSyncRequested, {
+      clinicId:     input.clinicId ?? "default",
+      encounterId,
+      patientId,
+      encounter: {
+        id:           encounterId,
+        complaint:    normalizedInput.complaintLabel ?? input.complaint ?? "",
+        status:       "triage_complete",
+        triageResult: {
+          topDiagnosis:    fusionResult?.suspicion ?? reasoning.topDiagnosis,
+          disposition:     safetyDisposition,
+          confidence:      reasoning.confidence,
+          safetyFlags,
+          fusionSuspicion: fusionResult?.suspicion ?? null,
+        },
+      },
+      patient: {
+        id:    patientId,
+        phone: input.phone ?? null,
+        name:  input.name  ?? null,
+      },
+    }),
+  Promise.resolve());
+  if (!fhirStage.failed) {
+    fhirSyncQueued = true;
+  } else {
+    fhirError = fhirStage.error;
+    degraded  = true;
+    console.error(`[Pipeline] FHIR sync failed for encounter ${encounterId}:`, fhirStage.error);
+  }
+
+  // ── 9. Moat Data Flywheel (async, non-blocking) ────────────────────────────
+  const clinicId  = (input as any).clinicId ?? "default";
+  const diagnosis = fusionResult?.suspicion ?? reasoning.topDiagnosis ?? "unknown";
+  const specialty = inferSpecialty(input.complaint ?? "", diagnosis);
+  ;(async () => {
+    try {
+      const rarity = await evaluateRarity(diagnosis);
+      await Promise.all([
+        recordFlywheelEntry({
+          encounterId,
+          clinicId,
+          complaint:    input.complaint ?? "",
+          topDiagnosis: diagnosis,
+          disposition:  safetyDisposition,
+          confidence:   reasoning.confidence,
+          fusionHit:    !!fusionResult,
+          rareCase:     rarity.rare,
+          specialty,
+          validated:    false,   // set to true when physician confirms
+          ts:           new Date().toISOString(),
+        }),
+        recordNetworkContribution({
+          clinicId,
+          specialty,
+          diagnosis,
+          disposition: safetyDisposition,
+          ts: new Date().toISOString(),
+        }),
+        updateClinicValue(clinicId, {
+          encounters:   1,
+          diagnoses:    [diagnosis],
+          specialties:  [specialty],
+          rarePatterns: rarity.rare ? 1 : 0,
+        }),
+      ]);
+    } catch { /* fire-and-forget — never block triage */ }
+  })();
+
+  return {
+    encounterId,
+    patientId,
+    normalizedInput,
+    fusionResult,
+    topDiagnosis:     fusionResult?.suspicion ?? reasoning.topDiagnosis,
+    confidence:       reasoning.confidence,
+    differential:     reasoning.differential,
+    explainability:   reasoning.explainability,
+    safetyDisposition,
+    safetyFlags,
+    physicianSummary,
+    rlhfProposal,
+    durationMs,
+    pipelineVersion:  PIPELINE_VERSION,
+    governedAt:       new Date().toISOString(),
+    fhirSyncQueued,
+    stageTimings:     timings,
+    degraded,
+    ...(fhirError !== undefined ? { fhirError } : {}),
+  };
+}
+
+export function getFinalPipelineStats() {
+  return {
+    active:          true,
+    pipelineVersion: PIPELINE_VERSION,
+    stages:          10,
+    stageNames: [
+      "NLP Intake (empty-complaint guard)",
+      "Multi-Complaint Fusion",
+      "Hybrid Reasoning",
+      "Safety Pipeline (priority-ordered, structurally enforced)",
+      "Physician Summary",
+      "Versioned RLHF Proposal (gated)",
+      "Security Log",
+      "Human Factors Telemetry",
+      "FHIR Sync Trigger (error-captured)",
+      "Moat Data Flywheel",
+    ],
+  };
+}
+
+// ── Global safety gate ────────────────────────────────────────────────────────
+//
+// Call this after runFinalPipeline() to enforce that:
+//   (a) the safety pipeline actually ran   — if safetyDisposition is missing,
+//       block all output
+//   (b) a degraded system did not produce  — if degraded=true and disposition
+//       a safety-critical result without    is not routine, escalate to
+//       human review                        physician
+//
+// CRITICAL: the null check on safetyDisposition MUST come before any property
+// access on the output object. This function contains both checks — the
+// missing-safety check is executed first, then the degraded+critical check.
+// Swapping those two lines would mean a null deref fires before the guard.
+
+export function globalClinicalSafetyGate(result: FinalPipelineOutput): void {
+  // ── Guard 1: safety pipeline must have run ───────────────────────────────
+  // Check this FIRST — before any access to safety-related fields.
+  if (!result.safetyDisposition) {
+    throw new Error("[SafetyGate] Safety pipeline missing — BLOCK ALL OUTPUT");
+  }
+
+  // ── Guard 2: no safety-critical decision under degraded conditions ────────
+  // Only checked after we know safetyDisposition is present.
+  const isCritical = result.safetyDisposition === "ER_NOW" || result.safetyDisposition === "URGENT_24H";
+  if (result.degraded && isCritical) {
+    throw new Error(
+      `[SafetyGate] System degraded (degraded=true) during safety-critical decision ` +
+      `(disposition=${result.safetyDisposition}) — escalate to physician for manual review`
+    );
+  }
+}
+
