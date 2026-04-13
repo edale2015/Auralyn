@@ -1,0 +1,154 @@
+Real-Time Document Processing Using LLMs and Agents: What Actually Works
+Pankaj
+Pankaj
+
+Follow
+4 min read
+·
+Feb 15, 2026
+140
+
+
+2
+
+
+
+
+
+From PDF chaos to LLM-powered document agents.. a working RAG pipeline
+
+Press enter or click to view image in full size
+
+Planning in progress: code, coffee and a hand-drawn workflow on a worn wooden desk.
+Most of the critical knowledge inside any organisation is trapped in documents. Contracts, invoices, financial statements, compliance filings.. all sitting in PDFs that machines still struggle to extract from reliably.
+
+For years we solved this with OCR and regex. It worked, until a vendor changed their invoice format and everything broke.
+
+Hit the paywall? No worries, read the full post here for free.
+
+The core problem was never reading characters off a page. It was understanding what those characters mean. That is where LLMs and agents change the game.
+
+This post walks through the pipeline I have been building, with code we can run today.
+
+The pipeline, in four pieces
+Parsing turns a messy PDF into clean structured text. If this step fails, everything downstream fails.
+Chunking + Embedding splits that text into searchable vectors. Standard RAG.
+Retrieval finds the most relevant pieces when someone asks a question.
+The Agent is the brain.. it decides what to search, interprets results and self-corrects when the first answer is not good enough.
+Let me walk through each one.
+
+Parsing: where most pipelines break
+If our parser mangles a table or scrambles reading order, our LLM will confidently give us wrong answers based on garbled input. This step is everything.
+
+Two tools have earned my trust.
+
+Docling (open source, runs locally)
+From IBM Research, MIT licensed. Handles PDFs, DOCX, PPTX, HTML, images. Understands page layout, table structure, reading order.
+
+Our data never leaves the machine.
+
+from docling.document_converter import DocumentConverter
+
+converter = DocumentConverter()
+result = converter.convert("quarterly_report.pdf")
+markdown = result.document.export_to_markdown()py
+Five lines. Tables stay as tables. Headings stay hierarchical.
+
+IBM also shipped Granite-Docling-258M, a 260M parameter vision-language model that does the whole conversion in a single pass.
+
+📎 github.com/docling-project/docling
+
+LlamaParse (cloud API, best for complex layouts)
+From LlamaIndex. Particularly strong on nested tables, charts and embedded images.
+
+The tradeoff is our data goes to the cloud.
+
+from llama_cloud_services import LlamaParse
+from llama_index.core import SimpleDirectoryReader
+
+parser = LlamaParse(api_key="llx-...", result_type="markdown")
+documents = SimpleDirectoryReader(
+    "./data", file_extractor={".pdf": parser}
+).load_data()
+Both tools plug directly into LangChain and LlamaIndex. No proprietary lock-in.
+
+📎 github.com/run-llama/llama_cloud_services
+
+RAG: ground the LLM in real content
+Without retrieval, LLMs hallucinate. With it, they become remarkably accurate.
+
+The pattern is simple: split documents into chunks, embed them as vectors, store them and at query time find the chunks closest to the question.
+
+Those chunks become the LLM’s context.
+
+Here is a working pipeline with LangChain and ChromaDB:
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_chroma import Chroma
+
+loader = PyPDFLoader("contract.pdf")
+chunks = RecursiveCharacterTextSplitter(
+    chunk_size=1000, chunk_overlap=200
+).split_documents(loader.load())
+vectorstore = Chroma.from_documents(
+    documents=chunks,
+    embedding=OpenAIEmbeddings(),
+    persist_directory="./chroma_db",
+)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+Things I learned the hard way:
+
+Chunk size matters more than we think. Too small, we lose context. Too large, we dilute relevance. I have settled around 800–1200 tokens with 200 overlaps, but this depends on our data.
+
+For a fully private pipeline, swap OpenAI embeddings for nomic-embed-text via Ollama. No API calls leaving our environment.
+
+That retriever object becomes a tool the agent can call autonomously. Which brings us to the exciting part.
+
+The agent: where documents become conversations
+An agent is not a chatbot. It is an LLM that can decide what tools to use, plan a sequence of actions and try again when the first attempt is not good enough.
+
+LangChain, built on LangGraph for orchestration, makes this surprisingly clean:
+
+from langchain.agents import create_agent
+from langchain.tools import tool
+
+@tool
+def search_contracts(query: str) -> str:
+    """Search the contract database for relevant clauses."""
+    results = retriever.invoke(query)
+    return "\n\n".join([doc.page_content for doc in results])
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-5-20250929",
+    tools=[search_contracts],
+    system_prompt=(
+        "You are a contract analysis assistant. "
+        "Search for relevant clauses before answering. "
+        "Always cite which section your answer comes from."
+    ),
+)
+response = agent.invoke({
+    "messages": [{"role": "user",
+    "content": "Can either party terminate early?"}]
+})
+What happens under the hood: the agent receives the question, decides it needs to search, calls search_contracts, reads the returned chunks, synthesises an answer with citations.
+
+If the first search is not enough, it reformulates and tries again.
+
+All without us writing control flow logic. The LLM reasons through it.
+
+📎 LangChain Agents docs · RAG tutorial
+
+The rough edges (being honest)
+Parsing is still the bottleneck. Scanned PDFs with poor resolution, handwritten annotations, highly stylised layouts.. still cause problems. Always inspect parsed output.
+Latency is real. For true real-time use, pre-index documents and only run retrieval + generation at query time.
+Hallucination is reduced, not eliminated. RAG grounds the LLM in real content, but does not make hallucination impossible. Build in verification, especially for finance and legal.
+Where this is heading
+The most interesting development right now is what LlamaIndex calls agentic OCR.. where parsing itself becomes an agent loop. Instead of parsing once and hoping, an agentic parser makes a first pass, evaluates its own confidence, re-processes uncertain sections with different strategies and only passes forward results that meet a quality threshold.
+
+The pass-through rate, documents processed end-to-end without human review, keeps climbing. That is what makes this genuinely transformative for organisations processing thousands of documents daily.
+
+The tools are open source. The code works. The community is moving fast.
+
+If we have been waiting for the right time to move from rule-based extraction to LLM-powered document intelligence.. this is it.
