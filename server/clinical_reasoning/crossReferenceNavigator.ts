@@ -55,8 +55,9 @@ const REFERENCE_PATTERNS: Array<{ pattern: RegExp; type: ReferenceType }> = [
   { pattern: /refer\s+to\s+(Appendix|Table|Figure|Algorithm)\s+([A-Z0-9]+)/gi, type: "appendix" },
   { pattern: /\((?:see|cf\.)\s+(Appendix|Table|Figure|Section)\s+([A-Z0-9.]+)\)/gi, type: "unknown" },
   // Clinical-specific
-  { pattern: /see\s+(?:dosing|drug|treatment)\s+table/gi,     type: "table"      },
-  { pattern: /per\s+(?:sepsis|ACLS|BLS|ATLS)\s+protocol/gi,  type: "protocol"   },
+  { pattern: /see\s+(?:dosing|drug|treatment)\s+table/gi,         type: "table"    },
+  { pattern: /refer\s+to\s+(?:dosing|drug|treatment)\s+table/gi,  type: "table"    },
+  { pattern: /per\s+(?:sepsis|ACLS|BLS|ATLS)\s+protocol/gi,      type: "protocol" },
   { pattern: /(?:per|see)\s+(?:UpToDate|CDC|NIH|AHA|ACC)\s+guideline/gi, type: "guideline" },
   // Positional references
   { pattern: /as\s+(?:described|shown|detailed)\s+(?:above|below)/gi, type: "unknown" },

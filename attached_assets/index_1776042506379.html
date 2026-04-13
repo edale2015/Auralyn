@@ -1,0 +1,22 @@
+
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Hospital Brain Dashboard</h1>
+<div id="grid"></div>
+
+<script>
+fetch("/api/dashboard")
+.then(r=>r.json())
+.then(data=>{
+  document.getElementById("grid").innerHTML =
+    data.map(p=>`
+      <div style="border:1px solid black;margin:5px;padding:5px">
+        SOFA: ${p.sofa}<br/>
+        CURB: ${p.curb65}
+      </div>
+    `).join("");
+});
+</script>
+</body>
+</html>

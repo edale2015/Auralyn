@@ -2621,6 +2621,11 @@ export async function registerRoutes(
   app.use("/api/evals", evalRoutes);
   console.log("[Evals] /api/evals/* active (run, regression, benchmark, trigger-optimize, compare, alerts)");
 
+  // ── Batch 57: Clinical Document Reasoning (PageIndex / Article 30) ────────
+  const { default: clinicalReasoningRoutes } = await import("./routes/clinicalReasoningRoutes");
+  app.use("/api/clinical-reasoning", clinicalReasoningRoutes);
+  console.log("[ClinicalReasoning] /api/clinical-reasoning/* active (index, ask, parse, documents, tree, queries, refs)");
+
   return httpServer;
 }
 

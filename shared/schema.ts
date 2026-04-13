@@ -1262,3 +1262,63 @@ export const kbPhysicianOverrides = pgTable("kb_physician_overrides", {
 export const insertKbPhysicianOverrideSchema = createInsertSchema(kbPhysicianOverrides).omit({ id: true, createdAt: true });
 export type InsertKbPhysicianOverride = z.infer<typeof insertKbPhysicianOverrideSchema>;
 export type KbPhysicianOverride = typeof kbPhysicianOverrides.$inferSelect;
+
+// ─── Guideline Documents — existing table (matches DB: id serial, source text, etc.) ──
+export const guidelineDocuments = pgTable("guideline_documents", {
+  id:        serial("id").primaryKey(),
+  source:    text("source").notNull().default("manual"),
+  title:     text("title"),
+  content:   text("content").notNull(),
+  parsed:    jsonb("parsed"),
+  status:    text("status").notNull().default("processed"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type GuidelineDocument = typeof guidelineDocuments.$inferSelect;
+
+// ─── Batch 57 — PageIndex Clinical Reasoning (Article 30) ────────────────────
+
+// clinical_doc_nodes — hierarchical tree nodes from PageIndexBuilder
+export const clinicalDocNodes = pgTable("clinical_doc_nodes", {
+  id:           serial("id").primaryKey(),
+  documentId:   integer("document_id").notNull(),
+  nodeId:       text("node_id").notNull(),
+  title:        text("title").notNull(),
+  startPage:    integer("start_page").notNull().default(0),
+  endPage:      integer("end_page").notNull().default(0),
+  summary:      text("summary").default(""),
+  content:      text("content").default(""),
+  parentNodeId: text("parent_node_id"),
+  depth:        integer("depth").notNull().default(0),
+  createdAt:    timestamp("created_at").defaultNow(),
+});
+export const insertClinicalDocNodeSchema = createInsertSchema(clinicalDocNodes).omit({ id: true, createdAt: true });
+export type InsertClinicalDocNode = z.infer<typeof insertClinicalDocNodeSchema>;
+export type ClinicalDocNode = typeof clinicalDocNodes.$inferSelect;
+
+// clinical_reasoning_queries — query log with node selection and answer
+export const clinicalReasoningQueries = pgTable("clinical_reasoning_queries", {
+  id:            serial("id").primaryKey(),
+  documentId:    integer("document_id").notNull(),
+  question:      text("question").notNull(),
+  selectedNode:  text("selected_node"),
+  answer:        text("answer"),
+  confidence:    real("confidence"),
+  retrievalMode: text("retrieval_mode").notNull().default("keyword"),
+  createdAt:     timestamp("created_at").defaultNow(),
+});
+export const insertClinicalReasoningQuerySchema = createInsertSchema(clinicalReasoningQueries).omit({ id: true, createdAt: true });
+export type InsertClinicalReasoningQuery = z.infer<typeof insertClinicalReasoningQuerySchema>;
+export type ClinicalReasoningQuery = typeof clinicalReasoningQueries.$inferSelect;
+
+// clinical_cross_ref_logs — cross-reference resolution audit trail
+export const clinicalCrossRefLogs = pgTable("clinical_cross_ref_logs", {
+  id:           serial("id").primaryKey(),
+  queryId:      integer("query_id").notNull(),
+  reference:    text("reference").notNull(),
+  resolvedNode: text("resolved_node"),
+  resolved:     boolean("resolved").notNull().default(false),
+  createdAt:    timestamp("created_at").defaultNow(),
+});
+export const insertClinicalCrossRefLogSchema = createInsertSchema(clinicalCrossRefLogs).omit({ id: true, createdAt: true });
+export type InsertClinicalCrossRefLog = z.infer<typeof insertClinicalCrossRefLogSchema>;
+export type ClinicalCrossRefLog = typeof clinicalCrossRefLogs.$inferSelect;

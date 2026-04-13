@@ -128,18 +128,18 @@ export class PageIndexBuilder {
       const level = this.detectHeadingLevel(para);
 
       if (level === 1) {
-        // Top-level section
+        // Top-level section → depth 0
         if (current) {
           if (subCurrent) { current.children.push(subCurrent); subCurrent = null; }
           topLevel.push(current);
         }
-        current = this.makeNode(para, pageIndex, level);
+        current = this.makeNode(para, pageIndex, 0);
         subCurrent = null;
         pageIndex++;
       } else if (level === 2 && current) {
-        // Sub-section
+        // Sub-section → depth 1
         if (subCurrent) current.children.push(subCurrent);
-        subCurrent = this.makeNode(para, pageIndex, level);
+        subCurrent = this.makeNode(para, pageIndex, 1);
         pageIndex++;
       } else if (current) {
         // Content paragraph
