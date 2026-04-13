@@ -1,0 +1,362 @@
+1. Master prompt for Claude
+
+Use this as the top-level instruction before you start feeding code.
+
+Writing
+
+You are performing a rigorous code review of a production-oriented medical triage and urgent care software platform.
+
+Your job is not to praise the architecture or restate what the system intends to do. Your job is to identify concrete weaknesses, defects, unsafe assumptions, misleading scaffolding, incomplete integrations, hidden production risks, and mismatches between UI, backend, and actual runtime behavior.
+
+Review the code as if this system may eventually support real clinical workflows, physician oversight, auditability, regulated deployment, and multi-tenant production use.
+
+Focus especially on these categories:
+
+Clinical safety and workflow integrity
+unsafe defaults
+contradictory decision logic
+missing physician-review gates
+missing escalation paths
+incomplete red-flag enforcement
+incomplete audit coverage for high-risk actions
+silent failure modes that could affect clinical recommendations
+Architecture and code reality
+features claimed by UI that are not truly implemented
+endpoints that exist but are only stubbed/scaffolded
+hardcoded fallbacks that undermine KB-driven logic
+duplicated logic across services
+dead code, fake integrations, placeholder code presented as real
+places where comments overstate actual capability
+Data and state integrity
+broken or unsafe persistence paths
+cache incoherence
+stale state risk
+race conditions
+bad assumptions in async flows
+missing transaction boundaries
+replay/idempotency issues
+inconsistent source of truth
+Security, privacy, and governance
+PHI leakage risk
+auth/authz gaps
+tenant isolation gaps
+missing server-side enforcement
+unsafe secret handling
+insecure logging
+incomplete audit hash-chain coverage
+weak validation on critical inputs
+Frontend/backend consistency
+dashboard controls with no real backend effect
+API routes not matching frontend expectations
+broken typings/contracts
+websocket/live stream mismatches
+misleading status indicators
+UI states that imply success without verification
+Deployment and production hardening
+brittle startup assumptions
+missing health checks
+weak error handling
+environment/config drift risk
+non-resilient external integrations
+missing retries/circuit breakers where needed
+unsafe fallback behavior in production
+Testing and validation
+gaps in tests for critical workflows
+no tests around high-risk complaints or red flags
+lack of golden-case coverage
+inability to prove behavior matches intended clinical design
+
+For every issue you find, use this exact format:
+
+Issue Title:
+Severity: Critical / High / Medium / Low
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type: Real defect / Architectural risk / Incomplete scaffolding / Misleading implementation
+
+Important review rules:
+
+Be skeptical
+Do not assume a feature is real just because routes, UI, or comments exist
+Trace data flow when possible
+Prefer findings tied to actual files and code behavior
+Call out uncertain findings clearly as “needs confirmation”
+Distinguish between “bad style” and “real risk”
+Ignore trivial cosmetic suggestions unless they create safety or production risk
+Highlight the top 10 most important findings at the top of each review batch
+
+Also provide these sections at the end:
+
+“Most dangerous to ship”
+“Likely theater/scaffolding”
+“Highest ROI fixes”
+“Needs cross-file review confirmation”
+
+Do not be gentle. Be precise.
+
+2. Best review sequence
+
+Do not feed the repo randomly. Review by system slice. That catches the snakes in the pipes.
+
+Use this order:
+
+Batch 1: Auth, RBAC, audit, governance
+
+Include files like:
+
+auth middleware
+JWT/session handling
+role enforcement
+audit logger
+hash-chain logic
+override approval flows
+governance endpoints
+
+Ask Claude:
+
+Writing
+
+Review these files only for auth, authorization, audit integrity, governance enforcement, override control, and tenant isolation. Ignore style. Find concrete security, compliance, and enforcement risks.
+
+Batch 2: Intake, reasoning, red flags, disposition
+
+Include:
+
+complaint intake
+modifier intake
+red flag detection
+scoring engines
+Bayesian engine
+deterministic rules
+disposition engine
+treatment suggestion logic
+
+Ask:
+
+Writing
+
+Review these files only for clinical safety, contradiction risk, missing escalation logic, inconsistent reasoning, unsafe fallbacks, and hidden disagreement between engines.
+
+Batch 3: KB, Postgres, cache, migrations
+
+Include:
+
+KB CRUD/services
+schema
+migrations
+cache layer
+sync/import code
+feature model loading
+fallback logic
+
+Ask:
+
+Writing
+
+Review these files only for source-of-truth integrity, stale logic risk, migration safety, cache incoherence, hardcoded fallbacks, and places where KB-driven behavior is undermined.
+
+Batch 4: Dashboards, APIs, WebSockets
+
+Include:
+
+dashboard pages/components
+API routes
+route handlers
+websocket stream code
+health/status panels
+live patient views
+
+Ask:
+
+Writing
+
+Review these files only for frontend/backend mismatches, fake controls, misleading status indicators, broken contracts, incomplete live wiring, and dashboard behavior that implies functionality not truly enforced by the backend.
+
+Batch 5: EHR, FHIR, automation adapters
+
+Include:
+
+Epic/ECW/Athena code
+SMART on FHIR
+UI automation
+selector healing
+write-back endpoints
+external adapter services
+
+Ask:
+
+Writing
+
+Review these files only for realism of integration, failure safety, write-back risk, incomplete adapter paths, insecure automation behavior, and features presented as real but only partially implemented.
+
+Batch 6: Monitoring, RLHF, learning, simulation
+
+Include:
+
+monitoring services
+drift detection
+RLHF or weight tuning
+eval harness
+golden cases
+simulation engines
+autonomous loops
+
+Ask:
+
+Writing
+
+Review these files only for production safety, false claims of self-improvement, unsafe autonomous behavior, weak monitoring assumptions, poor validation logic, and inability to prove correctness.
+
+3. Findings template to keep Claude disciplined
+
+Paste this after each batch prompt.
+
+Writing
+
+Return your findings in this structure:
+
+TOP 10 FINDINGS
+1.
+Issue Title:
+Severity:
+Files:
+One-sentence risk:
+
+FULL FINDINGS
+Issue Title:
+Severity:
+Category:
+Files:
+What is wrong:
+Why it matters:
+Evidence from code:
+Recommended fix:
+Type:
+
+SUMMARY TABLE
+
+Critical:
+High:
+Medium:
+Low:
+
+SPECIAL SECTIONS
+
+Most dangerous to ship
+Likely theater/scaffolding
+Highest ROI fixes
+Needs cross-file review confirmation
+4. How to split code for Claude
+
+Best options:
+
+Good
+one subsystem at a time
+all related files together
+include routes + services + UI for that subsystem
+Bad
+random 20-file chunks
+only frontend without matching backend
+only interfaces without implementation
+only high-level descriptions
+
+A good chunk is usually:
+
+8 to 20 related files
+enough to trace behavior
+not so huge that review becomes mush
+5. What to ask Claude to avoid
+
+Tell Claude not to waste time on:
+
+formatting preferences
+naming nits
+generic “consider adding tests”
+vague “could be more modular”
+speculative praise
+architecture poetry with no file evidence
+
+You want scalpels, not confetti.
+
+6. After Claude finishes each batch, send me this
+
+Send me:
+
+Claude’s findings
+the file list reviewed
+any parts Claude seemed uncertain about
+
+Then I’ll do three things:
+
+separate real issues from overcalling
+identify what Claude likely missed
+turn the final issues into a ranked patch roadmap
+7. Best final merge prompt for Claude
+
+After all batches are done, ask Claude to synthesize:
+
+Writing
+
+Using all prior review batches, create one merged master review.
+
+Requirements:
+
+Deduplicate overlapping findings
+Merge related findings into single root-cause issues where appropriate
+Rank the top 25 issues across the entire codebase
+Separate defects from architectural risks from incomplete scaffolding
+Identify the top 10 issues most dangerous to ship
+Identify the top 10 highest-ROI fixes
+Identify places where multiple modules disagree about source of truth
+Identify places where UI claims exceed backend reality
+Identify places where governance/safety controls are present cosmetically but not strongly enforced
+
+For each final issue include:
+Issue Title
+Severity
+Category
+Primary Files
+Cross-file dependencies
+Why it matters
+Recommended fix
+Type
+
+Then produce:
+
+Executive summary
+Top 25 ranked issues
+Quick wins
+Dangerous hidden failures
+Suspected scaffolding/theater
+30-day remediation plan
+8. My recommendation for your exact situation
+
+Given your system, I would strongly prioritize review attention on:
+
+hardcoded fallbacks hiding inside “KB-driven” logic
+dashboard/backend mismatches
+physician-review enforcement at service layer
+audit hash-chain completeness
+override path safety
+FHIR/EHR claims vs actual runtime reliability
+WebSocket/live stream truthfulness
+tenant isolation and PHI logging risk
+disagreement between deterministic and Bayesian layers
+“implemented” modules that are really polished scaffolds
+
+That is where the expensive goblins usually live.
+
+9. Practical workflow
+
+Use this simple loop:
+
+Feed Claude one subsystem batch
+Get structured findings
+Paste them here
+I pressure-test and refine them
+Repeat for next subsystem
+At the end, we build one merged remediation plan
