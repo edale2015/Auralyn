@@ -85,7 +85,7 @@ router.post("/api/governance/review/:id", requireRole(["admin", "physician"]), a
   }
 
   try {
-    const updated = await updateGovernanceStatus(id, status, req.physician?.id ?? req.authUser?.displayName);
+    const updated = await updateGovernanceStatus(id, status, req.physician?.id ?? "system");
     if (!updated) return res.status(404).json({ error: "Governance item not found" });
     res.json({ ok: true, id, status });
   } catch (err: any) {
@@ -131,7 +131,7 @@ router.post("/api/governance/feedback", requireRole(["admin", "physician"]), (re
   }
   const entry = recordPhysicianFeedback({
     caseId,
-    physician: req.physician?.id ?? req.authUser?.displayName ?? "unknown",
+    physician: req.physician?.id ?? "unknown",
     correction,
     category:  category  || "other",
     severity:  severity  || "medium",
@@ -158,7 +158,7 @@ router.patch("/api/governance/feedback/:id", requireRole(["admin"]), (req: Reque
 
 router.post("/api/governance/deploy", requireRole(["admin"]), (req: Request, res: Response) => {
   const { config, label } = req.body;
-  const version = deployNewVersion(config || {}, label, req.physician?.id ?? req.authUser?.displayName);
+  const version = deployNewVersion(config || {}, label, req.physician?.id ?? "system");
   res.json(version);
 });
 

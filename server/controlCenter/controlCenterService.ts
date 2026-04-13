@@ -3,7 +3,7 @@ import { getEngineStats, getProfilerSummary, seedProfilerData } from "../perform
 import { getKnowledgeGraph } from "../knowledge/knowledgeGraphStore";
 import { checkKnowledgeConsistency } from "../governance/knowledgeConsistencyEngine";
 import { getVersionSummary } from "../versioning/clinicalVersionManager";
-import { getGovernanceStats } from "../governance/governanceQueue";
+import { getGovernanceStatsCached } from "../governance/governanceQueue";
 import { detectAlerts, Alert } from "./alertEngine";
 
 export interface ControlCenterSnapshot {
@@ -38,7 +38,7 @@ export function generateControlCenterSnapshot(metrics?: SafetyMetrics): ControlC
   const graph = getKnowledgeGraph();
   const consistency = checkKnowledgeConsistency();
   const versionStatus = getVersionSummary();
-  const governanceStatus = getGovernanceStats();
+  const governanceStatus = getGovernanceStatsCached();
 
   let systemHealth: ControlCenterSnapshot["systemHealth"] = "healthy";
   if (safety.score < 70 || !consistency.ok) systemHealth = "warning";

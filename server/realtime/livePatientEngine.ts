@@ -4,7 +4,7 @@
  * priority-ranks patients, and broadcasts to all WS clients.
  */
 
-import { broadcastPatientUpdate }           from "./patientStream";
+import { broadcastSystemUpdate }            from "./patientStream";
 import { generateInterventions, VitalSnapshot } from "../engines/interventionEngine";
 
 export interface LivePatient {
@@ -103,8 +103,8 @@ function tick(): void {
   patients.sort((a, b) => b.priorityScore - a.priorityScore);
   currentPatients = patients;
 
-  // Broadcast to all WS clients
-  broadcastPatientUpdate({
+  // Broadcast to all authenticated WS clients (system-level, not tenant-scoped)
+  broadcastSystemUpdate({
     type:     "PATIENT_UPDATE",
     patients: patients.map((p) => ({
       id:            p.id,

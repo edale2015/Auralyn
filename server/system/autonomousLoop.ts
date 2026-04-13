@@ -82,7 +82,7 @@ async function runModelGovernanceSafe() {
     for (const [packId, insight] of Object.entries(insights)) {
       const baseline = packBaselines[packId];
       if (baseline !== undefined && Math.abs(insight.accuracy - baseline) > 0.01) {
-        proposeLearningUpdate(packId, baseline, insight.accuracy, "autonomous_loop");
+        await proposeLearningUpdate(packId, baseline, insight.accuracy, "autonomous_loop");
       }
       packBaselines[packId] = insight.accuracy;
     }

@@ -109,7 +109,7 @@ export function initPatientStream(server: any): void {
 
 // ── Tenant-scoped broadcast ───────────────────────────────────────────────────
 //
-// clinicId is now required on every broadcast. Only clients whose clinicId
+// clinicId is required on every clinical broadcast. Only clients whose clinicId
 // matches receive the event — no cross-tenant leakage.
 
 export function broadcastPatientUpdate(
@@ -132,6 +132,21 @@ export function broadcastDiagnosticResult(
   const msg = JSON.stringify({ type: "diagnostic_result", caseId, ...result, ts: Date.now() });
   for (const client of clients) {
     if (client.clinicId === clinicId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(msg);
+    }
+  }
+}
+
+// ── System-level broadcast (no tenant filter) ─────────────────────────────────
+//
+// Used only by internal system engines (e.g. livePatientEngine) that produce
+// data not scoped to a single clinic. All authenticated clients receive it.
+// NEVER use this for PHI — only for system metrics, demo vitals, and alerts.
+
+export function broadcastSystemUpdate(data: Record<string, unknown>): void {
+  const msg = JSON.stringify({ type: "system_update", ...data, ts: Date.now() });
+  for (const client of clients) {
+    if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(msg);
     }
   }

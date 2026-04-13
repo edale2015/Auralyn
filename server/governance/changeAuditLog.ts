@@ -21,6 +21,7 @@ import crypto        from "crypto";
 import { db }        from "../db";
 import { auditLogs } from "@shared/schema";
 import { desc, eq, gte, and, count } from "drizzle-orm";
+import { auditStep } from "../audit/auditLogger";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,14 +67,18 @@ function uid(): string {
 }
 
 // ── DB persistence helpers ────────────────────────────────────────────────────
+//
+// FIX: Route through auditStep() so governance audit entries are included in the
+// advisory-lock-serialized hash chain. A raw db.insert() bypasses prevHash
+// computation and breaks verifyFullAuditChain() at the first governance record.
 
 async function persistToDB(entry: AuditEntry): Promise<void> {
   try {
-    await db.insert(auditLogs).values({
+    await auditStep({
       traceId:  entry.entryId,
       step:     entry.action,
-      input:    entry.before as any ?? null,
-      output:   entry.after  as any ?? null,
+      input:    entry.before  ?? null,
+      output:   entry.after   ?? null,
       metadata: {
         source:      entry.source,
         actor:       entry.actor,
@@ -88,7 +93,7 @@ async function persistToDB(entry: AuditEntry): Promise<void> {
     });
   } catch (err: any) {
     // Log but do not crash — the in-memory cache still holds the entry for this session
-    console.error("[GovernanceAuditLog] DB persist failed for entry", entry.entryId, "—", err?.message);
+    console.error("[GovernanceAuditLog] Chain-write failed for entry", entry.entryId, "—", err?.message);
   }
 }
 
