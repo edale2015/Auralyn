@@ -46,6 +46,29 @@ The system incorporates a Multi-Agent Debate Engine where three clinical agents 
 ### System Design Choices
 Data management uses Firebase Firestore, SQLite, and NDJSON-backed stores, with PHI retention policies. Authentication involves password-only, session-based HMAC for physicians and token-based access for patients, with JWT-based role authentication. Security and quality hardening include bcrypt, JWT security, rate limiting, and PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance includes an agent registry, audit agent, incident commander, digital twin, and predictive engine. The Autonomous Operator System is an AI-powered form automation engine. A Template Studio allows visual template editing. The Replay Inspector audits automation runs. A Robotics Control Module manages medical device orchestration. An Autonomous Learning Console provides a unified dashboard for self-testing, self-learning, and governance, including simulation, learning queue, drift monitor, audit trail, versions, and safety modes. The Multi-Patient Command Grid provides a three-pane, hospital-style dashboard with risk-sorted patient grids, clinical details, ICU waveforms, hospital/EMS routing, automated outreach, and physician auto-paging.
 
+## Phase 6 — KB Governance + Deployment Architecture
+
+### KB Governance Lifecycle (Draft → Review → Approve)
+- **`server/kb/kbRepository.ts`** — New KB entities inserted with `status: "draft"` (was `"active"`); prevents unreviewed clinical rules going live instantly
+- **`server/kb/kbTypes.ts`** — Added `"complaint_pack"` to `KbEntityType` union; consistency audit type vocabulary now aligned
+- **`server/kb/specEngine.ts`** — SEED_RULES operator-precedence bug fixed: all `whenExpr` strings are now fully parenthesised with optional chaining and explicit null coalescing (old: `input.scores && NEWS2 >= 7 || icuProb > 0.80` evaluated wrong)
+- **`server/kb/routes/kbAdminRoutes.ts`** — Canonical-pathway GET routes now return `503 KB_PATHWAYS_UNAVAILABLE` on DB failure instead of silently returning `[]`
+- **`server/startup/assertions.ts`** — Startup invariant checker: verifies `getKbVersion`, `getKbCacheStatus`, and required production env vars at boot; fatal in prod, warning in dev
+- **`server/kb/services/kbGovernanceService.ts`** — Approval engine: `submitForReview`, `listPendingReviews`, `approveChange`, `rejectChange` with full DB-persisted audit trail
+- **`server/kb/routes/kbGovernanceRoutes.ts`** — `GET/POST /api/kb-governance/*` (queue, submit, approve, reject, audit) — all protected by `requireKbAdmin`
+- **`server/middleware/physicianReviewRequired.ts`** — Gating middleware for physician-level KB approval flows
+- **`client/src/pages/KBReviewDashboard.tsx`** → `/kb-review-dashboard` — Full physician review UI: pending queue with one-click approve/reject + rejection reason dialog + audit trail tab
+
+### New DB Tables (created via `psql`)
+- **`kb_population_priors`** — Bayesian prior multipliers per demographic cluster (elderly, pediatric, immunocompromised); adjusts differential probability at triage time
+- **`kb_review_queue`** — Pending KB entity changes awaiting physician/admin approval; `status: pending | approved | rejected`
+- **`kb_audit_trail`** — Immutable log of every KB governance action: `CREATE | UPDATE | APPROVE | REJECT | ROLLBACK | SUBMIT_REVIEW` with full payload for FDA audit
+
+### Deployment Files (`deployment/`)
+- **`Dockerfile`** — Multi-stage Node 20 build (builder + runtime stages); healthcheck on `/health`
+- **`fly.toml`** — Fly.io config: `ewr` region (NYC), performance-2x VMs, 4GB RAM, forced HTTPS, min 1 machine always running
+- **`architecture.md`** — Full production architecture: ECS Fargate + RDS + ElastiCache, NYC urgent care pilot targets (CityMD, GoHealth), 4-week rollout plan, payer ROI model, env var checklist
+
 ## Phase 5 — Code Review Remediation (25 Items) + Independent Review
 
 All 25 code review items from attached review documents are implemented. Plus 3 additional issues discovered during independent review.

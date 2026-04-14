@@ -1,0 +1,231 @@
+PATCH BUNDLE — PHASE 2
+Structure
+/phase2_kb_governance/
+  ├── schema/
+  ├── services/
+  ├── routes/
+  ├── middleware/
+  ├── ui/
+  └── migrations/
+1️⃣ SCHEMA — GOVERNANCE TABLES
+📁 shared/schema.ts (ADD)
+export const kbReviewQueue = pgTable("kb_review_queue", {
+  id: serial("id").primaryKey(),
+  entityType: text("entity_type").notNull(),
+  entityKey: text("entity_key").notNull(),
+  version: integer("version").notNull(),
+  proposedBy: text("proposed_by").notNull(),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected
+  rationale: text("rationale"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+});
+
+export const kbAuditTrail = pgTable("kb_audit_trail", {
+  id: serial("id").primaryKey(),
+  entityType: text("entity_type"),
+  entityKey: text("entity_key"),
+  version: integer("version"),
+  action: text("action"), // CREATE | UPDATE | APPROVE | REJECT | ROLLBACK
+  actorId: text("actor_id"),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+📁 migrations/003_kb_governance.sql
+CREATE TABLE kb_review_queue (
+  id serial PRIMARY KEY,
+  entity_type text NOT NULL,
+  entity_key text NOT NULL,
+  version int NOT NULL,
+  proposed_by text NOT NULL,
+  status text DEFAULT 'pending',
+  rationale text,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  reviewed_by text,
+  reviewed_at timestamp
+);
+
+CREATE TABLE kb_audit_trail (
+  id serial PRIMARY KEY,
+  entity_type text,
+  entity_key text,
+  version int,
+  action text,
+  actor_id text,
+  payload jsonb,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+2️⃣ SERVICE LAYER — APPROVAL ENGINE
+📁 server/kb/services/kbGovernanceService.ts
+import { db } from "../../db";
+import { kbReviewQueue, kbAuditTrail, kbEntityStore } from "../../../shared/schema";
+import { eq } from "drizzle-orm";
+
+export async function submitForReview(entity: {
+  entityType: string;
+  entityKey: string;
+  version: number;
+  actorId: string;
+  rationale?: string;
+}) {
+  await db.insert(kbReviewQueue).values({
+    entityType: entity.entityType,
+    entityKey: entity.entityKey,
+    version: entity.version,
+    proposedBy: entity.actorId,
+    rationale: entity.rationale,
+  });
+
+  await logAudit("SUBMIT_REVIEW", entity);
+}
+
+export async function approveChange(id: number, reviewerId: string) {
+  const [row] = await db.select().from(kbReviewQueue).where(eq(kbReviewQueue.id, id));
+
+  if (!row) throw new Error("Review not found");
+
+  await db.update(kbReviewQueue)
+    .set({
+      status: "approved",
+      reviewedBy: reviewerId,
+      reviewedAt: new Date(),
+    })
+    .where(eq(kbReviewQueue.id, id));
+
+  // Activate KB entity
+  await db.update(kbEntityStore)
+    .set({ status: "active" })
+    .where(eq(kbEntityStore.entityKey, row.entityKey));
+
+  await logAudit("APPROVE", { ...row, reviewerId });
+}
+
+export async function rejectChange(id: number, reviewerId: string, reason: string) {
+  await db.update(kbReviewQueue)
+    .set({
+      status: "rejected",
+      reviewedBy: reviewerId,
+      reviewedAt: new Date(),
+      rationale: reason,
+    })
+    .where(eq(kbReviewQueue.id, id));
+
+  await logAudit("REJECT", { id, reviewerId, reason });
+}
+
+async function logAudit(action: string, payload: any) {
+  await db.insert(kbAuditTrail).values({
+    entityType: payload.entityType,
+    entityKey: payload.entityKey,
+    version: payload.version,
+    action,
+    actorId: payload.actorId || payload.reviewerId,
+    payload,
+  });
+}
+3️⃣ ROUTES — GOVERNANCE API
+📁 server/kb/routes/kbGovernanceRoutes.ts
+import { Router } from "express";
+import { requireKbAdmin } from "../middleware/kbAuthMiddleware";
+import {
+  submitForReview,
+  approveChange,
+  rejectChange
+} from "../services/kbGovernanceService";
+
+const router = Router();
+
+router.post("/submit", requireKbAdmin, async (req, res) => {
+  await submitForReview(req.body);
+  res.json({ ok: true });
+});
+
+router.post("/approve/:id", requireKbAdmin, async (req, res) => {
+  await approveChange(Number(req.params.id), req.body.reviewerId);
+  res.json({ ok: true });
+});
+
+router.post("/reject/:id", requireKbAdmin, async (req, res) => {
+  await rejectChange(Number(req.params.id), req.body.reviewerId, req.body.reason);
+  res.json({ ok: true });
+});
+
+export default router;
+4️⃣ MIDDLEWARE — PHYSICIAN REVIEW GATE
+📁 server/middleware/physicianReviewRequired.ts
+export function requirePhysicianReview(req, res, next) {
+  if (!req.user || req.user.role !== "physician") {
+    return res.status(403).json({
+      ok: false,
+      message: "Physician approval required"
+    });
+  }
+  next();
+}
+5️⃣ FRONTEND — PHYSICIAN REVIEW UI
+📁 frontend/src/pages/KBReviewDashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function KBReviewDashboard() {
+  const [queue, setQueue] = useState([]);
+
+  useEffect(() => {
+    fetch("/api/kb/review")
+      .then(res => res.json())
+      .then(data => setQueue(data));
+  }, []);
+
+  const approve = async (id: number) => {
+    await fetch(`/api/kb/approve/${id}`, { method: "POST" });
+    location.reload();
+  };
+
+  const reject = async (id: number) => {
+    await fetch(`/api/kb/reject/${id}`, { method: "POST" });
+    location.reload();
+  };
+
+  return (
+    <div className="p-6">
+      <h1 className="text-xl font-bold mb-4">KB Review Queue</h1>
+
+      {queue.map((item: any) => (
+        <div key={item.id} className="border p-4 mb-2">
+          <div><b>{item.entityType}</b> — {item.entityKey}</div>
+          <div>Version: {item.version}</div>
+          <div>Rationale: {item.rationale}</div>
+
+          <button onClick={() => approve(item.id)} className="mr-2 bg-green-500 text-white px-2">
+            Approve
+          </button>
+
+          <button onClick={() => reject(item.id)} className="bg-red-500 text-white px-2">
+            Reject
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 WHAT THIS GIVES YOU
+BEFORE ❌
+Anyone could modify KB logic
+Changes go live instantly
+No review trace
+No rollback control
+AFTER ✅
+
+You now have:
+
+🔐 Governance
+Draft → Review → Approve pipeline
+👩‍⚕️ Physician Control
+Only physicians approve clinical logic
+🧾 Audit Trail
+Every change tracked (FDA-ready)
+🔁 Version Safety
+No silent KB drift
+🖥️ Control Tower UI
+Live approval dashboard
+🚀 NEXT STEP

@@ -378,6 +378,8 @@ import skillEvolutionRoutes from "./routes/skillEvolutionRoutes";
 import icuRoutes from "./routes/icuRoutes";
 import validationRoutes from "./routes/validationRoutes";
 import networkRoutes from "./routes/networkRoutes";
+import kbGovernanceRoutes from "./kb/routes/kbGovernanceRoutes";
+import { assertClinicalStartupInvariants } from "./startup/assertions";
 import { startPatientStreamSocket } from "./ws/patientStream";
 import { hydrateFromRedis } from "./learning/versionedRLHF";
 import engineControlRoutes from "./routes/engineControlRoutes";
@@ -884,6 +886,8 @@ app.use("/api/skill-evolution", skillEvolutionRoutes);
 app.use("/api/icu", icuRoutes);
 app.use("/api/validation", validationRoutes);
 app.use("/api/network", networkRoutes);
+app.use("/api/kb-governance", kbGovernanceRoutes);
+console.log("[KbGovernance] /api/kb-governance/* active (queue·submit·approve·reject·audit)");
 console.log("[StressTest] Load generator, metrics analyzer, run history at /api/stress/*");
 console.log("[RPA] Browser automation templates, run engine, custom tasks at /api/rpa/*");
 console.log("[Vision] GPT-4o screenshot analysis + smart form fill at /api/vision/*");
@@ -1014,6 +1018,7 @@ app.use((req, res, next) => {
   validateConfig();
   await startTelemetry("med-scribe-api");
   assertProductionSafe();
+  assertClinicalStartupInvariants();
 
   // Connectivity + readiness checks — throws if any fatal check fails.
   // Runs after assertProductionSafe() (pure config) and before registerRoutes()

@@ -201,12 +201,19 @@ export async function applyRulesWithLoad(
 
 // ── Inline seed rules (fallback when DB is empty, not when DB is unavailable) ─
 
+// FIX: SEED_RULES — operator-precedence bug. The old expressions mixed &&/|| without
+// explicit grouping, causing silent mis-evaluation. E.g.:
+//   "input.scores && input.scores.NEWS2 >= 7 || input.icuProb > 0.80"
+// evaluates as (input.scores && NEWS2>=7) || icuProb>0.80 — so a missing `scores`
+// object would NOT prevent the rule from firing via icuProb, but the null-guard on
+// icuProb was also absent. All expressions are now fully parenthesised with optional
+// chaining and explicit null coalescing.
 export const SEED_RULES: SpecRule[] = [
   {
     ruleId:           "R001",
     complaintId:      "*",
     priority:         10,
-    whenExpr:         "input.scores && input.scores.NEWS2 >= 7 || input.icuProb > 0.80",
+    whenExpr:         "(input.scores?.NEWS2 >= 7) || (Number(input.icuProb ?? 0) > 0.80)",
     dispositionLevel: "ICU",
     confidenceHint:   "HIGH",
   },
@@ -214,7 +221,7 @@ export const SEED_RULES: SpecRule[] = [
     ruleId:           "R002",
     complaintId:      "*",
     priority:         20,
-    whenExpr:         "input.scores && input.scores.NEWS2 >= 5 || (input.sepsisRisk && input.sepsisRisk.highRisk === true)",
+    whenExpr:         "(input.scores?.NEWS2 >= 5) || (input.sepsisRisk?.highRisk === true)",
     dispositionLevel: "ED",
     confidenceHint:   "HIGH",
   },
@@ -222,7 +229,7 @@ export const SEED_RULES: SpecRule[] = [
     ruleId:           "R003",
     complaintId:      "*",
     priority:         30,
-    whenExpr:         "input.scores && input.scores.NEWS2 >= 3 || (input.vitals && input.vitals.systolicBP < 100)",
+    whenExpr:         "(input.scores?.NEWS2 >= 3) || (input.vitals?.systolicBP < 100)",
     dispositionLevel: "URGENT_CARE",
     confidenceHint:   "MODERATE",
   },
@@ -230,7 +237,7 @@ export const SEED_RULES: SpecRule[] = [
     ruleId:           "R004",
     complaintId:      "*",
     priority:         90,
-    whenExpr:         "input.scores && input.scores.NEWS2 < 3",
+    whenExpr:         "(input.scores?.NEWS2 < 3)",
     dispositionLevel: "HOME",
     confidenceHint:   "MODERATE",
   },

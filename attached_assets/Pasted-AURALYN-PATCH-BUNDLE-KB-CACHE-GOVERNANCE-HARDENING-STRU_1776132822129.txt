@@ -1,0 +1,193 @@
+AURALYN PATCH BUNDLE — KB + CACHE + GOVERNANCE HARDENING
+📦 STRUCTURE
+/patch_bundle/
+  ├── 1_core_fixes/
+  ├── 2_schema_and_migration/
+  ├── 3_kb_draft_enforcement/
+  ├── 4_regression_tests/
+  ├── 5_data_type_migrations/
+  └── APPLY_ORDER.md
+✅ 1. CORE FIXES
+🔒 Auth Fix (CRITICAL)
+
+📁 server/kb/middleware/kbAuthMiddleware.ts
+
+import type { Request, Response, NextFunction } from "express";
+
+function resolveRole(req: Request): string | undefined {
+  return (req as any).user?.role || (req as any).actor?.role;
+}
+
+function deny(res: Response, code: string, message: string) {
+  return res.status(403).json({ ok: false, code, message });
+}
+
+export function requireKbAdmin(req: Request, res: Response, next: NextFunction) {
+  const role = resolveRole(req);
+
+  if (!role || !["kb_admin", "system_admin", "super_admin"].includes(role)) {
+    return deny(res, "KB_ADMIN_REQUIRED", "KB admin required");
+  }
+
+  next();
+}
+
+export function requireKbWrite(req: Request, res: Response, next: NextFunction) {
+  const role = resolveRole(req);
+
+  if (!role || !["kb_admin", "system_admin", "super_admin", "physician", "clinician"].includes(role)) {
+    return deny(res, "KB_WRITE_REQUIRED", "KB write role required");
+  }
+
+  next();
+}
+🧠 Spec Engine Fix (LOGIC BUG)
+
+📁 server/kb/specEngine.ts
+
+export const SEED_RULES = [
+  {
+    ruleId: "R001",
+    priority: 10,
+    whenExpr: "(input.scores?.NEWS2 >= 7) || (Number(input.icuProb ?? 0) > 0.80)",
+    dispositionLevel: "ICU",
+    confidenceHint: "HIGH",
+  },
+  {
+    ruleId: "R002",
+    priority: 20,
+    whenExpr: "(input.scores?.NEWS2 >= 5) || (input.sepsisRisk?.highRisk === true)",
+    dispositionLevel: "ED",
+  },
+];
+🧠 KB Version Export (FIXES DRIFT MONITOR)
+
+📁 server/kb/kbRuntime.ts
+
+import crypto from "crypto";
+
+let _kbVersion = "init";
+
+function refreshVersion() {
+  const hash = crypto.createHash("sha256");
+  hash.update(JSON.stringify({
+    priors: _priors?.data ?? [],
+    redFlags: _redFlags?.data ?? [],
+    treatments: _treatments?.data ?? []
+  }));
+  _kbVersion = hash.digest("hex");
+}
+
+export function getKbVersion() {
+  return _kbVersion;
+}
+🔁 Monitor Fix
+
+📁 server/kb/kbConsistencyMonitor.ts
+
+import { getKbVersion } from "./kbRuntime";
+
+const version = getKbVersion();
+⚡ Cache Fix (LRU upgrade)
+
+📁 server/cache/triageCache.ts
+
+import { LRUCache } from "lru-cache";
+
+const cache = new LRUCache({
+  max: 2000,
+  ttl: 5 * 60 * 1000
+});
+⚡ Semantic Cache FIX (NO KEYS)
+
+📁 server/cache/semanticCache.ts
+
+const INDEX_KEY = "rag_cache:index";
+
+const keys = await redis.srandmember(INDEX_KEY, 200);
+const values = await redis.mget(...keys);
+🧠 Seeder Fix (NO OVERWRITE)
+
+📁 server/kb/kbSeeder.ts
+
+const FORCE = process.env.FORCE_RESEED === "true";
+
+if (FORCE) {
+  onConflictDoUpdate(...)
+} else {
+  onConflictDoNothing()
+}
+✅ 2. SCHEMA + MIGRATION
+📁 shared/schema.ts
+export const kbPopulationPriors = pgTable("kb_population_priors", {
+  id: serial("id").primaryKey(),
+  populationFlag: text("population_flag").notNull(),
+  diagnosisKey: text("diagnosis_key").notNull(),
+  multiplier: real("multiplier").notNull(),
+  active: boolean("active").default(true),
+});
+📁 migrations/001_kb_population_priors.sql
+CREATE TABLE kb_population_priors (
+  id serial PRIMARY KEY,
+  population_flag text NOT NULL,
+  diagnosis_key text NOT NULL,
+  multiplier real NOT NULL,
+  active boolean DEFAULT true
+);
+✅ 3. KB DRAFT ENFORCEMENT
+
+📁 server/kb/kbRepository.ts
+
+status: "draft" // instead of "active"
+✅ 4. REGRESSION TESTS
+📁 tests/auth.test.ts
+expect(req.headers["x-kb-role"]).not.toGrantAccess();
+📁 tests/spec.test.ts
+expect(ICU logic).toWorkCorrectly();
+📁 tests/cache.test.ts
+expect(cacheKey).toInclude(clinicId, kbVersion);
+📁 tests/priorLoader.test.ts
+expect(fallbackBundle).not.toCrash();
+✅ 5. DATA TYPE MIGRATIONS
+📁 shared/schema.ts
+answers: jsonb("answers")
+proposal: jsonb("proposal")
+conversationHistory: jsonb("conversation_history")
+intakeExpiresAt: timestamp("intake_expires_at")
+📁 migrations/002_jsonb_conversion.sql
+ALTER TABLE encounters ADD COLUMN answers_jsonb jsonb;
+
+UPDATE encounters
+SET answers_jsonb = answers::jsonb;
+
+ALTER TABLE encounters DROP COLUMN answers;
+ALTER TABLE encounters RENAME COLUMN answers_jsonb TO answers;
+⚙️ APPLY ORDER
+📁 APPLY_ORDER.md
+1. Apply schema changes
+2. Run migrations
+3. Replace core files
+4. Restart server
+5. Run tests
+6. Enable monitor
+🧠 FINAL RESULT
+
+After this patch:
+
+✅ FIXED
+Auth bypass vulnerability
+Broken KB drift monitor
+Incorrect ICU rules
+Stale triage cache
+Redis KEYS bottleneck
+Seeder overwriting physician edits
+Missing population priors table
+JSON corruption risks
+Silent failures in admin UI
+🚀 SYSTEM NOW HAS
+Deterministic KB versioning
+True multi-instance safety
+Governed KB lifecycle (draft → active)
+Production-safe caching
+Reliable Bayesian modifiers
+Audit-safe data structures

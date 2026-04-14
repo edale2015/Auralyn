@@ -134,6 +134,7 @@ import MasterControl from "@/pages/MasterControl";
 import ICUControlTower from "@/pages/ICUControlTower";
 import ValidationDashboard from "@/pages/ValidationDashboard";
 import NetworkControlTower from "@/pages/NetworkControlTower";
+import KBReviewDashboard from "@/pages/KBReviewDashboard";
 import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
 import CommunicationDashboard from "@/pages/CommunicationDashboard";
 import ScopeCommandCenter from "@/pages/ScopeCommandCenter";
@@ -267,6 +268,7 @@ function WorkbenchRouter() {
         <Route path="/icu-control-tower" component={ICUControlTower} />
         <Route path="/validation-dashboard" component={ValidationDashboard} />
         <Route path="/network-control-tower" component={NetworkControlTower} />
+        <Route path="/kb-review-dashboard" component={KBReviewDashboard} />
         <Route path="/deep-agent" component={DeepAgentDashboard} />
         <Route path="/communication" component={CommunicationDashboard} />
         <Route>

@@ -139,7 +139,7 @@ export async function upsertKbEntity(input: KbEntityInput): Promise<KbEntityStor
         entityType:     input.entityType,
         entityKey:      input.entityKey,
         title:          input.title,
-        status:         "active",
+        status:         "draft", // FIX: New KB entities must be reviewed before going live
         version:        1,
         tags:           input.tags ?? [],
         currentContent: input.content,

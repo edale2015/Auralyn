@@ -1,0 +1,1490 @@
+Core fixes
+server/kb/middleware/kbAuthMiddleware.ts
+import type { Request, Response, NextFunction } from "express";
+
+type RoleCarrier = {
+  role?: string;
+};
+
+function resolveAuthenticatedRole(req: Request): string | undefined {
+  const user = (req as Request & { user?: RoleCarrier }).user;
+  const actor = (req as Request & { actor?: RoleCarrier }).actor;
+
+  // Never trust caller-controlled headers for authorization.
+  return user?.role || actor?.role;
+}
+
+function deny(res: Response, code: string, message: string): void {
+  res.status(403).json({
+    ok: false,
+    code,
+    message,
+  });
+}
+
+export function requireKbAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const role = resolveAuthenticatedRole(req);
+
+  if (!role || !["kb_admin", "system_admin", "super_admin"].includes(role)) {
+    deny(res, "KB_ADMIN_REQUIRED", "KB admin role required for canonical pathway writes.");
+    return;
+  }
+
+  next();
+}
+
+export function requireKbWrite(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const role = resolveAuthenticatedRole(req);
+  const allowed = ["kb_admin", "system_admin", "super_admin", "physician", "clinician"];
+
+  if (!role || !allowed.includes(role)) {
+    deny(res, "KB_WRITE_REQUIRED", "KB write role required.");
+    return;
+  }
+
+  next();
+}
+server/kb/kbRuntime.ts
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+import crypto from "crypto";
+import type { DiagnosisPrior } from "../clinical/bayesianEngine";
+
+export interface KbRedFlagRule {
+  ruleId: string;
+  complaintId: string;
+  label: string;
+  triggerExpr: string;
+  severity: "HARD" | "SOFT";
+  action: string;
+  immediateActions?: string | null;
+  active: boolean;
+}
+
+export interface KbTreatmentRule {
+  ruleId: string;
+  medicationName: string;
+  medicationGroup?: string | null;
+  complaintId?: string | null;
+  diagnosisId?: string | null;
+  isFirstLine: boolean;
+  adultDose?: string | null;
+  adultMaxDose?: string | null;
+  pediatricDose?: string | null;
+  route?: string | null;
+  renalAdjust?: string | null;
+  hepaticAdjust?: string | null;
+  pregnancyCategory?: string | null;
+  contraindications?: string | null;
+  keyInteractions?: string | null;
+  commonSideEffects?: string | null;
+  notes?: string | null;
+  active: boolean;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CacheEntry<T> {
+  data: T;
+  loadedAt: number;
+  count: number;
+}
+
+let _priors: CacheEntry<DiagnosisPrior[]> | null = null;
+let _redFlags: CacheEntry<KbRedFlagRule[]> | null = null;
+let _treatments: CacheEntry<KbTreatmentRule[]> | null = null;
+let _kbVersion = "uninitialized";
+
+function isStale(entry: CacheEntry<unknown> | null): boolean {
+  return !entry || Date.now() - entry.loadedAt > CACHE_TTL_MS;
+}
+
+function extractRows(result: unknown): any[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && Array.isArray((result as any).rows)) {
+    return (result as any).rows;
+  }
+  return [];
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+function refreshVersion(): void {
+  const payload = {
+    priors: _priors?.data ?? [],
+    redFlags: _redFlags?.data ?? [],
+    treatments: _treatments?.data ?? [],
+  };
+
+  const hash = crypto.createHash("sha256");
+  hash.update(stableStringify(payload));
+  _kbVersion = hash.digest("hex");
+}
+
+async function loadPriorsFromDb(): Promise<DiagnosisPrior[]> {
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        r.rule_id,
+        r.diagnosis_label,
+        r.base_probability,
+        jsonb_object_agg(f.feature_key, f.likelihood * f.weight) AS feature_likelihoods,
+        count(f.id)::int AS feature_count
+      FROM kb_diagnosis_rules r
+      JOIN kb_feature_likelihoods f
+        ON f.rule_id = r.rule_id AND f.active = true
+      WHERE r.active = true
+      GROUP BY r.rule_id, r.diagnosis_label, r.base_probability, r.cluster_priority
+      HAVING count(f.id) > 0
+      ORDER BY r.cluster_priority ASC, r.base_probability DESC
+    `);
+
+    const normalized = extractRows(result).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
+      tableName: "kb_feature_likelihoods",
+    }));
+
+    if (normalized.length > 0) return normalized;
+
+    const legacyResult = await db.execute(sql`
+      SELECT rule_id, diagnosis_label, base_probability, feature_likelihoods
+      FROM kb_diagnosis_rules
+      WHERE active = true
+        AND feature_likelihoods IS NOT NULL
+        AND feature_likelihoods::text != '{}'
+      ORDER BY cluster_priority ASC, base_probability DESC
+    `);
+
+    return extractRows(legacyResult).map((r: any) => ({
+      diagnosis: String(r.diagnosis_label ?? ""),
+      baseProbability: Number(r.base_probability ?? 0),
+      featureLikelihoods: (r.feature_likelihoods ?? {}) as Record<string, number>,
+      ruleId: String(r.rule_id ?? ""),
+      version: 1,
+      tableName: "kb_diagnosis_rules",
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load diagnosis priors from DB:", err);
+    return [];
+  }
+}
+
+async function loadRedFlagsFromDb(): Promise<KbRedFlagRule[]> {
+  try {
+    const result = await db.execute(sql`
+      SELECT rule_id, complaint_id, label, trigger_expr, severity, action, immediate_actions, active
+      FROM kb_red_flag_rules
+      WHERE active = true
+    `);
+
+    return extractRows(result).map((r: any) => ({
+      ruleId: String(r.rule_id ?? ""),
+      complaintId: String(r.complaint_id ?? ""),
+      label: String(r.label ?? ""),
+      triggerExpr: String(r.trigger_expr ?? ""),
+      severity: (r.severity ?? "SOFT") as "HARD" | "SOFT",
+      action: String(r.action ?? "ESCALATE"),
+      immediateActions: (r.immediate_actions ?? null) as string | null,
+      active: Boolean(r.active),
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load red flag rules from DB:", err);
+    return [];
+  }
+}
+
+async function loadTreatmentsFromDb(): Promise<KbTreatmentRule[]> {
+  try {
+    const result = await db.execute(sql`
+      SELECT rule_id, medication_name, medication_group, complaint_id,
+             diagnosis_id, is_first_line, adult_dose, adult_max_dose,
+             pediatric_dose, route, renal_adjust, hepatic_adjust,
+             pregnancy_category, contraindications, key_interactions,
+             common_side_effects, notes, active
+      FROM kb_treatment_rules
+      WHERE active = true
+    `);
+
+    return extractRows(result).map((r: any) => ({
+      ruleId: String(r.rule_id ?? ""),
+      medicationName: String(r.medication_name ?? ""),
+      medicationGroup: (r.medication_group ?? null) as string | null,
+      complaintId: (r.complaint_id ?? null) as string | null,
+      diagnosisId: (r.diagnosis_id ?? null) as string | null,
+      isFirstLine: Boolean(r.is_first_line),
+      adultDose: (r.adult_dose ?? null) as string | null,
+      adultMaxDose: (r.adult_max_dose ?? null) as string | null,
+      pediatricDose: (r.pediatric_dose ?? null) as string | null,
+      route: (r.route ?? null) as string | null,
+      renalAdjust: (r.renal_adjust ?? null) as string | null,
+      hepaticAdjust: (r.hepatic_adjust ?? null) as string | null,
+      pregnancyCategory: (r.pregnancy_category ?? null) as string | null,
+      contraindications: (r.contraindications ?? null) as string | null,
+      keyInteractions: (r.key_interactions ?? null) as string | null,
+      commonSideEffects: (r.common_side_effects ?? null) as string | null,
+      notes: (r.notes ?? null) as string | null,
+      active: Boolean(r.active),
+    }));
+  } catch (err) {
+    console.warn("[KbRuntime] Failed to load treatment rules from DB:", err);
+    return [];
+  }
+}
+
+function filterTreatments(
+  all: KbTreatmentRule[],
+  opts?: { complaintId?: string; diagnosisId?: string; firstLineOnly?: boolean }
+): KbTreatmentRule[] {
+  let out = all;
+  if (opts?.complaintId) out = out.filter((t) => !t.complaintId || t.complaintId === opts.complaintId);
+  if (opts?.diagnosisId) out = out.filter((t) => !t.diagnosisId || t.diagnosisId === opts.diagnosisId);
+  if (opts?.firstLineOnly) out = out.filter((t) => t.isFirstLine);
+  return out;
+}
+
+export function getKbVersion(): string {
+  return _kbVersion;
+}
+
+export function getKbCacheSnapshot() {
+  return {
+    version: _kbVersion,
+    priors: _priors?.count ?? 0,
+    redFlags: _redFlags?.count ?? 0,
+    treatments: _treatments?.count ?? 0,
+    loadedAt: {
+      priors: _priors?.loadedAt ?? null,
+      redFlags: _redFlags?.loadedAt ?? null,
+      treatments: _treatments?.loadedAt ?? null,
+    },
+  };
+}
+
+export async function getKbPriors(): Promise<DiagnosisPrior[]> {
+  if (!isStale(_priors)) return _priors!.data;
+  const data = await loadPriorsFromDb();
+  _priors = { data, loadedAt: Date.now(), count: data.length };
+  refreshVersion();
+  return data;
+}
+
+export async function getKbRedFlags(complaintId: string): Promise<KbRedFlagRule[]> {
+  if (isStale(_redFlags)) {
+    const data = await loadRedFlagsFromDb();
+    _redFlags = { data, loadedAt: Date.now(), count: data.length };
+    refreshVersion();
+  }
+  return (_redFlags?.data ?? []).filter((r) => r.complaintId === complaintId);
+}
+
+export async function getKbTreatments(opts?: {
+  complaintId?: string;
+  diagnosisId?: string;
+  firstLineOnly?: boolean;
+}): Promise<KbTreatmentRule[]> {
+  if (isStale(_treatments)) {
+    const data = await loadTreatmentsFromDb();
+    _treatments = { data, loadedAt: Date.now(), count: data.length };
+    refreshVersion();
+  }
+  return filterTreatments(_treatments?.data ?? [], opts);
+}
+
+export function getKbPriorsSync(): DiagnosisPrior[] | null {
+  if (!_priors || isStale(_priors)) return null;
+  return _priors.data;
+}
+
+export function getKbRedFlagsSync(complaintId?: string): KbRedFlagRule[] {
+  if (!_redFlags || isStale(_redFlags)) return [];
+  return complaintId ? _redFlags.data.filter((r) => r.complaintId === complaintId) : _redFlags.data;
+}
+
+export function getKbTreatmentsSync(opts?: {
+  complaintId?: string;
+  diagnosisId?: string;
+  firstLineOnly?: boolean;
+}): KbTreatmentRule[] {
+  if (!_treatments || isStale(_treatments)) return [];
+  return filterTreatments(_treatments.data, opts);
+}
+
+export function invalidateKbCache(): void {
+  _priors = null;
+  _redFlags = null;
+  _treatments = null;
+  _kbVersion = "invalidated";
+  console.info("[KbRuntime] Cache invalidated");
+}
+
+export function warmKbCache(): void {
+  Promise.all([loadPriorsFromDb(), loadRedFlagsFromDb(), loadTreatmentsFromDb()])
+    .then(async ([priors, redFlags, treatments]) => {
+      _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
+      _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
+      _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+      refreshVersion();
+
+      if (priors.length > 0) {
+        try {
+          const { setRuntimePriors } = await import("../clinical/bayesianEngine");
+          setRuntimePriors(priors);
+        } catch {
+          // non-fatal
+        }
+      }
+
+      console.info(`[KbRuntime] Cache warmed — version=${_kbVersion}`);
+    })
+    .catch((err) => {
+      console.warn("[KbRuntime] Warm-up failed (non-fatal):", err);
+    });
+}
+
+export async function reloadAndRewireKbCache(traceId?: string): Promise<void> {
+  invalidateKbCache();
+
+  const [priors, redFlags, treatments] = await Promise.all([
+    loadPriorsFromDb(),
+    loadRedFlagsFromDb(),
+    loadTreatmentsFromDb(),
+  ]);
+
+  _priors = { data: priors, loadedAt: Date.now(), count: priors.length };
+  _redFlags = { data: redFlags, loadedAt: Date.now(), count: redFlags.length };
+  _treatments = { data: treatments, loadedAt: Date.now(), count: treatments.length };
+  refreshVersion();
+
+  if (priors.length > 0) {
+    const { setRuntimePriors } = await import("../clinical/bayesianEngine");
+    setRuntimePriors(priors);
+  }
+
+  console.info(
+    `[KbRuntime] Reloaded & rewired — traceId=${traceId ?? "none"} version=${_kbVersion}`
+  );
+}
+
+export function getKbCacheStatus() {
+  return {
+    version: _kbVersion,
+    priors: _priors ? { count: _priors.count, ageMs: Date.now() - _priors.loadedAt } : null,
+    redFlags: _redFlags ? { count: _redFlags.count, ageMs: Date.now() - _redFlags.loadedAt } : null,
+    treatments: _treatments ? { count: _treatments.count, ageMs: Date.now() - _treatments.loadedAt } : null,
+    ttlMs: CACHE_TTL_MS,
+  };
+}
+server/kb/kbConsistencyMonitor.ts
+import { getRedisAsync } from "../queue/redis";
+import { getKbVersion } from "./kbRuntime";
+
+const INSTANCE_ID = process.env.INSTANCE_ID ?? `instance-${Math.random().toString(36).slice(2, 8)}`;
+const VERSION_KEY = "kb:version:instances";
+const VERSION_TTL = 300;
+
+export async function broadcastKbVersion(): Promise<void> {
+  try {
+    const redis = await getRedisAsync();
+    if (!redis || typeof redis.hset !== "function") return;
+
+    const version = getKbVersion() || "unknown";
+
+    await redis.hset(
+      VERSION_KEY,
+      INSTANCE_ID,
+      JSON.stringify({
+        instanceId: INSTANCE_ID,
+        version,
+        ts: Date.now(),
+      })
+    );
+
+    if (typeof redis.expire === "function") {
+      await redis.expire(VERSION_KEY, VERSION_TTL * 10);
+    }
+  } catch (err) {
+    console.warn("[KbConsistencyMonitor] broadcastKbVersion failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+export interface KbVersionEntry {
+  instanceId: string;
+  version: string;
+  ts: number;
+  stale: boolean;
+}
+
+export interface KbDriftReport {
+  localVersion: string;
+  allInstances: KbVersionEntry[];
+  driftDetected: boolean;
+  driftInstances: string[];
+  staleInstances: string[];
+}
+
+export async function checkKbDrift(): Promise<KbDriftReport> {
+  const localVersion = getKbVersion() || "unknown";
+  const now = Date.now();
+
+  const fallback: KbDriftReport = {
+    localVersion,
+    allInstances: [],
+    driftDetected: false,
+    driftInstances: [],
+    staleInstances: [],
+  };
+
+  try {
+    const redis = await getRedisAsync();
+    if (!redis || typeof redis.hgetall !== "function") return fallback;
+
+    const raw = await redis.hgetall(VERSION_KEY);
+    if (!raw) return fallback;
+
+    const allInstances: KbVersionEntry[] = Object.values(raw).map((v) => {
+      try {
+        const parsed = JSON.parse(String(v));
+        return {
+          instanceId: parsed.instanceId,
+          version: parsed.version,
+          ts: parsed.ts,
+          stale: now - parsed.ts > VERSION_TTL * 1000,
+        };
+      } catch {
+        return { instanceId: "unknown", version: "unknown", ts: 0, stale: true };
+      }
+    });
+
+    const driftInstances = allInstances
+      .filter((i) => !i.stale && i.instanceId !== INSTANCE_ID && i.version !== localVersion)
+      .map((i) => i.instanceId);
+
+    const staleInstances = allInstances.filter((i) => i.stale).map((i) => i.instanceId);
+
+    return {
+      localVersion,
+      allInstances,
+      driftDetected: driftInstances.length > 0,
+      driftInstances,
+      staleInstances,
+    };
+  } catch (err) {
+    console.warn("[KbConsistencyMonitor] checkKbDrift failed:", err instanceof Error ? err.message : String(err));
+    return fallback;
+  }
+}
+
+let _pollInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startKbConsistencyMonitor(intervalMs = 60_000): void {
+  if (_pollInterval) return;
+
+  _pollInterval = setInterval(async () => {
+    await broadcastKbVersion();
+    const report = await checkKbDrift();
+
+    if (report.driftDetected) {
+      console.error(
+        `[KbConsistencyMonitor] KB drift detected. local=${report.localVersion} drifted=${report.driftInstances.join(",")}`
+      );
+    }
+  }, intervalMs);
+
+  _pollInterval.unref?.();
+  console.log(`[KbConsistencyMonitor] Started — polling every ${intervalMs / 1000}s`);
+}
+
+export function stopKbConsistencyMonitor(): void {
+  if (_pollInterval) {
+    clearInterval(_pollInterval);
+    _pollInterval = null;
+  }
+}
+server/kb/kbConsistencyAudit.ts
+import { pool } from "../db/pool";
+import { appendAuditEvent } from "../governance/audit";
+
+interface ConsistencyCheck {
+  name: string;
+  domainTable: string;
+  entityType: string;
+  businessKeyColumn: string;
+}
+
+const CHECKS: ConsistencyCheck[] = [
+  { name: "complaints", domainTable: "kb_complaints", entityType: "complaint", businessKeyColumn: "complaint_id" },
+  { name: "questions", domainTable: "kb_questions", entityType: "question", businessKeyColumn: "question_id" },
+  { name: "modifiers", domainTable: "kb_modifiers", entityType: "modifier", businessKeyColumn: "modifier_id" },
+  { name: "complaint_packs", domainTable: "kb_complaint_packs", entityType: "complaint_pack", businessKeyColumn: "complaint_id" },
+  { name: "red_flags", domainTable: "kb_red_flag_rules", entityType: "red_flag_rule", businessKeyColumn: "rule_id" },
+  { name: "workups", domainTable: "kb_workup_rules", entityType: "workup_rule", businessKeyColumn: "rule_id" },
+  { name: "diagnoses", domainTable: "kb_diagnosis_rules", entityType: "diagnosis_rule", businessKeyColumn: "rule_id" },
+  { name: "treatment_rules", domainTable: "kb_treatment_rules", entityType: "treatment_rule", businessKeyColumn: "rule_id" },
+  { name: "dispositions", domainTable: "kb_disposition_rules", entityType: "disposition_rule", businessKeyColumn: "rule_id" },
+  { name: "plan_templates", domainTable: "kb_plan_templates", entityType: "plan_template", businessKeyColumn: "template_key" },
+  { name: "feature_models", domainTable: "kb_feature_models", entityType: "feature_model", businessKeyColumn: "rule_id" },
+  { name: "engine_routing", domainTable: "kb_engine_routing", entityType: "engine_routing", businessKeyColumn: "complaint_id" },
+  { name: "clinical_rules", domainTable: "clinical_rules", entityType: "clinical_rule", businessKeyColumn: "rule_key" },
+];
+
+export interface CheckResult {
+  name: string;
+  missingFromEntityStore: number;
+  orphanedInEntityStore: number;
+  missingSample: string[];
+  orphanedSample: string[];
+}
+
+export interface KbConsistencyReport {
+  severity: "ok" | "alert";
+  checks: CheckResult[];
+  runAt: string;
+}
+
+function quoteIdent(identifier: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
+    throw new Error(`Unsafe SQL identifier: ${identifier}`);
+  }
+  return `"${identifier}"`;
+}
+
+export async function runKbConsistencyAudit(): Promise<KbConsistencyReport> {
+  const results: CheckResult[] = [];
+  const runAt = new Date().toISOString();
+
+  for (const check of CHECKS) {
+    try {
+      const table = quoteIdent(check.domainTable);
+      const keyCol = quoteIdent(check.businessKeyColumn);
+
+      const missing = await pool.query(
+        `
+        SELECT d.${keyCol}::text AS id
+        FROM ${table} d
+        LEFT JOIN kb_entity_store k
+          ON k.entity_type = $1
+         AND k.entity_key = d.${keyCol}::text
+        WHERE k.entity_key IS NULL
+        LIMIT 500
+        `,
+        [check.entityType]
+      );
+
+      const orphaned = await pool.query(
+        `
+        SELECT k.entity_key
+        FROM kb_entity_store k
+        LEFT JOIN ${table} d
+          ON d.${keyCol}::text = k.entity_key
+        WHERE k.entity_type = $1
+          AND d.${keyCol} IS NULL
+        LIMIT 500
+        `,
+        [check.entityType]
+      );
+
+      results.push({
+        name: check.name,
+        missingFromEntityStore: missing.rowCount ?? 0,
+        orphanedInEntityStore: orphaned.rowCount ?? 0,
+        missingSample: missing.rows.slice(0, 20).map((r: any) => String(r.id)),
+        orphanedSample: orphaned.rows.slice(0, 20).map((r: any) => String(r.entity_key)),
+      });
+    } catch (e: any) {
+      results.push({
+        name: check.name,
+        missingFromEntityStore: -1,
+        orphanedInEntityStore: -1,
+        missingSample: [],
+        orphanedSample: [`ERROR: ${e?.message}`],
+      });
+    }
+  }
+
+  const severity: "ok" | "alert" = results.some(
+    (r) => r.missingFromEntityStore !== 0 || r.orphanedInEntityStore !== 0
+  )
+    ? "alert"
+    : "ok";
+
+  await appendAuditEvent({
+    tenantId: null,
+    actorId: "system",
+    action: "KB_CONSISTENCY_AUDIT_COMPLETED",
+    entityType: "kb_entity_store",
+    payload: { severity, runAt, checkCount: results.length, results },
+  });
+
+  return { severity, checks: results, runAt };
+}
+server/cache/triageCache.ts
+import { LRUCache } from "lru-cache";
+
+const TTL_MS = 1000 * 60 * 5;
+
+const cache = new LRUCache<string, unknown>({
+  max: 2000,
+  ttl: TTL_MS,
+  allowStale: false,
+});
+
+let hits = 0;
+let misses = 0;
+
+export function getCachedTriage<T = unknown>(key: string): T | undefined {
+  const entry = cache.get(key) as T | undefined;
+  if (entry !== undefined) {
+    hits++;
+    return entry;
+  }
+  misses++;
+  return undefined;
+}
+
+export function setCachedTriage<T = unknown>(key: string, result: T): void {
+  cache.set(key, result);
+}
+
+export function buildTriageCacheKey(
+  complaint: string,
+  answers: Record<string, any>,
+  clinicId: string,
+  kbVersion: string,
+): string {
+  const normalized = {
+    clinic: clinicId,
+    kbv: kbVersion,
+    c: complaint.trim().toLowerCase(),
+    a: Object.fromEntries(
+      Object.entries(answers)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .filter(([, v]) => v !== undefined && v !== null)
+    ),
+  };
+  return JSON.stringify(normalized);
+}
+
+export function invalidateTriageCacheForClinic(clinicId: string): number {
+  const keysToDelete: string[] = [];
+  cache.forEach((_value, key) => {
+    try {
+      const parsed = JSON.parse(key);
+      if (parsed.clinic === clinicId) keysToDelete.push(key);
+    } catch {
+      // skip malformed key
+    }
+  });
+
+  for (const key of keysToDelete) {
+    cache.delete(key);
+  }
+
+  return keysToDelete.length;
+}
+
+export function invalidateTriageCache(): void {
+  cache.clear();
+}
+
+export function getTriageCacheStats() {
+  return {
+    size: cache.size,
+    maxSize: 2000,
+    ttlMs: TTL_MS,
+    hits,
+    misses,
+    hitRate: hits + misses > 0 ? Number((hits / (hits + misses)).toFixed(4)) : 0,
+  };
+}
+server/cache/responseCache.ts
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+class ResponseCache {
+  private store = new Map<string, CacheEntry<unknown>>();
+  private readonly maxSize: number;
+
+  constructor(maxSize = 500) {
+    this.maxSize = maxSize;
+    setInterval(() => this.evictExpired(), 60_000).unref?.();
+  }
+
+  get<T>(key: string): T | null {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+
+    // promote on access
+    this.store.delete(key);
+    this.store.set(key, entry);
+
+    return entry.value as T;
+  }
+
+  set<T>(key: string, value: T, ttlMs = 300_000): void {
+    if (this.store.has(key)) {
+      this.store.delete(key);
+    } else if (this.store.size >= this.maxSize) {
+      const lruKey = this.store.keys().next().value;
+      if (lruKey) this.store.delete(lruKey);
+    }
+
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+  }
+
+  delete(key: string): void {
+    this.store.delete(key);
+  }
+
+  clear(): void {
+    this.store.clear();
+  }
+
+  size(): number {
+    return this.store.size;
+  }
+
+  private evictExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.store.entries()) {
+      if (now > entry.expiresAt) this.store.delete(key);
+    }
+  }
+
+  stats() {
+    return {
+      size: this.store.size,
+      maxSize: this.maxSize,
+      utilizationPct: Math.round((this.store.size / this.maxSize) * 100),
+    };
+  }
+}
+
+export const responseCache = new ResponseCache(500);
+server/cache/semanticCache.ts
+import crypto from "crypto";
+import { cosineSimilarity } from "../retrieval/hybridRetriever";
+
+let _redis: import("ioredis").default | null = null;
+
+async function getRedis(): Promise<import("ioredis").default | null> {
+  if (_redis) return _redis;
+  const url = process.env.REDIS_URL;
+  if (!url) return null;
+
+  try {
+    const { default: Redis } = await import("ioredis");
+    const client = new Redis(url, {
+      lazyConnect: true,
+      connectTimeout: 3000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+    });
+    await client.connect();
+    _redis = client;
+    return _redis;
+  } catch {
+    return null;
+  }
+}
+
+export interface CacheEntry {
+  query: string;
+  embedding: number[];
+  response: string;
+  cachedAt: number;
+}
+
+const CACHE_PREFIX = "rag_cache:";
+const INDEX_KEY = "rag_cache:index";
+const SIM_THRESHOLD = 0.92;
+const TTL_SECONDS = 3600;
+const MAX_SCAN = 250;
+
+function normalizeQuery(q: string): string {
+  return q.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function cacheKeyForQuery(query: string): string {
+  const digest = crypto.createHash("sha256").update(normalizeQuery(query)).digest("hex");
+  return `${CACHE_PREFIX}${digest}`;
+}
+
+export async function checkCache(
+  query: string,
+  embedding: number[],
+): Promise<string | null> {
+  const redis = await getRedis();
+  if (!redis) return null;
+
+  try {
+    const sample = await redis.srandmember(INDEX_KEY, MAX_SCAN);
+    const keys = Array.isArray(sample) ? sample : sample ? [sample] : [];
+    if (keys.length === 0) return null;
+
+    const values = await redis.mget(...keys);
+    for (const raw of values) {
+      if (!raw) continue;
+
+      let entry: CacheEntry;
+      try {
+        entry = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+
+      if (!entry.embedding?.length) continue;
+
+      const sim = cosineSimilarity(embedding, entry.embedding);
+      if (sim >= SIM_THRESHOLD) {
+        return entry.response;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function storeCache(
+  query: string,
+  embedding: number[],
+  response: string,
+): Promise<void> {
+  const redis = await getRedis();
+  if (!redis) return;
+
+  try {
+    const entry: CacheEntry = {
+      query,
+      embedding,
+      response,
+      cachedAt: Date.now(),
+    };
+
+    const key = cacheKeyForQuery(query);
+
+    const multi = redis.multi();
+    multi.set(key, JSON.stringify(entry), "EX", TTL_SECONDS);
+    multi.sadd(INDEX_KEY, key);
+    multi.expire(INDEX_KEY, TTL_SECONDS * 2);
+    await multi.exec();
+  } catch {
+    // non-fatal
+  }
+}
+
+export async function clearCache(): Promise<{ cleared: number }> {
+  const redis = await getRedis();
+  if (!redis) return { cleared: 0 };
+
+  try {
+    const keys = await redis.smembers(INDEX_KEY);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+    await redis.del(INDEX_KEY);
+    return { cleared: keys.length };
+  } catch {
+    return { cleared: 0 };
+  }
+}
+
+export async function cacheStats(): Promise<{
+  entries: number;
+  redisConnected: boolean;
+  threshold: number;
+  ttlSeconds: number;
+}> {
+  const redis = await getRedis();
+  if (!redis) {
+    return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+  }
+
+  try {
+    const entries = await redis.scard(INDEX_KEY);
+    return { entries, redisConnected: true, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+  } catch {
+    return { entries: 0, redisConnected: false, threshold: SIM_THRESHOLD, ttlSeconds: TTL_SECONDS };
+  }
+}
+server/kb/specEngine.ts
+
+Fix the fallback precedence bug.
+
+export const SEED_RULES: SpecRule[] = [
+  {
+    ruleId: "R001",
+    complaintId: "*",
+    priority: 10,
+    whenExpr: "(input.scores?.NEWS2 >= 7) || (Number(input.icuProb ?? 0) > 0.80)",
+    dispositionLevel: "ICU",
+    confidenceHint: "HIGH",
+  },
+  {
+    ruleId: "R002",
+    complaintId: "*",
+    priority: 20,
+    whenExpr: "(input.scores?.NEWS2 >= 5) || (input.sepsisRisk?.highRisk === true)",
+    dispositionLevel: "ED",
+    confidenceHint: "HIGH",
+  },
+  {
+    ruleId: "R003",
+    complaintId: "*",
+    priority: 30,
+    whenExpr: "(input.scores?.NEWS2 >= 3) || (Number(input.vitals?.systolicBP ?? Infinity) < 100)",
+    dispositionLevel: "URGENT_CARE",
+    confidenceHint: "MODERATE",
+  },
+  {
+    ruleId: "R004",
+    complaintId: "*",
+    priority: 90,
+    whenExpr: "(input.scores?.NEWS2 ?? Infinity) < 3",
+    dispositionLevel: "HOME",
+    confidenceHint: "MODERATE",
+  },
+];
+server/kb/kbSeeder.ts
+
+Seeder should not overwrite governed edits unless explicitly forced.
+
+import { db } from "../db";
+import {
+  kbComplaints, kbQuestions, kbModifiers, kbRedFlagRules,
+  kbWorkupRules, kbDiagnosisRules, kbTreatmentRules,
+  kbDispositionRules, kbPlanTemplates, kbGoldenCases,
+  kbPopulationPriors,
+} from "../../shared/schema";
+import { sql } from "drizzle-orm";
+import fs from "fs";
+import path from "path";
+import { parse } from "csv-parse/sync";
+
+const CSV = path.join(process.cwd(), "server/data/csv");
+const FORCE_RESEED_BAYESIAN_PRIORS = process.env.FORCE_RESEED_BAYESIAN_PRIORS === "true";
+
+function parseCsv(filePath: string): Record<string, string>[] {
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    return parse(text, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_quotes: true,
+      trim: true,
+    }) as Record<string, string>[];
+  } catch {
+    return [];
+  }
+}
+
+export async function upsertBayesianPriors(): Promise<void> {
+  const BAYESIAN_PRIORS = [
+    // keep existing priors array here unchanged
+  ];
+
+  for (const bp of BAYESIAN_PRIORS) {
+    const row = {
+      ruleId: bp.ruleId,
+      complaintId: bp.complaintId,
+      diagnosisId: bp.diagnosisId,
+      diagnosisLabel: bp.diagnosisLabel,
+      icdCode: null,
+      baseProbability: bp.baseProbability,
+      featureLikelihoods: bp.featureLikelihoods as any,
+      cannotMiss: false,
+      basePoints: 50,
+      clusterPriority: 10,
+      active: true,
+    };
+
+    if (FORCE_RESEED_BAYESIAN_PRIORS) {
+      await db.insert(kbDiagnosisRules).values(row).onConflictDoUpdate({
+        target: kbDiagnosisRules.ruleId,
+        set: {
+          baseProbability: bp.baseProbability,
+          featureLikelihoods: bp.featureLikelihoods as any,
+          active: true,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      await db.insert(kbDiagnosisRules).values(row).onConflictDoNothing();
+    }
+  }
+
+  console.log(
+    `[KB Seeder] ${FORCE_RESEED_BAYESIAN_PRIORS ? "Force-upserted" : "Seeded-if-missing"} Bayesian priors`
+  );
+}
+
+export async function seedPopulationPriors(): Promise<void> {
+  const rows = [
+    { populationFlag: "pregnancy", diagnosisKey: "ectopic_pregnancy", multiplier: 3.0, rationale: "Higher prior in pregnancy" },
+    { populationFlag: "pregnancy", diagnosisKey: "preeclampsia", multiplier: 2.5, rationale: "Pregnancy-specific hypertensive disease" },
+    { populationFlag: "elderly", diagnosisKey: "pneumonia", multiplier: 1.5, rationale: "Higher pretest probability in elderly adults" },
+    { populationFlag: "immunocompromised", diagnosisKey: "sepsis", multiplier: 2.0, rationale: "Higher severe infection risk" },
+    { populationFlag: "chf", diagnosisKey: "acute_decompensated_heart_failure", multiplier: 2.0, rationale: "Known CHF raises CHF exacerbation prior" },
+    { populationFlag: "copd", diagnosisKey: "COPD_exacerbation", multiplier: 2.0, rationale: "Known COPD raises COPD exacerbation prior" },
+  ];
+
+  for (const row of rows) {
+    await db.insert(kbPopulationPriors).values(row).onConflictDoNothing();
+  }
+}
+2) kb_population_priors schema + migration
+shared/schema.ts
+
+Add:
+
+export const kbPopulationPriors = pgTable("kb_population_priors", {
+  id: serial("id").primaryKey(),
+  populationFlag: text("population_flag").notNull(),
+  diagnosisKey: text("diagnosis_key").notNull(),
+  multiplier: real("multiplier").notNull().default(1.0),
+  rationale: text("rationale"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (t) => ({
+  uqPopulationDx: uniqueIndex("uq_kb_population_priors_flag_dx").on(t.populationFlag, t.diagnosisKey),
+  populationIdx: index("idx_kb_population_priors_flag").on(t.populationFlag),
+  diagnosisIdx: index("idx_kb_population_priors_dx").on(t.diagnosisKey),
+}));
+
+export const insertKbPopulationPriorSchema = createInsertSchema(kbPopulationPriors).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertKbPopulationPrior = z.infer<typeof insertKbPopulationPriorSchema>;
+export type KbPopulationPrior = typeof kbPopulationPriors.$inferSelect;
+SQL migration migrations/00xx_create_kb_population_priors.sql
+CREATE TABLE IF NOT EXISTS kb_population_priors (
+  id serial PRIMARY KEY,
+  population_flag text NOT NULL,
+  diagnosis_key text NOT NULL,
+  multiplier real NOT NULL DEFAULT 1.0,
+  rationale text,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kb_population_priors_flag_dx
+  ON kb_population_priors (population_flag, diagnosis_key);
+
+CREATE INDEX IF NOT EXISTS idx_kb_population_priors_flag
+  ON kb_population_priors (population_flag);
+
+CREATE INDEX IF NOT EXISTS idx_kb_population_priors_dx
+  ON kb_population_priors (diagnosis_key);
+server/clinical/bayesianPriorService.ts
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "../db";
+import { kbPopulationPriors } from "../../shared/schema";
+import { ClinicalPopulationFlags } from "../db/sharedTypes";
+
+type PriorShiftMap = Record<string, number>;
+
+const priorCache = new Map<string, { value: PriorShiftMap; expiresAt: number }>();
+const TTL_MS = 5 * 60_000;
+
+function flagsKey(flags: ClinicalPopulationFlags): string {
+  return (
+    Object.entries(flags)
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+      .sort()
+      .join("|") || "default"
+  );
+}
+
+export async function getPopulationPriorMultipliers(
+  flags: ClinicalPopulationFlags
+): Promise<PriorShiftMap> {
+  const key = flagsKey(flags);
+  const hit = priorCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+  const activeFlags = Object.entries(flags)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
+  if (!activeFlags.length) {
+    const empty: PriorShiftMap = {};
+    priorCache.set(key, { value: empty, expiresAt: Date.now() + TTL_MS });
+    return empty;
+  }
+
+  try {
+    const rows = await db
+      .select({
+        populationFlag: kbPopulationPriors.populationFlag,
+        diagnosisKey: kbPopulationPriors.diagnosisKey,
+        multiplier: kbPopulationPriors.multiplier,
+      })
+      .from(kbPopulationPriors)
+      .where(
+        and(
+          inArray(kbPopulationPriors.populationFlag, activeFlags),
+          eq(kbPopulationPriors.active, true)
+        )
+      );
+
+    const map: PriorShiftMap = {};
+    for (const row of rows) {
+      const current = map[row.diagnosisKey] ?? 1;
+      map[row.diagnosisKey] = current * Number(row.multiplier);
+    }
+
+    priorCache.set(key, { value: map, expiresAt: Date.now() + TTL_MS });
+    return map;
+  } catch (e: any) {
+    console.error("[BayesianPriorService] Failed to load population priors:", e?.message ?? e);
+    const neutral: PriorShiftMap = {};
+    priorCache.set(key, { value: neutral, expiresAt: Date.now() + TTL_MS });
+    return neutral;
+  }
+}
+
+export function invalidatePriorCache(): void {
+  priorCache.clear();
+}
+
+export function getPriorCacheStats(): { size: number; keys: string[] } {
+  return { size: priorCache.size, keys: [...priorCache.keys()] };
+}
+3) Default new KB entities to draft
+server/kb/kbRepository.ts
+// in upsertKbEntity() insert path only
+
+const [inserted] = await tx
+  .insert(kbEntityStore)
+  .values({
+    entityType: input.entityType,
+    entityKey: input.entityKey,
+    title: input.title,
+    status: "draft", // changed from "active"
+    version: 1,
+    tags: input.tags ?? [],
+    currentContent: input.content,
+    sourceId: sourceId ?? null,
+    createdBy: input.changedBy ?? "system",
+    updatedBy: input.changedBy ?? "system",
+  } satisfies InsertKbEntityStore)
+  .returning();
+4) Regression tests
+tests/kbAuthMiddleware.test.ts
+import { requireKbAdmin } from "../server/kb/middleware/kbAuthMiddleware";
+
+describe("requireKbAdmin", () => {
+  test("rejects x-kb-role header elevation", () => {
+    const req: any = {
+      headers: { "x-kb-role": "super_admin" },
+      user: undefined,
+      actor: undefined,
+    };
+
+    const res: any = {
+      statusCode: 200,
+      payload: null,
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      json(data: any) {
+        this.payload = data;
+        return this;
+      },
+    };
+
+    const next = jest.fn();
+
+    requireKbAdmin(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(res.payload.code).toBe("KB_ADMIN_REQUIRED");
+  });
+
+  test("allows authenticated admin role", () => {
+    const req: any = {
+      headers: {},
+      user: { role: "kb_admin" },
+    };
+
+    const res: any = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+
+    const next = jest.fn();
+
+    requireKbAdmin(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+  });
+});
+tests/specEngine.test.ts
+import { applyRules, SEED_RULES } from "../server/kb/specEngine";
+
+describe("specEngine seed rules", () => {
+  test("ICU triggers when icuProb > 0.80", () => {
+    const result = applyRules({ icuProb: 0.95 }, SEED_RULES);
+    expect(result.disposition).toBe("ICU");
+  });
+
+  test("HOME triggers when NEWS2 < 3", () => {
+    const result = applyRules({ scores: { NEWS2: 1 } }, SEED_RULES);
+    expect(result.disposition).toBe("HOME");
+  });
+});
+tests/triageCache.test.ts
+import {
+  buildTriageCacheKey,
+  setCachedTriage,
+  getCachedTriage,
+  invalidateTriageCache,
+} from "../server/cache/triageCache";
+
+describe("triageCache", () => {
+  afterEach(() => invalidateTriageCache());
+
+  test("includes clinic and KB version in key", () => {
+    const key1 = buildTriageCacheKey("cough", { fever: true }, "clinic-a", "v1");
+    const key2 = buildTriageCacheKey("cough", { fever: true }, "clinic-b", "v1");
+    const key3 = buildTriageCacheKey("cough", { fever: true }, "clinic-a", "v2");
+
+    expect(key1).not.toBe(key2);
+    expect(key1).not.toBe(key3);
+  });
+
+  test("stores and retrieves entry", () => {
+    const key = buildTriageCacheKey("cough", { fever: true }, "clinic-a", "v1");
+    setCachedTriage(key, { disposition: "HOME" });
+
+    expect(getCachedTriage(key)).toEqual({ disposition: "HOME" });
+  });
+});
+tests/diagnosisPriorLoader.test.ts
+import { loadComplaintPriors, invalidatePriorCache } from "../server/clinical/diagnosisPriorLoader";
+
+describe("diagnosisPriorLoader", () => {
+  afterEach(() => invalidatePriorCache());
+
+  test("returns fallback bundle when no loader is registered", async () => {
+    const bundle = await loadComplaintPriors("cough");
+    expect(bundle.ccId).toBe("cough");
+    expect(Array.isArray(bundle.priors)).toBe(true);
+    expect(bundle.priors.length).toBe(0);
+  });
+});
+5) Migrate JSON-as-text and timestamp-as-text fields
+shared/schema.ts
+
+Change:
+
+// encounters table
+conversationHistory: jsonb("conversation_history").$type<unknown[]>(),
+answers: jsonb("answers").$type<Record<string, unknown>>(),
+proposal: jsonb("proposal").$type<Record<string, unknown>>(),
+physicianSummary: jsonb("physician_summary").$type<Record<string, unknown>>(),
+intakeLinkEvents: jsonb("intake_link_events").$type<unknown[]>().default([]),
+intakeExpiresAt: timestamp("intake_expires_at"),
+SQL migration migrations/00xy_encounters_jsonb_and_timestamp.sql
+ALTER TABLE encounters
+  ADD COLUMN conversation_history_jsonb jsonb,
+  ADD COLUMN answers_jsonb jsonb,
+  ADD COLUMN proposal_jsonb jsonb,
+  ADD COLUMN physician_summary_jsonb jsonb,
+  ADD COLUMN intake_link_events_jsonb jsonb,
+  ADD COLUMN intake_expires_at_ts timestamp;
+
+UPDATE encounters
+SET
+  conversation_history_jsonb =
+    CASE
+      WHEN conversation_history IS NULL OR btrim(conversation_history) = '' THEN NULL
+      ELSE conversation_history::jsonb
+    END,
+  answers_jsonb =
+    CASE
+      WHEN answers IS NULL OR btrim(answers) = '' THEN NULL
+      ELSE answers::jsonb
+    END,
+  proposal_jsonb =
+    CASE
+      WHEN proposal IS NULL OR btrim(proposal) = '' THEN NULL
+      ELSE proposal::jsonb
+    END,
+  physician_summary_jsonb =
+    CASE
+      WHEN physician_summary IS NULL OR btrim(physician_summary) = '' THEN NULL
+      ELSE physician_summary::jsonb
+    END,
+  intake_link_events_jsonb =
+    CASE
+      WHEN intake_link_events IS NULL OR btrim(intake_link_events) = '' THEN '[]'::jsonb
+      ELSE intake_link_events::jsonb
+    END,
+  intake_expires_at_ts =
+    CASE
+      WHEN intake_expires_at IS NULL OR btrim(intake_expires_at) = '' THEN NULL
+      ELSE intake_expires_at::timestamp
+    END;
+
+ALTER TABLE encounters DROP COLUMN conversation_history;
+ALTER TABLE encounters DROP COLUMN answers;
+ALTER TABLE encounters DROP COLUMN proposal;
+ALTER TABLE encounters DROP COLUMN physician_summary;
+ALTER TABLE encounters DROP COLUMN intake_link_events;
+ALTER TABLE encounters DROP COLUMN intake_expires_at;
+
+ALTER TABLE encounters RENAME COLUMN conversation_history_jsonb TO conversation_history;
+ALTER TABLE encounters RENAME COLUMN answers_jsonb TO answers;
+ALTER TABLE encounters RENAME COLUMN proposal_jsonb TO proposal;
+ALTER TABLE encounters RENAME COLUMN physician_summary_jsonb TO physician_summary;
+ALTER TABLE encounters RENAME COLUMN intake_link_events_jsonb TO intake_link_events;
+ALTER TABLE encounters RENAME COLUMN intake_expires_at_ts TO intake_expires_at;
+One more route hardening patch
+server/kb/services/kbWriteService.ts
+import { eq } from "drizzle-orm";
+import { db, query } from "../../db";
+import { canonicalPathways } from "../../../shared/schema";
+import { auditStep } from "../../audit/auditLogger";
+
+class KbReadServiceError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "KbReadServiceError";
+  }
+}
+
+async function safeReloadKbCache(traceId: string): Promise<void> {
+  try {
+    const { reloadAndRewireKbCache } = await import("../kbRuntime");
+    await reloadAndRewireKbCache(traceId);
+  } catch (err) {
+    console.warn("[kbWriteService] KB cache reload failed:", err);
+  }
+}
+
+async function safeAuditStep(
+  traceId: string,
+  step: string,
+  input: unknown,
+  output: unknown
+): Promise<void> {
+  try {
+    await auditStep({ traceId, step, input, output, metadata: {} });
+  } catch (err) {
+    console.warn("[kbWriteService] audit step failed:", err);
+  }
+}
+
+// keep CanonicalPathwayData unchanged
+
+export async function listCanonicalPathways(
+  complaintId?: string,
+  activeOnly = true
+): Promise<any[]> {
+  try {
+    const sql = complaintId
+      ? `SELECT * FROM canonical_pathways WHERE complaint_id = $1 ${activeOnly ? "AND active = TRUE" : ""} ORDER BY created_at DESC`
+      : `SELECT * FROM canonical_pathways ${activeOnly ? "WHERE active = TRUE" : ""} ORDER BY created_at DESC`;
+
+    const result = complaintId ? await query(sql, [complaintId]) : await query(sql);
+    return result.rows;
+  } catch (err) {
+    throw new KbReadServiceError("Failed to list canonical pathways", err);
+  }
+}
+
+export async function getCanonicalPathway(pathwayId: string): Promise<any | null> {
+  try {
+    const result = await query(
+      `SELECT * FROM canonical_pathways WHERE pathway_id = $1 LIMIT 1`,
+      [pathwayId]
+    );
+    return result.rows[0] ?? null;
+  } catch (err) {
+    throw new KbReadServiceError(`Failed to fetch canonical pathway ${pathwayId}`, err);
+  }
+}
+server/kb/routes/kbAdminRoutes.ts
+import { Router } from "express";
+import { requireKbAdmin } from "../middleware/kbAuthMiddleware";
+import {
+  previewCanonicalPromotionHandler,
+  promoteCanonicalPathwayHandler,
+  retireCanonicalPathwayHandler,
+  generateCanonicalDraftFromCaseHandler,
+} from "../../services/kbAdminConsistencyIntegration";
+import { listCanonicalPathways, getCanonicalPathway } from "../services/kbWriteService";
+
+const router = Router();
+
+router.post("/canonical-pathways/preview-promotion", requireKbAdmin, previewCanonicalPromotionHandler);
+router.post("/canonical-pathways/promote", requireKbAdmin, promoteCanonicalPathwayHandler);
+router.post("/canonical-pathways/retire", requireKbAdmin, retireCanonicalPathwayHandler);
+router.post("/canonical-pathways/generate-draft-from-case", requireKbAdmin, generateCanonicalDraftFromCaseHandler);
+
+router.get("/canonical-pathways", async (req, res) => {
+  try {
+    const { complaintId } = req.query;
+    const pathways = await listCanonicalPathways(complaintId as string | undefined);
+    res.json({ ok: true, pathways });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAYS_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathways unavailable",
+    });
+  }
+});
+
+router.get("/canonical-pathways/:pathwayId", async (req, res) => {
+  try {
+    const pathway = await getCanonicalPathway(req.params.pathwayId);
+    if (!pathway) {
+      res.status(404).json({ ok: false, error: "Not found" });
+      return;
+    }
+    res.json({ ok: true, pathway });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAY_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathway unavailable",
+    });
+  }
+});
+
+export default router;

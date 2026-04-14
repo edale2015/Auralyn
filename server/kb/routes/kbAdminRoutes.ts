@@ -34,16 +34,38 @@ router.post(
   generateCanonicalDraftFromCaseHandler
 );
 
+// FIX: Canonical-pathway reads were silently swallowing DB errors and returning
+// empty arrays. In a safety-critical admin console, DB failure must surface as a
+// 503 so operators know the system is broken, not "just empty."
 router.get("/canonical-pathways", async (req, res) => {
-  const { complaintId } = req.query;
-  const pathways = await listCanonicalPathways(complaintId as string | undefined);
-  res.json({ ok: true, pathways });
+  try {
+    const { complaintId } = req.query;
+    const pathways = await listCanonicalPathways(complaintId as string | undefined);
+    res.json({ ok: true, pathways });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAYS_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathways unavailable",
+    });
+  }
 });
 
 router.get("/canonical-pathways/:pathwayId", async (req, res) => {
-  const pathway = await getCanonicalPathway(req.params.pathwayId);
-  if (!pathway) return res.status(404).json({ ok: false, error: "Not found" });
-  res.json({ ok: true, pathway });
+  try {
+    const pathway = await getCanonicalPathway(req.params.pathwayId);
+    if (!pathway) {
+      res.status(404).json({ ok: false, error: "Not found" });
+      return;
+    }
+    res.json({ ok: true, pathway });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAY_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathway unavailable",
+    });
+  }
 });
 
 export default router;

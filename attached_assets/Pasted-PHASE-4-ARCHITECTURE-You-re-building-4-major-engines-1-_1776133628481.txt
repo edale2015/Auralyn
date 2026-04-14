@@ -1,0 +1,199 @@
+PHASE 4 ARCHITECTURE
+You’re building 4 major engines:
+1. 🔮 Predictive Intelligence Engine
+Time-series vitals (BP, HR, SpO2, Temp)
+NEWS2 / Sepsis / Shock prediction
+Risk trending (not just snapshot)
+2. 🏥 ICU Modeling Engine
+Multi-patient prioritization
+ICU bed allocation logic
+Deterioration ranking
+3. 📡 Real-Time Patient Stream
+WebSockets → live data feed
+Continuous updates
+Alert triggers
+4. 🖥️ Control Tower UI
+Patient grid (ICU-style)
+Risk heatmaps
+Timeline graphs
+Alert prioritization
+📦 PATCH BUNDLE — PHASE 4
+/phase4_predictive_control_tower/
+  ├── predictive_engine/
+  ├── icu_model/
+  ├── realtime_stream/
+  ├── control_tower_ui/
+  ├── routes/
+  └── services/
+1️⃣ PREDICTIVE INTELLIGENCE ENGINE
+📁 server/predictive/deteriorationEngine.ts
+interface Vitals {
+  hr: number;
+  rr: number;
+  systolicBP: number;
+  spo2: number;
+  temp: number;
+}
+
+export function calculateNEWS2(v: Vitals): number {
+  let score = 0;
+
+  if (v.hr > 130 || v.hr < 40) score += 3;
+  else if (v.hr > 110) score += 2;
+
+  if (v.systolicBP < 90) score += 3;
+  else if (v.systolicBP < 100) score += 2;
+
+  if (v.spo2 < 90) score += 3;
+  else if (v.spo2 < 94) score += 2;
+
+  if (v.temp > 39 || v.temp < 35) score += 2;
+
+  if (v.rr > 25) score += 3;
+
+  return score;
+}
+
+export function predictDeterioration(trend: number[]): number {
+  // simple slope-based deterioration prediction
+  if (trend.length < 2) return 0;
+
+  const delta = trend[trend.length - 1] - trend[0];
+  return Math.max(0, delta);
+}
+2️⃣ ICU MODEL — MULTI-PATIENT RANKING
+📁 server/icu/icuTriageEngine.ts
+export interface Patient {
+  id: string;
+  news2: number;
+  deteriorationScore: number;
+}
+
+export function rankPatients(patients: Patient[]) {
+  return patients
+    .map(p => ({
+      ...p,
+      riskScore: p.news2 * 0.7 + p.deteriorationScore * 0.3,
+    }))
+    .sort((a, b) => b.riskScore - a.riskScore);
+}
+🛏️ ICU BED ALLOCATION
+export function allocateICUBeds(patients: Patient[], availableBeds: number) {
+  const ranked = rankPatients(patients);
+  return ranked.slice(0, availableBeds);
+}
+3️⃣ REAL-TIME PATIENT STREAM
+📁 server/realtime/patientStream.ts
+import WebSocket from "ws";
+
+const clients = new Set<WebSocket>();
+
+export function initPatientStream(server: any) {
+  const wss = new WebSocket.Server({ server });
+
+  wss.on("connection", ws => {
+    clients.add(ws);
+
+    ws.on("close", () => clients.delete(ws));
+  });
+}
+
+export function broadcastPatientUpdate(data: any) {
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  }
+}
+4️⃣ CONTROL TOWER BACKEND
+📁 server/controlTower/controlTowerService.ts
+import { calculateNEWS2 } from "../predictive/deteriorationEngine";
+import { rankPatients } from "../icu/icuTriageEngine";
+
+export async function getControlTowerView(patients: any[]) {
+  const enriched = patients.map(p => {
+    const news2 = calculateNEWS2(p.vitals);
+
+    return {
+      ...p,
+      news2,
+      riskLevel:
+        news2 >= 7 ? "CRITICAL" :
+        news2 >= 5 ? "HIGH" :
+        news2 >= 3 ? "MODERATE" : "LOW",
+    };
+  });
+
+  return rankPatients(enriched);
+}
+5️⃣ CONTROL TOWER ROUTE
+📁 server/routes/controlTowerRoutes.ts
+import { Router } from "express";
+import { getControlTowerView } from "../controlTower/controlTowerService";
+
+const router = Router();
+
+router.get("/patients", async (req, res) => {
+  const patients = await loadActivePatients(); // your DB
+
+  const view = await getControlTowerView(patients);
+
+  res.json(view);
+});
+
+export default router;
+6️⃣ CONTROL TOWER UI (ICU DASHBOARD)
+📁 frontend/src/pages/ControlTower.tsx
+import { useEffect, useState } from "react";
+
+export default function ControlTower() {
+  const [patients, setPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/control-tower/patients")
+      .then(res => res.json())
+      .then(setPatients);
+  }, []);
+
+  return (
+    <div className="p-6">
+      <h1 className="text-xl font-bold mb-4">ICU Control Tower</h1>
+
+      <div className="grid grid-cols-3 gap-4">
+        {patients.map(p => (
+          <div key={p.id} className="border p-4">
+            <div><b>{p.id}</b></div>
+            <div>NEWS2: {p.news2}</div>
+            <div className={`text-${color(p.riskLevel)}`}>
+              {p.riskLevel}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function color(level: string) {
+  if (level === "CRITICAL") return "red-500";
+  if (level === "HIGH") return "orange-500";
+  if (level === "MODERATE") return "yellow-500";
+  return "green-500";
+}
+7️⃣ LIVE UPDATES (WEBSOCKET UI)
+useEffect(() => {
+  const ws = new WebSocket("ws://localhost:3000");
+
+  ws.onmessage = (event) => {
+    const update = JSON.parse(event.data);
+    setPatients(update);
+  };
+
+  return () => ws.close();
+}, []);
+🧠 WHAT YOU JUST BUILT
+BEFORE ❌
+Static triage
+Single-patient logic
+No prediction
+No prioritization

@@ -1,0 +1,206 @@
+1. Change new KB entities from auto-active to draft
+
+Your kbRepository.ts still inserts new KB entities with status: "active". In a clinical KB, new rules should not leap onto the live wire without review.
+
+// server/kb/kbRepository.ts
+// change INSERT PATH only
+
+const [inserted] = await tx
+  .insert(kbEntityStore)
+  .values({
+    entityType: input.entityType,
+    entityKey: input.entityKey,
+    title: input.title,
+    status: "draft", // was "active"
+    version: 1,
+    tags: input.tags ?? [],
+    currentContent: input.content,
+    sourceId: sourceId ?? null,
+    createdBy: input.changedBy ?? "system",
+    updatedBy: input.changedBy ?? "system",
+  } satisfies InsertKbEntityStore)
+  .returning();
+2. Align entity-type names between kbTypes.ts and the consistency audit
+
+The audit currently uses values like complaint_pack and red_flag, while kbTypes.ts defines complaint, red_flag_rule, etc. That mismatch means even a fixed join can still report nonsense.
+
+Use one canonical vocabulary everywhere:
+
+// server/kb/kbTypes.ts
+export type KbEntityType =
+  | "complaint"
+  | "question"
+  | "modifier"
+  | "red_flag_rule"
+  | "workup_rule"
+  | "diagnosis_rule"
+  | "treatment_rule"
+  | "disposition_rule"
+  | "plan_template"
+  | "feature_model"
+  | "engine_routing"
+  | "clinical_rule"
+  | "complaint_pack";
+
+And make the audit use exactly those strings.
+
+3. Do not silently swallow canonical-pathway read failures
+
+The current GET routes can return empty pathway sets during DB failure, which looks like “no data” instead of “broken system.” That is operator-hostile in a safety-critical admin console.
+
+// server/kb/routes/kbAdminRoutes.ts
+router.get("/canonical-pathways", async (req, res) => {
+  try {
+    const { complaintId } = req.query;
+    const pathways = await listCanonicalPathways(complaintId as string | undefined);
+    res.json({ ok: true, pathways });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAYS_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathways unavailable",
+    });
+  }
+});
+
+router.get("/canonical-pathways/:pathwayId", async (req, res) => {
+  try {
+    const pathway = await getCanonicalPathway(req.params.pathwayId);
+    if (!pathway) {
+      res.status(404).json({ ok: false, error: "Not found" });
+      return;
+    }
+    res.json({ ok: true, pathway });
+  } catch (err: any) {
+    res.status(503).json({
+      ok: false,
+      code: "KB_PATHWAY_UNAVAILABLE",
+      message: err?.message ?? "Canonical pathway unavailable",
+    });
+  }
+});
+4. Add an actual migration for kb_population_priors
+
+Defining the schema alone is not enough. The service currently queries a table that may not exist in the database at all. That means production behavior can differ from TypeScript fantasyland.
+
+Example migration:
+
+CREATE TABLE IF NOT EXISTS kb_population_priors (
+  id serial PRIMARY KEY,
+  population_flag text NOT NULL,
+  diagnosis_key text NOT NULL,
+  multiplier real NOT NULL DEFAULT 1.0,
+  rationale text,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kb_population_priors_flag_dx
+  ON kb_population_priors (population_flag, diagnosis_key);
+
+CREATE INDEX IF NOT EXISTS idx_kb_population_priors_flag
+  ON kb_population_priors (population_flag);
+
+CREATE INDEX IF NOT EXISTS idx_kb_population_priors_dx
+  ON kb_population_priors (diagnosis_key);
+5. Add a startup invariant check
+
+This codebase needs a bouncer at the door. Right now too many important failures become runtime surprises.
+
+// server/startup/assertions.ts
+import { getKbCacheStatus, getKbVersion } from "../kb/kbRuntime";
+
+export function assertClinicalStartupInvariants(): void {
+  const problems: string[] = [];
+
+  if (typeof getKbVersion !== "function") {
+    problems.push("kbRuntime.getKbVersion is missing");
+  }
+
+  if (typeof getKbCacheStatus !== "function") {
+    problems.push("kbRuntime.getKbCacheStatus is missing");
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    if (!process.env.REDIS_URL) problems.push("REDIS_URL missing in production");
+    if (!process.env.INSTANCE_ID) problems.push("INSTANCE_ID missing in production");
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Startup invariant failure:\n- ${problems.join("\n- ")}`);
+  }
+}
+
+Then call it during server boot.
+
+6. Add tests for the exact defects Claude found
+
+These bugs are sharp enough that they deserve regression tests, not just fixes.
+
+Minimum set:
+
+kbAuthMiddleware ignores x-kb-role
+kbConsistencyAudit joins on entity_key, not entity_id
+specEngine seed rules respect intended parentheses
+kbConsistencyMonitor uses exported getKbVersion
+triageCache TTL and invalidation work under current lru-cache
+kbSeeder does not overwrite edited priors unless explicit force flag is set
+
+Example:
+
+// tests/kbAuthMiddleware.test.ts
+import { requireKbAdmin } from "../server/kb/middleware/kbAuthMiddleware";
+
+test("x-kb-role header does not grant admin", () => {
+  const req: any = {
+    headers: { "x-kb-role": "super_admin" },
+    user: undefined,
+    actor: undefined,
+  };
+
+  const res: any = {
+    statusCode: 200,
+    body: null,
+    status(code: number) { this.statusCode = code; return this; },
+    json(payload: any) { this.body = payload; return this; },
+  };
+
+  const next = jest.fn();
+
+  requireKbAdmin(req, res, next);
+
+  expect(next).not.toHaveBeenCalled();
+  expect(res.statusCode).toBe(403);
+});
+7. Independent review: encounters.intakeExpiresAt should not be text
+
+That field is carrying time semantics in a string column. That is the kind of tiny schema cut that later bleeds through scheduling, expiration checks, and audit logic. It should be a timestamp.
+
+// shared/schema.ts
+intakeExpiresAt: timestamp("intake_expires_at"),
+
+Migration:
+
+ALTER TABLE encounters
+  ADD COLUMN intake_expires_at_tmp timestamp;
+
+UPDATE encounters
+SET intake_expires_at_tmp = NULLIF(intake_expires_at, '')::timestamp
+WHERE intake_expires_at IS NOT NULL;
+
+ALTER TABLE encounters DROP COLUMN intake_expires_at;
+ALTER TABLE encounters RENAME COLUMN intake_expires_at_tmp TO intake_expires_at;
+8. Independent review: conversationHistory, answers, proposal, physicianSummary should be JSONB
+
+Those fields are currently text fields carrying JSON payloads. That invites malformed data, brittle parsing, and no queryability. In a system obsessed with audit and explainability, those should be first-class JSONB.
+
+9. Independent review: kb_feature_likelihoods.ruleId and similar pseudo-FKs need real constraints
+
+A lot of the schema comments say “FK to…” but the actual foreign key is not enforced. That means the database politely nods while data integrity wanders off into traffic.
+
+10. Independent review: specEngine still needs expression-language hardening
+
+The sandbox is much better than new Function, but long term I would still move from arbitrary JS expressions to a constrained DSL or structured predicates. Sandboxed JS is safer than a bonfire in the server room, but it is still playing with matches.
+
+What I would do next, in order

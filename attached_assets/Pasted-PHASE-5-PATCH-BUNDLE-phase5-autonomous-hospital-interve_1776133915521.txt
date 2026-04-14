@@ -1,0 +1,217 @@
+PHASE 5 PATCH BUNDLE
+/phase5_autonomous_hospital/
+  ├── intervention/
+  ├── ehr/
+  ├── network/
+  ├── safety/
+  ├── routes/
+  ├── services/
+  └── migrations/
+1️⃣ 🤖 AUTONOMOUS INTERVENTION ENGINE
+📁 server/intervention/interventionEngine.ts
+type InterventionInput = {
+  patientId: string;
+  diagnosis: string;
+  disposition: string;
+  vitals: any;
+  modifiers?: string[];
+};
+
+export interface Intervention {
+  type: "LAB" | "MED" | "ESCALATE";
+  name: string;
+  payload?: any;
+  requiresApproval: boolean;
+}
+
+export function generateInterventions(input: InterventionInput): Intervention[] {
+  const interventions: Intervention[] = [];
+
+  // 🔥 CRITICAL escalation
+  if (input.disposition === "ICU" || input.disposition === "ER") {
+    interventions.push({
+      type: "ESCALATE",
+      name: "Activate Rapid Response",
+      requiresApproval: false,
+    });
+  }
+
+  // 🧪 Labs
+  if (input.diagnosis === "pneumonia") {
+    interventions.push({
+      type: "LAB",
+      name: "CBC + CMP + Lactate",
+      requiresApproval: false,
+    });
+  }
+
+  // 💊 Medications
+  if (input.diagnosis === "sepsis") {
+    interventions.push({
+      type: "MED",
+      name: "Broad-spectrum antibiotics",
+      payload: { drug: "piperacillin-tazobactam" },
+      requiresApproval: true, // 🚨 always physician gate
+    });
+  }
+
+  return interventions;
+}
+2️⃣ 🧯 SAFETY GATE (CRITICAL)
+📁 server/safety/interventionGuard.ts
+export function validateIntervention(intervention: any, context: any) {
+  // 🚨 Absolute safety rules
+  if (intervention.type === "MED") {
+    if (!context.physicianApproved) {
+      throw new Error("Medication requires physician approval");
+    }
+  }
+
+  // 🧠 contraindication check
+  if (context.allergies?.includes("penicillin") &&
+      intervention.payload?.drug?.includes("piperacillin")) {
+    throw new Error("Contraindicated medication");
+  }
+
+  return true;
+}
+3️⃣ 🔗 EHR WRITE-BACK (FHIR)
+📁 server/ehr/fhirClient.ts
+import fetch from "node-fetch";
+
+const FHIR_BASE = process.env.FHIR_URL;
+
+export async function sendFHIR(resource: string, body: any) {
+  const res = await fetch(`${FHIR_BASE}/${resource}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/fhir+json",
+      Authorization: `Bearer ${process.env.FHIR_TOKEN}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  return res.json();
+}
+📁 server/ehr/orderWriter.ts
+import { sendFHIR } from "./fhirClient";
+
+export async function writeMedicationOrder(patientId: string, med: any) {
+  return sendFHIR("MedicationRequest", {
+    resourceType: "MedicationRequest",
+    subject: { reference: `Patient/${patientId}` },
+    medicationCodeableConcept: {
+      text: med.drug,
+    },
+    status: "active",
+    intent: "order",
+  });
+}
+
+export async function writeLabOrder(patientId: string, lab: string) {
+  return sendFHIR("ServiceRequest", {
+    resourceType: "ServiceRequest",
+    subject: { reference: `Patient/${patientId}` },
+    code: { text: lab },
+    status: "active",
+    intent: "order",
+  });
+}
+4️⃣ 🌐 MULTI-HOSPITAL NETWORK
+📁 server/network/hospitalRouter.ts
+interface Hospital {
+  id: string;
+  bedsAvailable: number;
+  icuBeds: number;
+  location: { lat: number; lng: number };
+}
+
+export function routePatient(patient: any, hospitals: Hospital[]) {
+  return hospitals
+    .map(h => ({
+      ...h,
+      score: h.icuBeds * 2 + h.bedsAvailable,
+    }))
+    .sort((a, b) => b.score - a.score)[0];
+}
+📁 server/network/emsCoordinator.ts
+export function dispatchEMS(patientId: string, hospitalId: string) {
+  console.log(`🚑 Dispatching EMS for ${patientId} → ${hospitalId}`);
+
+  return {
+    status: "dispatched",
+    eta: "5 minutes",
+  };
+}
+5️⃣ 🧠 ORCHESTRATION SERVICE
+📁 server/services/autonomousCareService.ts
+import { generateInterventions } from "../intervention/interventionEngine";
+import { validateIntervention } from "../safety/interventionGuard";
+import { writeMedicationOrder, writeLabOrder } from "../ehr/orderWriter";
+import { routePatient } from "../network/hospitalRouter";
+import { dispatchEMS } from "../network/emsCoordinator";
+
+export async function runAutonomousCare(patient: any, hospitals: any[]) {
+  const interventions = generateInterventions(patient);
+
+  const results = [];
+
+  for (const i of interventions) {
+    try {
+      validateIntervention(i, patient);
+
+      if (i.type === "MED") {
+        results.push(await writeMedicationOrder(patient.id, i.payload));
+      }
+
+      if (i.type === "LAB") {
+        results.push(await writeLabOrder(patient.id, i.name));
+      }
+
+      if (i.type === "ESCALATE") {
+        const hospital = routePatient(patient, hospitals);
+        results.push(dispatchEMS(patient.id, hospital.id));
+      }
+
+    } catch (err) {
+      results.push({ error: err.message });
+    }
+  }
+
+  return results;
+}
+6️⃣ 🚦 ROUTE
+📁 server/routes/autonomousRoutes.ts
+import { Router } from "express";
+import { runAutonomousCare } from "../services/autonomousCareService";
+
+const router = Router();
+
+router.post("/run", async (req, res) => {
+  const { patient, hospitals } = req.body;
+
+  const result = await runAutonomousCare(patient, hospitals);
+
+  res.json({ ok: true, result });
+});
+
+export default router;
+7️⃣ 🖥️ UI PANEL (CONTROL TOWER ACTIONS)
+📁 frontend/src/components/InterventionPanel.tsx
+export default function InterventionPanel({ patient }) {
+  const run = async () => {
+    const res = await fetch("/api/autonomous/run", {
+      method: "POST",
+      body: JSON.stringify({ patient }),
+    });
+
+    const data = await res.json();
+    console.log(data);
+  };
+
+  return (
+    <button onClick={run} className="bg-blue-600 text-white px-4 py-2">
+      Run Autonomous Care
+    </button>
+  );
+}

@@ -1435,3 +1435,57 @@ export const agentMemoryLog = pgTable("agent_memory_log", {
 export const insertAgentMemorySchema = createInsertSchema(agentMemoryLog).omit({ id: true, createdAt: true });
 export type InsertAgentMemory = z.infer<typeof insertAgentMemorySchema>;
 export type AgentMemory = typeof agentMemoryLog.$inferSelect;
+
+// ── KB Governance Tables ─────────────────────────────────────────────────────
+
+// kb_population_priors — Bayesian prior multipliers per population segment
+// (e.g., elderly, pediatric, immunocompromised). Queried at triage time to
+// adjust differential probability for the patient's demographic cluster.
+export const kbPopulationPriors = pgTable("kb_population_priors", {
+  id:             serial("id").primaryKey(),
+  populationFlag: text("population_flag").notNull(),
+  diagnosisKey:   text("diagnosis_key").notNull(),
+  multiplier:     real("multiplier").notNull().default(1.0),
+  rationale:      text("rationale"),
+  active:         boolean("active").notNull().default(true),
+  createdAt:      timestamp("created_at").defaultNow().notNull(),
+  updatedAt:      timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertKbPopulationPriorSchema = createInsertSchema(kbPopulationPriors).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertKbPopulationPrior = z.infer<typeof insertKbPopulationPriorSchema>;
+export type KbPopulationPrior = typeof kbPopulationPriors.$inferSelect;
+
+// kb_review_queue — Pending KB entity changes awaiting physician/admin approval.
+// New entities land as "draft" (kbRepository.ts FIX) and must be reviewed here
+// before they are activated. Provides Draft → Approve/Reject lifecycle.
+export const kbReviewQueue = pgTable("kb_review_queue", {
+  id:          serial("id").primaryKey(),
+  entityType:  text("entity_type").notNull(),
+  entityKey:   text("entity_key").notNull(),
+  version:     integer("version").notNull(),
+  proposedBy:  text("proposed_by").notNull(),
+  status:      text("status").notNull().default("pending"),   // pending | approved | rejected
+  rationale:   text("rationale"),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+  reviewedBy:  text("reviewed_by"),
+  reviewedAt:  timestamp("reviewed_at"),
+});
+export const insertKbReviewQueueSchema = createInsertSchema(kbReviewQueue).omit({ id: true, createdAt: true });
+export type InsertKbReviewQueue = z.infer<typeof insertKbReviewQueueSchema>;
+export type KbReviewQueueItem = typeof kbReviewQueue.$inferSelect;
+
+// kb_audit_trail — Immutable log of every KB governance action.
+// Captures CREATE, UPDATE, APPROVE, REJECT, ROLLBACK with full payload for FDA audit.
+export const kbAuditTrail = pgTable("kb_audit_trail", {
+  id:          serial("id").primaryKey(),
+  entityType:  text("entity_type"),
+  entityKey:   text("entity_key"),
+  version:     integer("version"),
+  action:      text("action"),           // CREATE | UPDATE | APPROVE | REJECT | ROLLBACK | SUBMIT_REVIEW
+  actorId:     text("actor_id"),
+  payload:     jsonb("payload"),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+});
+export const insertKbAuditTrailSchema = createInsertSchema(kbAuditTrail).omit({ id: true, createdAt: true });
+export type InsertKbAuditTrail = z.infer<typeof insertKbAuditTrailSchema>;
+export type KbAuditTrailEntry = typeof kbAuditTrail.$inferSelect;

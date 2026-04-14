@@ -10,7 +10,8 @@ export type KbEntityType =
   | "plan_template"
   | "feature_model"
   | "engine_routing"
-  | "clinical_rule";
+  | "clinical_rule"
+  | "complaint_pack";
 
 export type KbEntityStatus = "draft" | "active" | "deprecated";
 export type KbSourceType = "csv" | "json" | "manual" | "llm" | "system";
