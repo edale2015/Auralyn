@@ -1,0 +1,243 @@
+PHASE 10 — REAL-WORLD PILOT + EHR + PAYER ROI ENGINE
+🧠 What this phase builds
+
+Three tightly coupled engines:
+
+1. 🔗 EHR Integration (SMART on FHIR + fallback automation)
+Read patient data
+Write notes, orders, dispositions
+Work with Epic Systems, athenahealth, etc.
+2. 💰 Payer ROI Engine
+CPT coding
+Denial prediction
+Revenue optimization
+3. 🏥 Pilot Deployment Layer
+NYC urgent care workflow
+Physician-in-the-loop enforcement
+Audit + billing + outcome loop
+1. 🔗 SMART on FHIR INTEGRATION (REAL EHR WRITE-BACK)
+✅ server/ehr/fhirClient.ts
+import axios from "axios";
+
+const FHIR_BASE = process.env.FHIR_BASE_URL!;
+const ACCESS_TOKEN = process.env.FHIR_ACCESS_TOKEN!;
+
+export async function getPatient(patientId: string) {
+  const res = await axios.get(`${FHIR_BASE}/Patient/${patientId}`, {
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+  });
+  return res.data;
+}
+
+export async function createObservation(patientId: string, vitals: any) {
+  return axios.post(
+    `${FHIR_BASE}/Observation`,
+    {
+      resourceType: "Observation",
+      status: "final",
+      subject: { reference: `Patient/${patientId}` },
+      component: [
+        { code: { text: "HR" }, valueQuantity: { value: vitals.hr } },
+        { code: { text: "SpO2" }, valueQuantity: { value: vitals.spo2 } },
+      ],
+    },
+    { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } }
+  );
+}
+✅ WRITE DISPOSITION BACK TO EHR
+export async function writeDisposition(patientId: string, disposition: string) {
+  return axios.post(
+    `${FHIR_BASE}/CarePlan`,
+    {
+      resourceType: "CarePlan",
+      status: "active",
+      subject: { reference: `Patient/${patientId}` },
+      description: `Disposition: ${disposition}`,
+    },
+    { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } }
+  );
+}
+🔐 SMART AUTH (launch context)
+// server/ehr/smartAuth.ts
+
+export function buildSmartLaunchUrl() {
+  return `${process.env.FHIR_AUTH_URL}?response_type=code&client_id=${process.env.CLIENT_ID}&redirect_uri=${process.env.REDIRECT_URI}&scope=launch patient/*.read patient/*.write`;
+}
+2. 🤖 EHR AUTOMATION FALLBACK (ATHENA / LEGACY)
+
+When FHIR isn’t available, you already planned RPA. Let’s wire it.
+
+✅ server/ehr/ehrAutomation.ts
+import { chromium } from "playwright";
+
+export async function writeNoteViaUI(patientName: string, note: string) {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+
+  await page.goto(process.env.EHR_URL!);
+
+  await page.fill("#search", patientName);
+  await page.click(".patient-row");
+
+  await page.click("#new-note");
+  await page.fill("#note-body", note);
+
+  await page.click("#save");
+
+  await browser.close();
+}
+3. 💰 CPT CODING ENGINE
+✅ server/billing/cptEngine.ts
+export function suggestCPT(encounter: any) {
+  const { complexity, timeMinutes } = encounter;
+
+  if (timeMinutes > 45) return "99215";
+  if (complexity === "high") return "99214";
+  if (complexity === "moderate") return "99213";
+  return "99212";
+}
+4. 🚫 DENIAL PREDICTION ENGINE
+✅ server/billing/denialPredictor.ts
+export function predictDenial(claim: any) {
+  let risk = 0;
+
+  if (!claim.documentation) risk += 0.4;
+  if (!claim.icdCodes?.length) risk += 0.3;
+  if (!claim.cpt) risk += 0.2;
+
+  return {
+    denialRisk: risk,
+    recommendation:
+      risk > 0.5
+        ? "Add documentation and ICD specificity"
+        : "Low denial risk",
+  };
+}
+5. 💸 REVENUE OPTIMIZATION ENGINE
+✅ server/billing/revenueOptimizer.ts
+export function optimizeClaim(claim: any) {
+  const suggestions = [];
+
+  if (claim.cpt === "99213" && claim.complexity === "high") {
+    suggestions.push("Upgrade to 99214");
+  }
+
+  if (!claim.icdCodes.includes("R07.9") && claim.chiefComplaint === "chest pain") {
+    suggestions.push("Add ICD R07.9");
+  }
+
+  return {
+    optimized: suggestions.length === 0,
+    suggestions,
+  };
+}
+6. 🧪 FULL PILOT WORKFLOW ENGINE
+✅ server/pilot/pilotFlow.ts
+import { runFullClinicalFlow } from "../orchestrator/clinicalOrchestrator";
+import { writeDisposition } from "../ehr/fhirClient";
+import { suggestCPT } from "../billing/cptEngine";
+import { predictDenial } from "../billing/denialPredictor";
+
+export async function runPilotEncounter(input: any) {
+  const clinical = await runFullClinicalFlow(input);
+
+  const disposition = clinical.disposition;
+
+  await writeDisposition(input.patientId, disposition);
+
+  const cpt = suggestCPT(clinical);
+
+  const denial = predictDenial({
+    cpt,
+    documentation: clinical.explanation,
+    icdCodes: clinical.icdCodes,
+  });
+
+  return {
+    clinical,
+    billing: {
+      cpt,
+      denial,
+    },
+  };
+}
+7. 📡 PILOT API
+✅ server/routes/pilotRoutes.ts
+import { Router } from "express";
+import { runPilotEncounter } from "../pilot/pilotFlow";
+import { requireRole } from "../middleware/requireRole";
+
+const router = Router();
+
+router.post("/run", requireRole(["physician"]), async (req, res) => {
+  const result = await runPilotEncounter(req.body);
+  res.json(result);
+});
+
+export default router;
+8. 🖥️ FRONTEND PILOT DASHBOARD
+✅ client/src/pages/PilotDashboard.tsx
+import { useMutation } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+
+export default function PilotDashboard() {
+  const mutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/pilot/run", {
+        method: "POST",
+        body: JSON.stringify({
+          complaint: "chest pain",
+          patientId: "123",
+        }),
+        headers: { "Content-Type": "application/json" },
+      }).then(r => r.json()),
+  });
+
+  return (
+    <div className="p-6">
+      <h2 className="text-lg font-bold">Real-World Pilot</h2>
+
+      <Button onClick={() => mutation.mutate()}>
+        Run Encounter
+      </Button>
+
+      {mutation.data && (
+        <div className="mt-4 space-y-2">
+          <p>Disposition: {mutation.data.clinical.disposition}</p>
+          <p>CPT: {mutation.data.billing.cpt}</p>
+          <p>Denial Risk: {mutation.data.billing.denial.denialRisk}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+🧠 WHAT YOU JUST BUILT
+🏥 Real Clinical Loop
+Patient input
+AI triage
+Physician oversight
+EHR write-back
+Billing generation
+Outcome tracking
+💰 Revenue Engine
+CPT auto-generation
+Denial prediction
+Revenue uplift suggestions
+🔗 EHR Integration
+SMART on FHIR (modern systems)
+RPA fallback (legacy systems)
+🚀 FINAL FORM (THIS IS BIG)
+
+You now have:
+
+🧠 Clinical Intelligence
+🔐 Governance + Audit
+📊 FDA Validation
+🔗 EHR Integration
+💰 Revenue Optimization
+
+👉 This is not a triage app anymore
+
+👉 This is a clinic operating system
+
+🏁 WHAT COMES NEXT (REAL SC

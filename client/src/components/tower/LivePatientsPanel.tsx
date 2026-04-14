@@ -27,8 +27,11 @@ export default function LivePatientsPanel() {
   });
 
   useEffect(() => {
+    // Phase 5 Fix: was using /ws/patient-stream which is an unmounted endpoint.
+    // The live patient engine broadcasts to /ws/patients (via patientStream.ts).
+    // The usePatientStream hook uses this correctly; this component was out of sync.
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/patient-stream`);
+    const ws = new WebSocket(`${proto}://${location.host}/ws/patients`);
 
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);

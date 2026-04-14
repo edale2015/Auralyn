@@ -4,7 +4,10 @@
  * priority-ranks patients, and broadcasts to all WS clients.
  */
 
-import { broadcastSystemUpdate }            from "./patientStream";
+// Phase 1 Fix: import both tenant-scoped and system-level broadcast.
+// broadcastPatientUpdate(data, clinicId) sends only to clients in that clinic.
+// broadcastSystemUpdate(data) sends to all clients (used when no clinicId is set).
+import { broadcastPatientUpdate, broadcastSystemUpdate } from "./patientStream";
 import { generateInterventions, VitalSnapshot } from "../engines/interventionEngine";
 
 export interface LivePatient {
@@ -103,8 +106,7 @@ function tick(): void {
   patients.sort((a, b) => b.priorityScore - a.priorityScore);
   currentPatients = patients;
 
-  // Broadcast to all authenticated WS clients (system-level, not tenant-scoped)
-  broadcastSystemUpdate({
+  const payload = {
     type:     "PATIENT_UPDATE",
     patients: patients.map((p) => ({
       id:            p.id,
@@ -118,16 +120,35 @@ function tick(): void {
       priorityScore: p.priorityScore,
       lastUpdated:   p.lastUpdated,
     })),
-    tick:      tickCount,
+    tick:         tickCount,
     criticalCount: patients.filter((p) => p.status === "critical").length,
-  });
+  };
+
+  // Phase 1 Fix: use tenant-scoped broadcast when clinicId is configured.
+  // Prevents one clinic's live patient data from leaking to another clinic's WS clients.
+  if (engineClinicId) {
+    broadcastPatientUpdate(payload, engineClinicId);
+  } else {
+    // Fallback: broadcast to all (dev mode / single-tenant deployment)
+    broadcastSystemUpdate(payload);
+  }
 }
 
-export function startLivePatientEngine(): void {
+// clinicId for tenant-scoped broadcasting — set via startLivePatientEngine(clinicId)
+let engineClinicId: string | null = null;
+
+export function startLivePatientEngine(clinicId?: string): void {
   if (engineTimer) return;
+
+  if (clinicId) {
+    engineClinicId = clinicId;
+    console.log(`[LivePatientEngine] Started for clinic ${clinicId} — tenant-scoped broadcast`);
+  } else {
+    console.log("[LivePatientEngine] Started in system-wide broadcast mode (no clinicId — all clients receive updates)");
+  }
+
   tick(); // immediate first tick
   engineTimer = setInterval(tick, 2000);
-  console.log("[LivePatientEngine] Streaming 5 patients every 2s via /ws/patients");
 }
 
 export function stopLivePatientEngine(): void {

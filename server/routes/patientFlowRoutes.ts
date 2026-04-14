@@ -52,9 +52,15 @@ router.post("/consent", (req, res) => {
     const session = confirmConsent(sessionId);
     if (!session) return res.status(404).json({ ok: false, error: "Session not found" });
 
-    // Tenant isolation: ensure session belongs to the authenticated clinic
+    // PHASE 3 FIX (fail-closed tenant isolation):
+    // OLD (fail-open): `physician.clinicId && session.clinicId && session.clinicId !== physician.clinicId`
+    //   The `&&` before session.clinicId means: if either side is undefined/null, the check
+    //   is skipped → cross-tenant access allowed for sessions with no clinicId.
+    // NEW (fail-closed): block unless clinicId is explicitly set AND matches.
+    //   If session has no clinicId (legacy/unisolated record), block it — we cannot
+    //   verify ownership, so we must not allow access.
     const physician = req.physician!;
-    if (physician.clinicId && session.clinicId && session.clinicId !== physician.clinicId) {
+    if (!session.clinicId || session.clinicId !== physician.clinicId) {
       return res.status(403).json({ ok: false, error: "Cross-tenant session access denied" });
     }
 
@@ -73,8 +79,9 @@ router.get("/session/:sessionId", (req, res) => {
     const session = getSession(req.params.sessionId);
     if (!session) return res.status(404).json({ ok: false, error: "Session not found" });
 
+    // Fail-closed: block if session has no clinicId or clinicId doesn't match
     const physician = req.physician!;
-    if (physician.clinicId && session.clinicId && session.clinicId !== physician.clinicId) {
+    if (!session.clinicId || session.clinicId !== physician.clinicId) {
       return res.status(403).json({ ok: false, error: "Cross-tenant session access denied" });
     }
 

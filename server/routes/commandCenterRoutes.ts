@@ -2,9 +2,15 @@
  * Command Center Routes — /api/command-center/*
  * Multi-patient ranking · deterioration · interventions · RLHF · clinical brain
  * + Article 28b/28c: simulation · sepsis engine · ICU predictor · hospital coordination
+ *
+ * Phase 1 Security Fix: All endpoints now require physician or admin role.
+ * Previously, ICU allocation, RLHF reset, and clinical brain endpoints were
+ * accessible without any authentication.
  */
 
 import express from "express";
+import { requireRole } from "../middleware/requireRole";
+import { requireClinicAccess } from "../middleware/requireClinicAccess";
 import { rankPatientsAI, computePriorityScore } from "../command-center/commandCenterAI";
 import { predictDeterioration, handleDeterioration } from "../prediction/deteriorationEngine";
 import { runInterventions }                          from "../intervention/actionOrchestrator";
@@ -25,6 +31,13 @@ import { getAllHospitals, getTotalAvailableBeds, getSystemOccupancy, updateBedCo
 import { allocateICUBed, releaseICUBed, getNetworkStatus, getAllAllocations }          from "../coordination/bedAllocator";
 
 const router = express.Router();
+
+// ── Global auth guard ─────────────────────────────────────────────────────────
+// All command-center routes require at minimum physician or admin role.
+// These endpoints expose patient prioritization, ICU allocation, RLHF weights,
+// and the clinical brain — none should be accessible without authentication.
+router.use(requireRole(["admin", "physician"]));
+router.use(requireClinicAccess);
 
 // ── POST /api/command-center/rank — priority-rank a list of patients ──────────
 router.post("/rank", (req, res) => {
@@ -241,7 +254,8 @@ router.get("/rlhf/update-history", (_req, res) => {
   res.json({ history: getUpdateHistory() });
 });
 
-router.post("/rlhf/reset", (_req, res) => {
+// RLHF reset is admin-only — physicians should not be able to wipe learned weights
+router.post("/rlhf/reset", requireRole(["admin"]), (_req, res) => {
   resetWeights();
   res.json({ ok: true });
 });

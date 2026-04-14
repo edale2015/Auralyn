@@ -1,0 +1,243 @@
+PHASE 9 — FDA VALIDATION + CLINICAL TRIAL SIMULATOR
+🧠 OVERVIEW (what we’re building)
+
+Think of this as three engines working together:
+
+🧬 Trial Simulator → creates thousands of synthetic patients
+🧠 Clinical Evaluator → runs your full triage brain
+📊 FDA Validator → scores performance (accuracy, safety, risk)
+
+All stitched into:
+👉 Dashboard + API + exportable SaMD report
+
+1. 🧬 PATIENT GENERATION ENGINE (REALISTIC COHORTS)
+✅ server/simulation/patientGeneratorV2.ts
+export interface SimPatient {
+  id: string;
+  age: number;
+  sex: "M" | "F";
+  complaint: string;
+  vitals: {
+    hr: number;
+    spo2: number;
+    temp: number;
+    sbp: number;
+  };
+  truth: {
+    diagnosis: string;
+    disposition: string;
+    severity: "low" | "moderate" | "high";
+  };
+}
+
+const COMPLAINTS = [
+  "chest pain",
+  "shortness of breath",
+  "fever",
+  "abdominal pain",
+  "headache",
+];
+
+export function generatePatient(id: number): SimPatient {
+  const complaint = COMPLAINTS[Math.floor(Math.random() * COMPLAINTS.length)];
+
+  const severityRand = Math.random();
+
+  const severity =
+    severityRand > 0.8 ? "high" :
+    severityRand > 0.4 ? "moderate" :
+    "low";
+
+  return {
+    id: `sim_${id}`,
+    age: Math.floor(Math.random() * 80) + 18,
+    sex: Math.random() > 0.5 ? "M" : "F",
+    complaint,
+    vitals: {
+      hr: 60 + Math.random() * 80,
+      spo2: 90 + Math.random() * 10,
+      temp: 97 + Math.random() * 5,
+      sbp: 90 + Math.random() * 60,
+    },
+    truth: {
+      diagnosis: mapDiagnosis(complaint, severity),
+      disposition: mapDisposition(severity),
+      severity,
+    },
+  };
+}
+
+function mapDiagnosis(c: string, s: string) {
+  if (c === "chest pain" && s === "high") return "MI";
+  if (c === "shortness of breath" && s === "high") return "PE";
+  if (c === "fever") return "infection";
+  return "benign";
+}
+
+function mapDisposition(s: string) {
+  if (s === "high") return "ER_NOW";
+  if (s === "moderate") return "urgent_care";
+  return "self_care";
+}
+
+export function generateCohort(n: number): SimPatient[] {
+  return Array.from({ length: n }, (_, i) => generatePatient(i));
+}
+2. 🧠 CLINICAL EVALUATION ENGINE
+✅ server/evals/clinicalEvaluator.ts
+export interface EvalResult {
+  correctDx: boolean;
+  correctDisposition: boolean;
+  falseNegative: boolean;
+  falsePositive: boolean;
+  predicted: any;
+  truth: any;
+}
+
+export async function evaluatePatient(patient: any, runClinicalBrain: any): Promise<EvalResult> {
+  const result = await runClinicalBrain([patient]);
+
+  const predicted = result?.[0] || {};
+
+  const correctDx =
+    predicted.diagnosis === patient.truth.diagnosis;
+
+  const correctDisposition =
+    predicted.disposition === patient.truth.disposition;
+
+  const falseNegative =
+    patient.truth.disposition === "ER_NOW" &&
+    predicted.disposition !== "ER_NOW";
+
+  const falsePositive =
+    patient.truth.disposition !== "ER_NOW" &&
+    predicted.disposition === "ER_NOW";
+
+  return {
+    correctDx,
+    correctDisposition,
+    falseNegative,
+    falsePositive,
+    predicted,
+    truth: patient.truth,
+  };
+}
+3. 📊 FDA METRICS ENGINE
+✅ server/evals/fdaMetrics.ts
+export function computeMetrics(results: any[]) {
+  const total = results.length;
+
+  const correctDx = results.filter(r => r.correctDx).length;
+  const correctDisp = results.filter(r => r.correctDisposition).length;
+
+  const falseNeg = results.filter(r => r.falseNegative).length;
+  const falsePos = results.filter(r => r.falsePositive).length;
+
+  return {
+    total,
+    diagnosisAccuracy: correctDx / total,
+    dispositionAccuracy: correctDisp / total,
+    falseNegativeRate: falseNeg / total,
+    falsePositiveRate: falsePos / total,
+    safetyScore: 1 - (falseNeg / total),
+  };
+}
+4. 🧪 FULL TRIAL RUNNER
+✅ server/evals/trialRunner.ts
+import { generateCohort } from "../simulation/patientGeneratorV2";
+import { evaluatePatient } from "./clinicalEvaluator";
+import { computeMetrics } from "./fdaMetrics";
+import { runClinicalBrain } from "../orchestrator/fullClinicalBrain";
+
+export async function runTrial(n: number = 1000) {
+  const patients = generateCohort(n);
+
+  const results = [];
+
+  for (const p of patients) {
+    const r = await evaluatePatient(p, runClinicalBrain);
+    results.push(r);
+  }
+
+  const metrics = computeMetrics(results);
+
+  return {
+    metrics,
+    sampleSize: n,
+    timestamp: new Date().toISOString(),
+  };
+}
+5. 📡 API ENDPOINT (RUN TRIAL)
+✅ server/routes/fdaRoutes.ts
+import { Router } from "express";
+import { runTrial } from "../evals/trialRunner";
+import { requireRole } from "../middleware/requireRole";
+
+const router = Router();
+
+router.post("/trial/run", requireRole(["admin"]), async (req, res) => {
+  const { n = 1000 } = req.body;
+
+  const result = await runTrial(Math.min(n, 10000));
+
+  res.json(result);
+});
+
+export default router;
+6. 📄 SaMD DOSSIER GENERATOR
+✅ server/fda/dossierGenerator.ts
+export function generateDossier(trial: any) {
+  return {
+    deviceName: "Auralyn Clinical Triage Engine",
+    intendedUse: "Urgent care triage decision support",
+    validation: {
+      sampleSize: trial.sampleSize,
+      diagnosisAccuracy: trial.metrics.diagnosisAccuracy,
+      dispositionAccuracy: trial.metrics.dispositionAccuracy,
+      falseNegativeRate: trial.metrics.falseNegativeRate,
+      safetyScore: trial.metrics.safetyScore,
+    },
+    riskAnalysis: {
+      highRiskFailure: trial.metrics.falseNegativeRate,
+      mitigation: "Physician override + safety gates",
+    },
+    conclusion:
+      trial.metrics.safetyScore > 0.95
+        ? "Meets safety threshold"
+        : "Requires further validation",
+  };
+}
+7. 🖥️ FRONTEND VALIDATION DASHBOARD
+✅ client/src/pages/FDAValidationDashboard.tsx
+import { useMutation } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+
+export default function FDAValidationDashboard() {
+  const mutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/fda/trial/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ n: 1000 }),
+      }).then(r => r.json()),
+  });
+
+  return (
+    <div className="p-6 space-y-4">
+      <h2 className="text-lg font-semibold">FDA Validation Engine</h2>
+
+      <Button onClick={() => mutation.mutate()}>
+        Run Clinical Trial (1000 patients)
+      </Button>
+
+      {mutation.data && (
+        <div className="space-y-2">
+          <p>Diagnosis Accuracy: {(mutation.data.metrics.diagnosisAccuracy * 100).toFixed(1)}%</p>
+          <p>Disposition Accuracy: {(mutation.data.metrics.dispositionAccuracy * 100).toFixed(1)}%</p>
+          <p>False Negative Rate: {(mutation.data.metrics.falseNegativeRate * 100).toFixed(2)}%</p>
+          <p>Safety Score: {(mutation.data.metrics.safetyScore * 100).toFixed(1)}%</p>
+        </div>
+      )}
+    </div>
+  );
+}

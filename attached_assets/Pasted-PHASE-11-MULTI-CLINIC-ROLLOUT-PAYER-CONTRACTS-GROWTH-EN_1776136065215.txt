@@ -1,0 +1,211 @@
+PHASE 11 — MULTI-CLINIC ROLLOUT + PAYER CONTRACTS + GROWTH ENGINE
+🧠 What we’re building
+1. 🏥 Multi-tenant clinic network (true SaaS scaling)
+2. 💰 Payer contract intelligence (negotiation + ROI proof)
+3. 📈 Growth + onboarding engine (land → expand → dominate)
+1. 🏥 MULTI-CLINIC ARCHITECTURE (TENANT SYSTEM)
+✅ Database: Clinics + Users + Mapping
+-- clinics
+CREATE TABLE clinics (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  city TEXT,
+  state TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- users
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  role TEXT,
+  clinic_id TEXT REFERENCES clinics(id)
+);
+
+-- clinic metrics
+CREATE TABLE clinic_metrics (
+  clinic_id TEXT,
+  date DATE,
+  patients_seen INT,
+  er_referrals INT,
+  revenue_generated FLOAT,
+  denial_rate FLOAT
+);
+✅ Tenant Context Middleware (MANDATORY)
+// server/middleware/tenantContext.ts
+
+export function enforceTenant(req: any, res: any, next: any) {
+  const clinicId = req.physician?.clinicId;
+
+  if (!clinicId) {
+    return res.status(403).json({ error: "No clinic context" });
+  }
+
+  req.clinicId = clinicId;
+  next();
+}
+✅ Multi-Clinic Aggregation API
+// server/routes/networkRoutes.ts
+
+router.get("/network/summary", requireRole(["admin"]), async (_req, res) => {
+  const data = await db.query(`
+    SELECT clinic_id,
+           SUM(patients_seen) as patients,
+           SUM(revenue_generated) as revenue,
+           AVG(denial_rate) as denial_rate
+    FROM clinic_metrics
+    GROUP BY clinic_id
+  `);
+
+  res.json(data.rows);
+});
+2. 💰 PAYER CONTRACT ENGINE (THIS IS WHERE MONEY LIVES)
+🧠 Goal:
+
+Turn your system into something insurers need because it:
+
+Reduces ER visits
+Standardizes care
+Improves outcomes
+✅ Contract Table
+CREATE TABLE payer_contracts (
+  id TEXT PRIMARY KEY,
+  payer_name TEXT,
+  clinic_id TEXT,
+  rate_per_visit FLOAT,
+  bonus_quality FLOAT,
+  shared_savings_pct FLOAT,
+  status TEXT
+);
+✅ ROI CALCULATOR
+// server/payer/roiEngine.ts
+
+export function calculateROI(metrics: any) {
+  const erSavings = metrics.erAvoided * 1500; // avg ER cost
+  const revenue = metrics.visits * metrics.ratePerVisit;
+
+  const total = revenue + erSavings;
+
+  return {
+    revenue,
+    erSavings,
+    totalValue: total,
+  };
+}
+✅ CONTRACT NEGOTIATION ENGINE
+// server/payer/negotiationEngine.ts
+
+export function suggestContractTerms(metrics: any) {
+  return {
+    recommendedRate: 120 + metrics.accuracy * 50,
+    bonusQuality: metrics.safetyScore > 0.95 ? 20 : 5,
+    sharedSavings: 0.2,
+    pitch: "Auralyn reduces unnecessary ER visits and standardizes triage.",
+  };
+}
+✅ API
+router.post("/payer/negotiate", requireRole(["admin"]), (req, res) => {
+  const terms = suggestContractTerms(req.body.metrics);
+  res.json(terms);
+});
+3. 📊 CLINIC PERFORMANCE DASHBOARD
+✅ ClinicDashboard.tsx
+export default function ClinicDashboard() {
+  const { data } = useQuery({
+    queryKey: ["/api/network/summary"],
+  });
+
+  return (
+    <div className="p-6">
+      <h2>Clinic Network Performance</h2>
+
+      {data?.map((c: any) => (
+        <div key={c.clinic_id} className="border p-3 rounded">
+          <p>{c.clinic_id}</p>
+          <p>Patients: {c.patients}</p>
+          <p>Revenue: ${c.revenue}</p>
+          <p>Denial Rate: {(c.denial_rate * 100).toFixed(1)}%</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+4. 🚀 ONBOARDING ENGINE (SCALE MACHINE)
+✅ Clinic Creation API
+router.post("/clinics/create", async (req, res) => {
+  const { name, city, state } = req.body;
+
+  const id = `clinic_${Date.now()}`;
+
+  await db.query(
+    `INSERT INTO clinics (id, name, city, state) VALUES ($1,$2,$3,$4)`,
+    [id, name, city, state]
+  );
+
+  res.json({ id });
+});
+✅ Auto-Setup Script
+export async function onboardClinic(clinicId: string) {
+  // seed configs
+  await seedDefaultProtocols(clinicId);
+
+  // create admin
+  await createAdminUser(clinicId);
+
+  // initialize metrics
+  await initMetrics(clinicId);
+
+  return { success: true };
+}
+5. 📈 GROWTH ENGINE (THIS IS YOUR FLYWHEEL)
+🧠 Core loop:
+Clinic joins
+Uses Auralyn
+Saves money + improves outcomes
+Data proves value
+Payer contracts improve
+More clinics join
+✅ Growth Tracking
+CREATE TABLE growth_events (
+  id SERIAL,
+  clinic_id TEXT,
+  event_type TEXT,
+  value FLOAT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+✅ Growth Metrics API
+router.get("/growth/metrics", async (_req, res) => {
+  const data = await db.query(`
+    SELECT event_type, COUNT(*) as count
+    FROM growth_events
+    GROUP BY event_type
+  `);
+
+  res.json(data.rows);
+});
+6. 🧠 MATCHING ENGINE (SMART EXPANSION)
+Find best clinics to target
+export function scoreClinicOpportunity(clinic: any) {
+  let score = 0;
+
+  if (clinic.erRate > 0.3) score += 5;
+  if (clinic.denialRate > 0.2) score += 5;
+  if (clinic.volume > 1000) score += 3;
+
+  return score;
+}
+7. 🔥 MULTI-CLINIC CONTROL TOWER (REAL POWER)
+API
+router.get("/network/control-tower", requireRole(["admin"]), async (_req, res) => {
+  const clinics = await db.query(`SELECT * FROM clinics`);
+
+  const metrics = await db.query(`
+    SELECT clinic_id, SUM(revenue_generated) as revenue
+    FROM clinic_metrics GROUP BY clinic_id
+  `);
+
+  res.json({
+    clinics: clinics.rows,
+    metrics: metrics.rows,
+  });
+});

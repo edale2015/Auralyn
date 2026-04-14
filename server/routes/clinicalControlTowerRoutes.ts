@@ -1,4 +1,10 @@
+// Phase 1 Security Fix: All CCT endpoints expose clinical system internals
+// (engine health, simulation results, coverage stats, improvement suggestions).
+// These are sensitive operational data that should not be publicly accessible.
+
 import express from "express";
+import { requireRole } from "../middleware/requireRole";
+import { requireClinicAccess } from "../middleware/requireClinicAccess";
 import { runSystemReview } from "../brain/systemReviewEngine";
 import { getAllEngines, getEngineCounts } from "../brain/engineRegistry";
 import { listSimulationRuns, getLastRunSummary } from "../simulation/simulationStore";
@@ -8,6 +14,10 @@ import { getImprovements } from "../improvement/improvementStore";
 import { getLearningStats } from "../simulation/simulationLearningBridge";
 
 const router = express.Router();
+
+// All Clinical Control Tower endpoints require physician or admin role.
+router.use(requireRole(["admin", "physician"]));
+router.use(requireClinicAccess);
 
 router.get("/cct/health", (_req, res) => {
   const review = runSystemReview();

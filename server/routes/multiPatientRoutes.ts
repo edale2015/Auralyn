@@ -9,6 +9,7 @@ import {
   seedEmsUnits,
   sendPhysicianAlert,
 } from "../engine/hospitalRouting";
+import { requirePhysician } from "../auth/requirePhysician";
 
 const router = express.Router();
 
@@ -243,7 +244,9 @@ router.get("/ems-units", async (_req: Request, res: Response) => {
 });
 
 // ── POST /api/command/physician-alert ─────────────────────────────────────────
-router.post("/physician-alert", async (req: Request, res: Response) => {
+// FIX: requirePhysician — prevents unauthenticated callers from triggering
+// Twilio SMS/WhatsApp messages to arbitrary phone numbers (SMS abuse vector).
+router.post("/physician-alert", requirePhysician, async (req: Request, res: Response) => {
   try {
     const { patientId, physicianName, physicianPhone, message } = req.body;
     if (!physicianPhone || !message) {
@@ -260,7 +263,8 @@ router.post("/physician-alert", async (req: Request, res: Response) => {
 });
 
 // ── GET /api/command/physician-alerts ─────────────────────────────────────────
-router.get("/physician-alerts", async (req: Request, res: Response) => {
+// FIX: requirePhysician — alert history is PHI-adjacent and must be auth-gated.
+router.get("/physician-alerts", requirePhysician, async (req: Request, res: Response) => {
   try {
     const patientId = req.query.patientId as string | undefined;
     const result = patientId
