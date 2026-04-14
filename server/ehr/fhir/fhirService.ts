@@ -66,7 +66,10 @@ export async function syncEncounterToFhir(input: {
   }
 }
 
-export async function searchExternalPatientByIdentifier(identifier: string): Promise<any> {
+export async function searchExternalPatientByIdentifier(
+  identifier: string,
+  _clinicId?: string,   // for future per-tenant FHIR server routing
+): Promise<any> {
   return fhirPost<any>(`/Patient/_search`, {
     resourceType: "Parameters",
     parameter: [{ name: "identifier", valueString: identifier }],

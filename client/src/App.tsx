@@ -106,6 +106,10 @@ import HospitalDashboard          from "@/pages/HospitalDashboard";
 import AuralynControlSystem       from "@/pages/AuralynControlSystem";
 import LivePatientMonitor         from "@/pages/LivePatientMonitor";
 import HospitalCommandCenter      from "@/pages/HospitalCommandCenter";
+import CommandCenterV2Page from "@/pages/CommandCenterV2Page";
+import CommandCenterV3Page from "@/pages/CommandCenterV3Page";
+import CommandCenterV4Page from "@/pages/CommandCenterV4Page";
+import NYCPilotPage        from "@/pages/NYCPilotPage";
 import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
 import EngineMaintenancePage from "@/pages/EngineMaintenancePage";
 import AgentLabPage from "@/pages/AgentLabPage";
@@ -222,6 +226,10 @@ function WorkbenchRouter() {
         <Route path={ROUTES.AURALYN}                component={AuralynControlSystem} />
         <Route path={ROUTES.LIVE_MONITOR}           component={LivePatientMonitor} />
         <Route path={ROUTES.COMMAND_CENTER}         component={HospitalCommandCenter} />
+        <Route path="/command-center-v2">{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><CommandCenterV2Page /></RoleGuard>}</Route>
+        <Route path="/command-center-v3">{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><CommandCenterV3Page /></RoleGuard>}</Route>
+        <Route path="/command-center-v4">{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><CommandCenterV4Page /></RoleGuard>}</Route>
+        <Route path="/nyc-pilot">{() => <RoleGuard allowedRoles={["admin", "physician"]}><NYCPilotPage /></RoleGuard>}</Route>
         <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>
         <Route path={ROUTES.ENGINE_MAINTENANCE}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><EngineMaintenancePage /></RoleGuard>}</Route>
         <Route path={ROUTES.AGENT_LAB}>{() => <RoleGuard allowedRoles={["admin", "physician"]}><AgentLabPage /></RoleGuard>}</Route>

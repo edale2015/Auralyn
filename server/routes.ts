@@ -2486,6 +2486,26 @@ export async function registerRoutes(
   app.use("/api/command-center", commandCenterRoutes);
   console.log("[CommandCenter] /api/command-center/* active (rank·deterioration·brain·RLHF·alerts·escalations·orders)");
 
+  // ── Security Hardening v2: Command Center v2 — Live EHR Writes + Audit Replay ─
+  const { default: commandCenterV2Routes } = await import("./routes/commandCenterV2Routes");
+  app.use("/api/cc-v2", commandCenterV2Routes);
+  console.log("[CCv2] /api/cc-v2/* active (ehr-write·write-audit·fhir-sync·audit-replay·ehr-status)");
+
+  // ── Command Center v3 — Predictive + ICU + Multi-hospital ────────────────────
+  const { default: commandCenterV3Routes } = await import("./routes/commandCenterV3Routes");
+  app.use("/api/cc-v3", commandCenterV3Routes);
+  console.log("[CCv3] /api/cc-v3/* active (predictions·icu-beds·transfer-queue·hospitals·surge)");
+
+  // ── Command Center v4 — Digital Twin + EMS + Learning System ─────────────────
+  const { default: commandCenterV4Routes } = await import("./routes/commandCenterV4Routes");
+  app.use("/api/cc-v4", commandCenterV4Routes);
+  console.log("[CCv4] /api/cc-v4/* active (digital-twin·ems·learning·outcomes·simulation)");
+
+  // ── NYC Pilot + FDA Audit + Deployment Harness ────────────────────────────────
+  const { default: nycPilotRoutes } = await import("./routes/nycPilotRoutes");
+  app.use("/api/nyc-pilot", nycPilotRoutes);
+  console.log("[NYCPilot] /api/nyc-pilot/* active (metrics·throughput·ems-activity·fda-readiness·deployments·compliance)");
+
   // ── Batch 40: AI Medical Orchestration Layer ─────────────────────────────────
   const { default: orchestrationRoutes } = await import("./ai-orchestration/orchestrationRoutes");
   app.use("/api/orchestration", orchestrationRoutes);

@@ -1,4 +1,47 @@
-# ENT Flu Slice - Medical Triage System
+# Auralyn — HIPAA/FDA Medical Triage Platform (Multi-Tenant SaaS)
+
+## Security Hardening Release (April 2026) — 10 Critical/High Fixes
+
+### Critical Security Fixes (code review remediation)
+
+1. **ehrOrchestrator.ts** (Critical): Deleted stub theater that returned `{ success: true, stub: true }` regardless of outcome. Now delegates to `ehrWriter.ts` — the single canonical EHR write path. No more silent success-on-failure.
+
+2. **ehrExecutor.ts** (Critical): EHR adapter functions (writeEpic, writeAthena, writeECW) previously caught errors internally and returned `{ written: false }` — a resolved promise that looked like success. Fixed to throw on failure so `executeWithScope` sees real rejections and logs audit records.
+
+3. **fhirRoutes.ts** (Critical): `/fhir/sync-encounter` and `/fhir/patient/search` were completely unauthenticated — any internet client could inject arbitrary FHIR data. Fixed with `requirePhysician` middleware on entire FHIR router; clinicId now taken from JWT, never from request body.
+
+4. **credentialVault.ts** (Critical): EHR automation secrets (passwords, API keys) stored as plaintext PostgreSQL JSONB. Fixed with AES-256-GCM encryption at application layer. Only ciphertext+IV+auth-tag stored in DB. `list()` endpoint excludes secret_json entirely.
+
+5. **visionAgent.ts** (Critical): `fallbackChain()` was an unsafeguarded EHR write bypass — no physician signature, no scope gate, no audit log, raw env-var tokens. Function deleted. All callers (including `batch18Routes.ts`) redirected to `ehrWrite()` via `ehrWriter.ts`.
+
+6. **fhirAuth.ts** (High): Single global `tokenCache` shared across all tenants — one clinic's OAuth token was served to all others. Fixed with `Map<tenantCacheKey, TokenCache>` keyed by `(FHIR_BASE_URL::FHIR_CLIENT_ID)`.
+
+7. **smartAuth.ts** (High): Legacy SMART auth with no PKCE, static CSRF state `"auralyn-state"`, and hardcoded scopes. File deprecated with re-exports to `smartLaunch.ts` + runtime deprecation warning. Callers must migrate.
+
+8. **approvalGate.ts** (High): 15-minute database polling loop (every 2s) held browser session open per pending approval. Fixed with suspend/resume pattern: `waitForApproval()` now enforces 30s hard cap; `checkApprovalStatus()` added for non-blocking async checks.
+
+9. **policyEngine.ts** (High): Policy gate was a single regex on `action.name`. Extended to: URL allowlist validation (`AUTOMATION_ALLOWED_HOSTS`), payload content inspection (drug/chart/order keywords), risk-score composite, unknown action type gating.
+
+10. **batch18Routes.ts** fallback-chain endpoint now routes through `ehrWrite()` instead of deleted `fallbackChain()`.
+
+### New Command Center Pages
+
+- **Command Center v2** (`/command-center-v2`): Live EHR writes + audit replay. EHR adapter status, write audit log, per-patient write history replay, FHIR sync panel. Backend: `server/routes/commandCenterV2Routes.ts` → `/api/cc-v2/*`
+
+- **Command Center v3** (`/command-center-v3`): Predictive analytics + ICU management + multi-hospital. Deterioration risk scoring (12-patient cohort), NYC hospital network ICU bed tracker, transfer queue with physician approval, surge alerts. Backend: `server/routes/commandCenterV3Routes.ts` → `/api/cc-v3/*`
+
+- **Command Center v4** (`/command-center-v4`): Digital twin + EMS tracker + learning system. Real-time physiological model per patient, EMS unit dispatcher, RLHF feedback submission, outcome predictions (AUC 0.91), clinical scenario simulation. Backend: `server/routes/commandCenterV4Routes.ts` → `/api/cc-v4/*`
+
+- **NYC Pilot + FDA** (`/nyc-pilot`): Operational metrics (3 sites, 12,847+ patients), 24h throughput chart, FDNY EMS activity feed, FDA 510(k) readiness checklist (12 items), deployment environment promoter (dev→staging→prod→nyc-pilot), HIPAA/FDA/security compliance scoreboard. Backend: `server/routes/nycPilotRoutes.ts` → `/api/nyc-pilot/*`
+
+### New Environment Variables Needed (Production)
+- `CREDENTIAL_ENCRYPTION_KEY` — 32-byte hex (64 chars). Required for credentialVault.ts encryption. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+- `AUTOMATION_ALLOWED_HOSTS` — comma-separated allowlist for goto/navigate automation actions
+- `AUDIT_HMAC_SECRET` — HMAC secret for audit log integrity
+- `TRUSTED_PROXY_IPS` — comma-separated trusted proxy IPs for request headers
+- `DEV_CLINIC_ID` — default clinic ID for dev/test sessions
+
+---
 
 ## Overview
 "env_flu_slice" is an AI-powered medical triage platform for flu-like symptoms, leveraging WhatsApp for initial patient assessments. It aims to provide diagnoses and treatment plans for physician review, automate patient communication, and enhance healthcare efficiency and access. The system is designed for continuous improvement through a self-developing AI architecture, with a vision to transform medical triage into a more efficient, patient-centric process.

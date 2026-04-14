@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 
-import { findByVision, rememberSelector, recallSelector, diagnoseUIError, buildHeatmap, fallbackChain, rememberUI, recallUI } from "./automation/visionAgent";
+import { findByVision, rememberSelector, recallSelector, diagnoseUIError, buildHeatmap, rememberUI, recallUI } from "./automation/visionAgent";
+import { ehrWrite } from "./ehr/ehrWriter";
 import { safeECWAutomation, dualWriteEHR } from "./automation/ecwPilot";
 import { optimizeRevenue, analyzeRevenue, enterpriseOptimize, learnFromDenials, prioritizedWrites } from "./revenue/revenueOptimizer";
 import { orchestrate, systemScore, routeConnector, cacheAction, getCachedAction, clearActionCache } from "./clinical/orchestrator";
@@ -49,12 +50,18 @@ router.get("/vision/memory/ui/:screen", (req: Request, res: Response) => {
   res.json({ mapping: recallUI(req.params.screen) ?? null });
 });
 
-// ── Fallback Chain ────────────────────────────────────────────────────────────
+// ── EHR Write (replaces deleted unsafe fallbackChain) ─────────────────────────
+// FIX: fallbackChain() was deleted (unsafeguarded EHR bypass). This endpoint
+// now routes through the canonical ehrWrite() path with scope gating.
 router.post("/vision/fallback-chain", async (req: Request, res: Response) => {
   const { patientId, disposition } = req.body ?? {};
   if (!patientId || !disposition) return res.status(400).json({ error: "patientId and disposition required" });
-  const result = await fallbackChain({ patientId, disposition });
-  res.json({ routed: result });
+  try {
+    const result = await ehrWrite({ patientId: String(patientId), disposition: String(disposition), notes: "" });
+    res.json({ routed: result.system, success: result.success, _migrationNote: "fallbackChain removed — use /api/cc-v2/ehr-write for physician-gated writes" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── ECW Pilot ────────────────────────────────────────────────────────────────

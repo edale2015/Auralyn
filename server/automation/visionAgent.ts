@@ -1,5 +1,22 @@
+/**
+ * server/automation/visionAgent.ts — Vision-assisted UI automation agent
+ *
+ * FIX (Code Review Critical Finding #5):
+ *   fallbackChain() was an unsafeguarded EHR write bypass:
+ *   - Wrote directly to ECW and Epic using raw env-var tokens
+ *   - No physician signature requirement
+ *   - No scope gate or confidence threshold
+ *   - No audit log entry
+ *   - No error recovery or retry accounting
+ *   It was a structural escape from every clinical safety control in the system.
+ *
+ *   Fixed: fallbackChain() is DELETED. All EHR writes must go through
+ *   ehrWriter.ts via executeWithScope() with physicianSigned + confidence gates.
+ *   If a retry/fallback chain is needed, define it as a retry policy within the
+ *   gated write path (ehrExecutor.ts → writeToEHR) with full audit logging.
+ */
+
 import { findElement } from "./uiEngine";
-import { sendToECWEncounter } from "../integrations/ecwAdapter";
 
 let _openai: any = null;
 function getOpenAI() {
@@ -22,7 +39,10 @@ export async function findByVision(
       messages: [{
         role: "user",
         content: [
-          { type: "text", text: `Locate the UI element for: "${goal}". Return ONLY valid JSON {x:number,y:number} with pixel coordinates. No markdown.` },
+          {
+            type: "text",
+            text: `Locate the UI element for: "${goal}". Return ONLY valid JSON {x:number,y:number} with pixel coordinates. No markdown.`,
+          },
           { type: "image_url", image_url: { url: `data:image/png;base64,${screenshotBase64}` } },
         ],
       }],
@@ -51,6 +71,7 @@ export async function smartClick(page: any, label: string): Promise<void> {
 }
 
 // ── Selector Learning Memory ──────────────────────────────────────────────────
+
 const selectorMemory: Record<string, string> = {};
 
 export function rememberSelector(label: string, selector: string): void {
@@ -66,6 +87,7 @@ export function clearSelectorMemory(): void {
 }
 
 // ── UI Screen Memory ──────────────────────────────────────────────────────────
+
 const uiMemory: Record<string, unknown> = {};
 
 export function rememberUI(screen: string, mapping: unknown): void {
@@ -77,6 +99,7 @@ export function recallUI(screen: string): unknown {
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
+
 export function diagnoseUIError(err: string): string {
   if (err.includes("timeout"))  return "Page load issue";
   if (err.includes("selector")) return "UI changed";
@@ -85,34 +108,19 @@ export function diagnoseUIError(err: string): string {
   return "Unknown";
 }
 
-export function buildHeatmap(events: Array<{ x?: number; y?: number; [key: string]: unknown }>): Array<{ x: number; y: number }> {
+export function buildHeatmap(
+  events: Array<{ x?: number; y?: number; [key: string]: unknown }>
+): Array<{ x: number; y: number }> {
   return events
     .filter(e => e.x != null && e.y != null)
     .map(e => ({ x: e.x as number, y: e.y as number }));
 }
 
-// ── Multi-system Fallback Chain ────────────────────────────────────────────────
-export async function fallbackChain(data: {
-  patientId: string;
-  disposition: string;
-  [key: string]: unknown;
-}): Promise<"ecw" | "epic" | "failed"> {
-  try {
-    await sendToECWEncounter({ patientId: data.patientId, disposition: data.disposition });
-    return "ecw";
-  } catch {
-    try {
-      const token = process.env.EPIC_TOKEN ?? "";
-      const base  = process.env.FHIR_BASE  ?? "";
-      if (!token || !base) throw new Error("No EPIC config");
-      await fetch(`${base}/Observation`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      return "epic";
-    } catch {
-      return "failed";
-    }
-  }
-}
+// ── REMOVED: fallbackChain() ──────────────────────────────────────────────────
+// The fallbackChain() function that directly called ECW and Epic with raw env-var
+// tokens, bypassing all safety gates, has been deleted. See file header for details.
+//
+// If you need to call this function, route through:
+//   writeToEHR() in server/ehr/ehrExecutor.ts (scope-gated)
+// or:
+//   ehrWrite()   in server/ehr/ehrWriter.ts (canonical write path)
