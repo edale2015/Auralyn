@@ -122,11 +122,55 @@ export async function loadDispositionRules(complaintId?: string): Promise<LoadRu
 
 const EXPR_TIMEOUT_MS = 50;
 
+// ── Deep sanitize — strips all prototype chains from input objects ─────────────
+//
+// INDEPENDENT REVIEW FINDING: vm.runInNewContext() is NOT a full security sandbox.
+// Objects passed INTO the sandbox retain their prototypes from the outer V8 context.
+// An expression like `input.constructor.constructor('return process')()` can escape
+// the sandbox and access Node.js internals (process, require, Buffer, etc.).
+//
+// Fix: recursively copy `input` into a pure null-prototype tree — every object and
+// array in the tree is `Object.create(null)`, and all values must be primitives
+// (number, string, boolean, null). Functions and non-serialisable values are dropped.
+//
+function deepSanitize(val: unknown, depth = 0): unknown {
+  if (depth > 8) return null; // prevent unbounded recursion on adversarial input
+  if (val === null || val === undefined) return null;
+  if (
+    typeof val === "number" ||
+    typeof val === "boolean" ||
+    typeof val === "string"
+  ) return val;
+  if (Array.isArray(val)) {
+    // Arrays: copy as null-prototype object with numeric keys + length
+    const clean = Object.create(null) as Record<string, unknown>;
+    for (let i = 0; i < Math.min(val.length, 256); i++) {
+      clean[String(i)] = deepSanitize(val[i], depth + 1);
+    }
+    clean["length"] = val.length;
+    return clean;
+  }
+  if (typeof val === "object") {
+    const clean = Object.create(null) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      // Only allow identifier-safe keys to prevent prototype property attacks
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k)) {
+        clean[k] = deepSanitize(v, depth + 1);
+      }
+    }
+    return clean;
+  }
+  // Functions, Symbols, etc. — drop entirely
+  return null;
+}
+
 function evalCondition(whenExpr: string, input: Record<string, any>): boolean {
   try {
-    // Build a null-prototype sandbox — prevents prototype chain escapes
+    // Build a null-prototype sandbox — prevents prototype chain escapes.
+    // deepSanitize() ensures input itself is also a null-prototype tree with
+    // only primitive leaf values — no constructor, no __proto__, no functions.
     const sandbox = Object.create(null) as Record<string, unknown>;
-    sandbox["input"] = input;
+    sandbox["input"] = deepSanitize(input);
 
     // vm.Script compiles once; runInNewContext executes in the sealed context
     const script = new vm.Script(`!!(${whenExpr})`, { filename: "kb-rule" });

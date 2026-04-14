@@ -1,27 +1,37 @@
 /**
  * Live Patient Routes — /api/patients/*
  * Feeds current patient state + AI insights to the frontend.
+ *
+ * INDEPENDENT REVIEW FIX:
+ *   GET /live and GET /live/stats returned full patient objects (PHI) with zero
+ *   authentication — any browser tab or HTTP client could enumerate all live patients.
+ *   Added requireRole() to all routes. Insight/intervention endpoints already had
+ *   try/catch; the GET endpoints did not need it (synchronous engine reads).
  */
 
 import express from "express";
+import { requireRole } from "../middleware/requireRole";
 import { getCurrentPatients, getEngineStats } from "./livePatientEngine";
 import { generatePatientInsight }              from "../llm/insightEngine";
 import { generateInterventions }               from "../engines/interventionEngine";
 
 const router = express.Router();
 
+// All routes require at minimum "staff" — they expose live patient data (PHI).
+const requireStaff = requireRole(["admin", "physician", "nurse", "staff"]);
+
 // Current live patient state
-router.get("/live", (_req, res) => {
+router.get("/live", requireStaff, (_req, res) => {
   res.json({ patients: getCurrentPatients(), stats: getEngineStats(), timestamp: new Date().toISOString() });
 });
 
-// Engine health
-router.get("/live/stats", (_req, res) => {
+// Engine health — still gated; exposes patient count + throughput metrics
+router.get("/live/stats", requireStaff, (_req, res) => {
   res.json(getEngineStats());
 });
 
 // AI insight for a single patient by current vitals (POST body = vitals)
-router.post("/insights", async (req, res) => {
+router.post("/insights", requireStaff, async (req, res) => {
   try {
     const { patientId = "unknown", name = "Patient", vitals } = req.body;
     if (!vitals) { res.status(400).json({ error: "vitals required" }); return; }
@@ -34,7 +44,7 @@ router.post("/insights", async (req, res) => {
 });
 
 // Batch insights for all current patients (expensive — call sparingly)
-router.post("/insights/batch", async (req, res) => {
+router.post("/insights/batch", requireStaff, async (req, res) => {
   try {
     const patients = getCurrentPatients();
     const insights = await Promise.all(
@@ -47,7 +57,7 @@ router.post("/insights/batch", async (req, res) => {
 });
 
 // Interventions for ad-hoc vitals (used by command center quick-run)
-router.post("/interventions", (req, res) => {
+router.post("/interventions", requireStaff, (req, res) => {
   try {
     const { hr = 80, spo2 = 98, temp = 98.6, systolicBP = 120, rr } = req.body;
     res.json(generateInterventions({ hr, spo2, temp, systolicBP, rr }));

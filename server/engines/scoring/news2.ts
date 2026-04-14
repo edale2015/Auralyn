@@ -8,6 +8,52 @@ export interface NEWS2Input {
   temperature: number;
 }
 
+// ── Physiological range validation ────────────────────────────────────────────
+//
+// INDEPENDENT REVIEW FINDING: Vital signs were used in scoring engines without any
+// range validation. An out-of-range value (e.g. heartRate: 9999 from a sensor glitch
+// or malicious input) would always score 3 in hrScore(), permanently pushing any patient
+// into "High" clinical risk regardless of true condition. Under adversarial conditions,
+// this causes alert fatigue (false HIGH scores) or prevents genuine lows from surfacing.
+//
+// Fix: clamp each vital to its physiologically plausible range BEFORE scoring.
+// Values beyond the hard max (2× physiological ceiling) are treated as sensor errors
+// and logged with a warning so biomedical engineering can investigate.
+//
+const VITAL_RANGES = {
+  respirationRate: { min: 4,  max: 70  },  // breaths/min
+  spO2:            { min: 50, max: 100 },  // %
+  systolicBP:      { min: 40, max: 350 },  // mmHg
+  heartRate:       { min: 20, max: 300 },  // bpm
+  temperature:     { min: 28, max: 45  },  // °C
+} as const;
+
+function clamp(value: number, min: number, max: number, label: string): number {
+  if (value < min || value > max) {
+    console.warn(
+      `[NEWS2] Vital '${label}' value ${value} is outside physiological range ` +
+      `[${min}–${max}]. Clamping to boundary. Possible sensor error or malformed input.`
+    );
+    return Math.max(min, Math.min(max, value));
+  }
+  return value;
+}
+
+/**
+ * Sanitize and clamp vital signs to physiologically plausible ranges.
+ * Call before any scoring engine that uses these values.
+ */
+export function sanitizeVitals(input: NEWS2Input): NEWS2Input {
+  return {
+    ...input,
+    respirationRate: clamp(input.respirationRate, VITAL_RANGES.respirationRate.min, VITAL_RANGES.respirationRate.max, "respirationRate"),
+    spO2:            clamp(input.spO2,            VITAL_RANGES.spO2.min,            VITAL_RANGES.spO2.max,            "spO2"),
+    systolicBP:      clamp(input.systolicBP,      VITAL_RANGES.systolicBP.min,      VITAL_RANGES.systolicBP.max,      "systolicBP"),
+    heartRate:       clamp(input.heartRate,        VITAL_RANGES.heartRate.min,        VITAL_RANGES.heartRate.max,        "heartRate"),
+    temperature:     clamp(input.temperature,      VITAL_RANGES.temperature.min,      VITAL_RANGES.temperature.max,      "temperature"),
+  };
+}
+
 export interface NEWS2Result {
   score: number;
   clinicalRisk: string;
@@ -65,7 +111,10 @@ function tempScore(t: number): number {
   return 2;
 }
 
-export function calculateNEWS2(input: NEWS2Input): NEWS2Result {
+export function calculateNEWS2(rawInput: NEWS2Input): NEWS2Result {
+  // Sanitize vitals before scoring — prevents impossible values from corrupting results
+  const input = sanitizeVitals(rawInput);
+
   const components = [
     { parameter: "Respiration rate", value: input.respirationRate, points: rrScore(input.respirationRate) },
     { parameter: "SpO2", value: input.spO2, points: spo2Score(input.spO2, input.onSupplementalO2) },

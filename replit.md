@@ -1899,3 +1899,59 @@ Architecture: `/server/ai-orchestration/`
 - `GET /api/agent-fleet/health` — module health
 
 **Tests:** 73/73 passing (`tests/unit/batch59.test.ts`)
+
+## Independent Code Review — Round 2 (Phase 6)
+
+Seven new critical/high findings discovered and fixed during independent review (not identified by prior review rounds).
+
+### Finding 1 — vm Sandbox Escape via Prototype Chain (`server/kb/specEngine.ts`)
+**Severity: CRITICAL**
+The `evalCondition()` function passed the raw `input` object into the vm sandbox. Because Node.js `vm.runInNewContext()` is not a true security boundary, objects from the outer context retain their prototypes — enabling `input.constructor.constructor('return process')()` to escape the sandbox and access Node.js internals.
+**Fix:** Added `deepSanitize()` — a recursive null-prototype deep-copy that strips all functions, prototype references, and non-identifier-safe keys before passing `input` to the vm sandbox.
+
+### Finding 2 — sequencer.ts FAIL-OPEN on Condition Error (`server/procedures/sequencer.ts`)
+**Severity: CRITICAL (Clinical Safety)**
+`evaluateCondition()` returned `true` on any exception — meaning a step with a failing condition check would execute rather than be skipped. If a step condition intended to guard medication delivery (e.g., "skip if allergic to penicillin") threw an error, the step ran anyway.
+**Fix:** `catch` now returns `false` (fail-safe: skip the step) with a `[Sequencer] WARN` log; the undefined case (no condition) still returns `true` (always run).
+
+### Finding 3 — 5 PHI Routes with Zero Authentication
+**Severity: CRITICAL (HIPAA)**
+Five routes exposed Protected Health Information with no authentication middleware. Any HTTP client could enumerate live patients, clinical case memories, prior authorization records, population case data, and trigger bulk SMS sends.
+
+| Route file | Endpoint(s) | PHI exposure |
+|---|---|---|
+| `livePatientRoutes.ts` | `GET /live`, all POSTs | Full live patient objects |
+| `caseMemoryRoutes.ts` | `/store`, `/search`, `/size` | Case complaint text, diagnosis history |
+| `priorAuthRoutes.ts` | `/queue`, `/:paId`, `/create`, `/submit`, `/appeal` | Insurance PA records + clinical notes |
+| `populationHealthRoutes.ts` | `/cases`, `/heatmap/*`, `/outbreaks`, `/cohort` | Individual case records + epi data |
+| `bulkMessaging.ts` | `/send`, `/jobs` | Patient phone list + SMS send ability |
+
+**Fix:** Added `requireRole()` to all endpoints. Read endpoints require `staff+`; write/send endpoints require `physician+`. Also added `try/catch` to `caseMemoryRoutes.ts` and `bulkMessaging.ts` async handlers to prevent unhandled rejections crashing Express.
+
+### Finding 4 — X-Clinic-Id Header Trusted Without Proxy Validation (`server/middleware/setRLS.ts`)
+**Severity: HIGH (Cross-Tenant Data Leakage)**
+`rlsMiddleware` accepted the `X-Clinic-Id` header from any HTTP client, letting an attacker set their own clinic UUID to read a different tenant's patient records — a full bypass of PostgreSQL Row-Level Security isolation.
+**Fix:** The header is now only accepted when the request originates from a trusted source (localhost always trusted; configurable `TRUSTED_PROXY_IPS` env var for ALB/load-balancer CIDRs). Untrusted sources receive a `[RLS] SECURITY:` warning log and the header is ignored. Production checklist added in comments: ALB header-strip rule + env var setup.
+
+### Finding 5 — Vitals Range Validation Missing (`server/engines/scoring/news2.ts`)
+**Severity: HIGH (Clinical Safety)**
+All vital sign values were used in scoring engines without range validation. An impossible sensor value (e.g., `heartRate: 9999`) always scored maximum points, permanently forcing any patient into "High" clinical risk — causing alert fatigue and hiding genuine deterioration from other patients.
+**Fix:** Added `VITAL_RANGES` physiological bounds map and `sanitizeVitals()` function. `calculateNEWS2()` now calls `sanitizeVitals()` on entry; out-of-range values are clamped to boundary with a `[NEWS2] WARN` log for biomedical engineering review.
+
+### Finding 6 — caseMemoryRoutes Unhandled Async Rejections
+**Severity: HIGH**
+`POST /store` and `POST /search` were async Express handlers without try/catch. An unhandled promise rejection in Express 4 hangs the request and may crash the server process.
+**Fix:** Wrapped both handlers in try/catch with structured 500 error responses.
+
+### Finding 7 — Population Case Bulk-Dump Uncapped
+**Severity: MEDIUM**
+`GET /cases?limit=99999999` allowed downloading the entire case database in a single request. Combined with the missing auth (Finding 3), this was a full PHI bulk-export vector.
+**Fix:** Added `Math.min(limit, 500)` cap on the `/cases` endpoint limiting any single response to 500 records maximum.
+
+### Security Posture After Round 2
+- All PHI routes: authenticated ✅
+- vm sandbox: prototype-chain escape blocked ✅
+- sequencer: clinically fail-safe ✅
+- Tenant RLS: header spoofing mitigated ✅
+- Vitals: range-validated before scoring ✅
+- Server startup: `[StartupAssertions] All clinical startup invariants passed` ✅

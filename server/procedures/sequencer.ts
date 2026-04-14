@@ -37,7 +37,7 @@ async function runLabTest(testName: string): Promise<{ result: string; confidenc
 }
 
 function evaluateCondition(condition: string | undefined, context: Record<string, any>): boolean {
-  if (!condition) return true;
+  if (!condition) return true;  // No condition = always run the step
   try {
     // Sandbox: only expose plain value keys — no prototype chain, no globals
     const sandbox = Object.create(null);
@@ -48,8 +48,15 @@ function evaluateCondition(condition: string | undefined, context: Record<string
     }
     const script = new vm.Script(`!!(${condition})`, { filename: "step-condition" });
     return script.runInNewContext(sandbox, { timeout: 50 });
-  } catch {
-    return true;
+  } catch (err: any) {
+    // INDEPENDENT REVIEW FIX: was previously returning `true` (FAIL-OPEN).
+    // If condition evaluation throws (malformed expression, timeout, sandbox escape
+    // attempt), we conservatively SKIP the step — not run it.
+    // This is clinically safer: a step with an un-evaluable condition should not
+    // execute automatically (e.g., "give medication if not allergic" should not
+    // run if the allergy check itself throws an error).
+    console.warn(`[Sequencer] Condition evaluation failed — step will be SKIPPED (fail-safe): ${err?.message ?? err}`);
+    return false;
   }
 }
 
