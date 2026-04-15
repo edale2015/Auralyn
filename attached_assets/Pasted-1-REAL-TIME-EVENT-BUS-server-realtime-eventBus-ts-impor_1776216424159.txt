@@ -1,0 +1,237 @@
+1. 🔴 REAL-TIME EVENT BUS
+// server/realtime/eventBus.ts
+
+import { EventEmitter } from "events";
+
+export const eventBus = new EventEmitter();
+
+export function publishEvent(type: string, payload: any) {
+  eventBus.emit(type, {
+    type,
+    payload,
+    timestamp: new Date().toISOString(),
+  });
+}
+2. 🔌 WEBSOCKET SERVER
+// server/realtime/wsServer.ts
+
+import WebSocket from "ws";
+import { eventBus } from "./eventBus";
+
+export function initWSServer(server) {
+  const wss = new WebSocket.Server({ server });
+
+  wss.on("connection", (ws) => {
+    const handler = (event) => {
+      ws.send(JSON.stringify(event));
+    };
+
+    eventBus.on("broadcast", handler);
+
+    ws.on("close", () => {
+      eventBus.off("broadcast", handler);
+    });
+  });
+
+  return wss;
+}
+3. 🧠 LIVE PATIENT STATE ENGINE
+// server/state/patientState.ts
+
+const patients = new Map<string, any>();
+
+export function updatePatientState(patientId: string, data: any) {
+  const existing = patients.get(patientId) || {};
+
+  const updated = {
+    ...existing,
+    ...data,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  patients.set(patientId, updated);
+
+  return updated;
+}
+
+export function getAllPatients() {
+  return Array.from(patients.values());
+}
+4. ⚠️ RISK ENGINE (SEPSIS / DETERIORATION)
+// server/clinical/riskEngine.ts
+
+export function computeRisk(vitals: any) {
+  let score = 0;
+
+  if (vitals.hr > 100) score += 1;
+  if (vitals.temp > 38) score += 1;
+  if (vitals.rr > 22) score += 1;
+  if (vitals.sbp < 90) score += 2;
+
+  return {
+    score,
+    level:
+      score >= 3 ? "HIGH" :
+      score === 2 ? "MODERATE" :
+      "LOW",
+  };
+}
+5. 🧾 HOOK INTO CLINICAL WRITE
+
+Modify your orchestrator:
+
+import { publishEvent } from "../realtime/eventBus";
+import { updatePatientState } from "../state/patientState";
+import { computeRisk } from "../clinical/riskEngine";
+
+...
+
+const result = await executeClinicalWrite(input);
+
+// update state
+const patient = updatePatientState(input.patientId, {
+  disposition: input.disposition,
+  writeStatus: result.ehr.success ? "SUCCESS" : "FAILED",
+});
+
+// compute risk
+const risk = computeRisk(input.encounter?.vitals || {});
+patient.risk = risk;
+
+// broadcast
+publishEvent("broadcast", {
+  type: "PATIENT_UPDATE",
+  data: patient,
+});
+🎨 FRONTEND (React — Command Center UI)
+6. 🔌 WEBSOCKET HOOK
+// src/hooks/useLiveFeed.ts
+
+import { useEffect, useState } from "react";
+
+export function useLiveFeed() {
+  const [events, setEvents] = useState([]);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000");
+
+    ws.onmessage = (msg) => {
+      const event = JSON.parse(msg.data);
+      setEvents((prev) => [event, ...prev]);
+    };
+
+    return () => ws.close();
+  }, []);
+
+  return events;
+}
+7. 🩺 PATIENT GRID (CORE UI)
+// src/components/PatientGrid.tsx
+
+export function PatientGrid({ patients }) {
+  return (
+    <div className="grid grid-cols-4 gap-4">
+      {patients.map((p) => (
+        <div
+          key={p.patientId}
+          className={`p-4 rounded-xl shadow-lg ${
+            p.risk?.level === "HIGH"
+              ? "bg-red-200"
+              : p.risk?.level === "MODERATE"
+              ? "bg-yellow-200"
+              : "bg-green-200"
+          }`}
+        >
+          <h2 className="text-lg font-bold">{p.patientId}</h2>
+
+          <div>Disposition: {p.disposition}</div>
+          <div>Risk: {p.risk?.level}</div>
+          <div>Score: {p.risk?.score}</div>
+
+          <div className="mt-2">
+            EHR:
+            <span
+              className={
+                p.writeStatus === "SUCCESS"
+                  ? "text-green-600"
+                  : "text-red-600"
+              }
+            >
+              {p.writeStatus}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+8. ⚠️ ALERT PANEL
+// src/components/AlertsPanel.tsx
+
+export function AlertsPanel({ patients }) {
+  const highRisk = patients.filter((p) => p.risk?.level === "HIGH");
+
+  return (
+    <div className="p-4 bg-red-100 rounded-xl">
+      <h2 className="font-bold text-xl">⚠ High Risk Patients</h2>
+
+      {highRisk.map((p) => (
+        <div key={p.patientId}>
+          {p.patientId} — Score {p.risk.score}
+        </div>
+      ))}
+    </div>
+  );
+}
+9. 🧾 WRITE STATUS STREAM
+// src/components/WriteStream.tsx
+
+export function WriteStream({ events }) {
+  return (
+    <div className="h-64 overflow-auto bg-black text-green-400 p-2">
+      {events.map((e, i) => (
+        <div key={i}>
+          [{e.timestamp}] {e.type}
+        </div>
+      ))}
+    </div>
+  );
+}
+10. 🔍 AUDIT REPLAY VIEWER (🔥 CRITICAL)
+// src/components/AuditReplay.tsx
+
+export function AuditReplay({ auditEvents }) {
+  return (
+    <div className="p-4 bg-gray-900 text-white rounded-xl">
+      <h2 className="text-xl">Audit Timeline</h2>
+
+      {auditEvents.map((e, i) => (
+        <div key={i} className="border-b border-gray-700 py-2">
+          <div>{e.timestamp}</div>
+          <div>{e.action}</div>
+          <pre className="text-xs">{JSON.stringify(e.details, null, 2)}</pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 MAIN DASHBOARD
+// src/pages/CommandCenter.tsx
+
+import { useLiveFeed } from "../hooks/useLiveFeed";
+
+export default function CommandCenter() {
+  const events = useLiveFeed();
+
+  const patients = events
+    .filter(e => e.type === "PATIENT_UPDATE")
+    .map(e => e.data);
+
+  return (
+    <div className="p-6 space-y-6">
+      <AlertsPanel patients={patients} />
+      <PatientGrid patients={patients} />
+      <WriteStream events={events} />
+    </div>
+  );
+}

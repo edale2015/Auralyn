@@ -1,0 +1,180 @@
+✅ DELETE ehrOrchestrator.ts COMPLETELY
+
+Replace all usage with:
+
+// USE THIS EVERYWHERE
+import { ehrWrite } from "./ehrWriter";
+
+export async function submitEncounterUnified(payload: EHRWritePayload) {
+  return ehrWrite(payload); // single source of truth
+}
+2. 🔥 FIX ehrExecutor.ts (CRITICAL)
+❌ REMOVE silent return pattern
+✅ THROW ON FAILURE
+async function writeEpic(payload: EHRPayload) {
+  const url = process.env.EPIC_EHR_URL;
+  if (!url) throw new Error("EPIC_EHR_URL not configured");
+
+  const res = await fetch(`${url}/api/fhir/write`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Epic write failed: ${res.status} ${text}`);
+  }
+
+  return { written: true };
+}
+3. 🔐 FIX credentialVault (ENCRYPTION)
+🔥 Replace with AES + KMS pattern
+import crypto from "crypto";
+
+const ALGO = "aes-256-gcm";
+const KEY = Buffer.from(process.env.CREDENTIAL_ENCRYPTION_KEY!, "hex");
+
+function encrypt(data: any) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ALGO, KEY, iv);
+
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(data)),
+    cipher.final(),
+  ]);
+
+  const tag = cipher.getAuthTag();
+
+  return {
+    iv: iv.toString("hex"),
+    tag: tag.toString("hex"),
+    data: encrypted.toString("hex"),
+  };
+}
+
+function decrypt(enc: any) {
+  const decipher = crypto.createDecipheriv(
+    ALGO,
+    KEY,
+    Buffer.from(enc.iv, "hex")
+  );
+  decipher.setAuthTag(Buffer.from(enc.tag, "hex"));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(enc.data, "hex")),
+    decipher.final(),
+  ]);
+
+  return JSON.parse(decrypted.toString());
+}
+Replace DB write:
+secret_json = encrypt(input.secretJson)
+Replace read:
+return decrypt(result.rows[0].secret_json);
+4. 🚫 DELETE fallbackChain (visionAgent)
+Replace with SAFE retry system
+import { ehrWrite } from "../ehr/ehrWriter";
+
+export async function safeEHRRetry(payload: EHRWritePayload) {
+  try {
+    return await ehrWrite(payload);
+  } catch (err) {
+    // retry once or escalate
+    throw new Error("EHR write failed after retry");
+  }
+}
+5. 🔐 AUTH MIDDLEWARE FOR FHIR
+// middleware/auth.ts
+export function requireAuth(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
+export function requireClinicAccess(req, res, next) {
+  if (req.user.clinicId !== req.body.clinicId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}
+Apply:
+fhirRoutes.use(requireAuth);
+
+fhirRoutes.post("/sync-encounter",
+  requireClinicAccess,
+  async (req, res) => { ... }
+);
+6. 🧠 FIX TOKEN CACHE (MULTI-TENANT)
+const tokenCache = new Map<string, TokenCache>();
+
+export async function getBearerToken(clinicId: string) {
+  const cached = tokenCache.get(clinicId);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+
+  const token = await fetchNewToken(clinicId);
+
+  tokenCache.set(clinicId, {
+    token,
+    expiresAt: Date.now() + 3600 * 1000,
+  });
+
+  return token;
+}
+7. 🔁 FIX FHIR PATIENT DUPLICATION
+const existing = await searchExternalPatientByIdentifier(
+  input.patient.externalPatientId
+);
+
+let fhirPatientId;
+
+if (existing?.entry?.length > 0) {
+  fhirPatientId = existing.entry[0].resource.id;
+} else {
+  const created = await fhirPost("/Patient", mapInternalPatientToFhir(input.patient));
+  fhirPatientId = created.id;
+}
+8. ⚡ FIX APPROVAL LOOP (ASYNC MODEL)
+
+Replace polling with state-based workflow:
+
+export async function waitForApprovalAsync(runId, checkpoint) {
+  throw new Error("Execution paused — awaiting approval");
+}
+
+Then resume via webhook:
+
+// approval webhook
+resumeAutomation(runId);
+9. 🛡 FIX POLICY ENGINE
+const SENSITIVE_ACTIONS = new Set([
+  "write:ehr",
+  "submit:orders",
+  "update:chart",
+]);
+
+export function evaluateAutomationPolicy(input) {
+  if (SENSITIVE_ACTIONS.has(input.action.type)) {
+    return { allowed: true, requiresApproval: true };
+  }
+
+  if (input.payload?.medications || input.payload?.diagnosis) {
+    return { allowed: true, requiresApproval: true };
+  }
+
+  return { allowed: true, requiresApproval: false };
+}
+10. 🌐 FIX BROWSER ISOLATION
+export async function startAutomationSession() {
+  const browser = await chromium.launch();
+
+  const context = await browser.newContext(); // 🔥 ISOLATED
+  const page = await context.newPage();
+
+  return { browser, context, page };
+}

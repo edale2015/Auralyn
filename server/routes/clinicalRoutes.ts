@@ -1,10 +1,12 @@
 import express from "express";
+import twilio   from "twilio";
 import { requireRole } from "../middleware/requireRole";
 import { runFullClinicalFlow, getFlowLog, getOrchestratorMetrics } from "../orchestrator/clinicalOrchestrator";
 import { sendSMS, sendWhatsApp, parseSMSIntent } from "../services/smsService";
 import { createOrUpsertSession } from "../patient/sessionStorePg";
 import { createTraceId } from "../audit/auditLogger";
 import { handleSMSCommand } from "../chat/botCommandHandler";
+import { ENV } from "../config/env";
 
 const router = express.Router();
 
@@ -45,6 +47,26 @@ router.post("/sms/parse-intent", requireRole(["admin", "physician", "staff"]), (
 });
 
 router.post("/sms/webhook", express.urlencoded({ extended: false }), async (req, res) => {
+  // Phase 3 Fix: Validate Twilio webhook signature before processing any payload.
+  // Without this, any internet client can forge inbound SMS payloads and inject
+  // arbitrary clinical data into the triage pipeline as if it came from a patient.
+  const authToken = ENV.TWILIO_AUTH_TOKEN;
+  if (authToken) {
+    const signature = req.headers["x-twilio-signature"] as string;
+    const webhookUrl =
+      (process.env.PUBLIC_URL ?? `https://${req.headers.host}`) +
+      "/api/clinical/sms/webhook";
+    const valid = twilio.validateRequest(authToken, signature, webhookUrl, req.body);
+    if (!valid) {
+      console.warn("[SMS Webhook] Invalid Twilio signature — request rejected");
+      res.status(403).send("Invalid Twilio signature");
+      return;
+    }
+  } else {
+    // No auth token configured — log a warning so ops teams are aware in dev/staging
+    console.warn("[SMS Webhook] TWILIO_AUTH_TOKEN not set — signature validation skipped (dev mode)");
+  }
+
   const incoming = (req.body.Body ?? "").trim();
   const from = req.body.From ?? "unknown";
 
@@ -68,7 +90,7 @@ router.post("/sms/webhook", express.urlencoded({ extended: false }), async (req,
       complaint: incoming,
       answers: {},
       patientId,
-      channel: "web",
+      channel: "sms",  // Phase 3 Fix: was incorrectly set to "web"
     });
 
     await createOrUpsertSession({

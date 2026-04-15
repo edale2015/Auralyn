@@ -135,17 +135,22 @@ function tick(): void {
 }
 
 // clinicId for tenant-scoped broadcasting — set via startLivePatientEngine(clinicId)
+// Phase 1 Fix: clinicId is now REQUIRED. Without it, broadcast would send one clinic's
+// live patient PHI to every connected WebSocket client across all tenants.
 let engineClinicId: string | null = null;
 
-export function startLivePatientEngine(clinicId?: string): void {
+export function startLivePatientEngine(clinicId: string): void {
   if (engineTimer) return;
 
-  if (clinicId) {
-    engineClinicId = clinicId;
-    console.log(`[LivePatientEngine] Started for clinic ${clinicId} — tenant-scoped broadcast`);
-  } else {
-    console.log("[LivePatientEngine] Started in system-wide broadcast mode (no clinicId — all clients receive updates)");
+  if (!clinicId || !clinicId.trim()) {
+    throw new Error(
+      "[LivePatientEngine] clinicId is required for tenant isolation. " +
+      "Pass process.env.DEV_CLINIC_ID in development or the authenticated clinic's ID in production."
+    );
   }
+
+  engineClinicId = clinicId.trim();
+  console.log(`[LivePatientEngine] Started for clinic ${engineClinicId} — tenant-scoped broadcast active`);
 
   tick(); // immediate first tick
   engineTimer = setInterval(tick, 2000);

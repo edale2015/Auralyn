@@ -55,8 +55,14 @@ export function usePatientStream(): PatientStreamState {
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
+    // Phase 5 Fix: pass auth token as query param so the WS server can validate
+    // the caller's identity when it enforces per-connection auth in the future.
+    // Token is read from localStorage — same source used by the rest of the app.
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws    = new WebSocket(`${proto}//${window.location.host}/ws/patients`);
+    const token = localStorage.getItem("auth_token") ?? "";
+    const ws    = new WebSocket(
+      `${proto}//${window.location.host}/ws/patients${token ? `?token=${encodeURIComponent(token)}` : ""}`
+    );
     wsRef.current = ws;
 
     ws.onopen = () => {

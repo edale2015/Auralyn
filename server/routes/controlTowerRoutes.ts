@@ -10,8 +10,14 @@
 
 import { Router }            from "express";
 import { getControlTowerData } from "../phase6/controlTower/controlTowerFeed";
+import { requireRole }          from "../middleware/requireRole";
 
 const router = Router();
+
+// Phase 2 Fix: Control tower exposes system-wide clinical operations data.
+// Lock to admin + physician — unauthenticated access would expose pipeline health,
+// rule weights, and clinical throughput metrics without any credential check.
+router.use(requireRole(["admin", "physician"]));
 
 router.get("/control-tower", (_req, res) => {
   res.json(getControlTowerData());

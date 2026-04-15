@@ -34,6 +34,31 @@
 
 - **NYC Pilot + FDA** (`/nyc-pilot`): Operational metrics (3 sites, 12,847+ patients), 24h throughput chart, FDNY EMS activity feed, FDA 510(k) readiness checklist (12 items), deployment environment promoter (dev→staging→prod→nyc-pilot), HIPAA/FDA/security compliance scoreboard. Backend: `server/routes/nycPilotRoutes.ts` → `/api/nyc-pilot/*`
 
+## Phase 1-7 Security + Tenant Isolation Fixes (April 2026)
+
+### Phase 1 — livePatientEngine Tenant Isolation
+`server/realtime/livePatientEngine.ts`: `startLivePatientEngine(clinicId: string)` — clinicId changed from optional to **required** (throws if not provided). Without it, the engine would broadcast all patients' PHI to every WS client across all tenants. In dev, `process.env.DEV_CLINIC_ID || "clinic-dev"` is passed at startup.
+
+### Phase 2 — Per-Route Auth (Not router.use)
+`server/routes/clinicalControlTowerRoutes.ts`: Replaced `router.use(requireRole)` with per-route `...cctAuth` on all 8 CCT endpoints. The router was mounted at `app.use("/api", router)` — a `router.use()` middleware there intercepts ALL `/api/*` requests, not just `/cct/*`, blocking unrelated public endpoints (including the Twilio SMS webhook).
+
+`server/realtime/livePatientRoutes.ts`: Added `router.use(requirePhysician)` as a global middleware on the routes file. Acceptable here because the router is mounted at `/api/patients` (specific prefix, not `/api`).
+
+### Phase 3 — Twilio Webhook Signature Validation
+`server/routes/clinicalRoutes.ts` (line 52): Added `twilio.validateRequest()` to the SMS webhook. Without this, any internet client could forge inbound SMS payloads to inject clinical data into the triage pipeline. Also fixed `channel: "web"` → `channel: "sms"`.
+
+### Phase 4 — Fail-Closed Tenant Isolation (pre-existing)
+`server/routes/patientFlowRoutes.ts`: Already fail-closed at lines 63/84: `if (!session.clinicId || session.clinicId !== physician.clinicId)`. No change needed.
+
+### Phase 5 — Real System Health Probes (pre-existing)
+`server/realtime/systemHealthMonitor.ts`: Real `probeExternalServices()` function already implemented with native `fetch()` and 30s polling loop. Services start as error state until first probe completes. No change needed.
+
+### Phase 6 — WebSocket Auth Token
+`client/src/hooks/usePatientStream.ts`: WebSocket URL now appends `?token=${encodeURIComponent(token)}` so the WS server can validate caller identity when enforcement is added server-side.
+
+### Phase 7 — Physician Paging Lockdown
+`server/routes/multiPatientRoutes.ts`: `POST /physician-alert` no longer accepts `physicianPhone` from the request body (SMS toll fraud vector). Phone now resolved server-side via `getOnCallPhysician(clinicId)` which reads from `ON_CALL_PHONE_<CLINIC_ID>` or `ON_CALL_PHYSICIAN_PHONE` env vars. Every alert is audit-logged via `auditLog()`.
+
 ### New Environment Variables Needed (Production)
 - `CREDENTIAL_ENCRYPTION_KEY` — 32-byte hex (64 chars). Required for credentialVault.ts encryption. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 - `AUTOMATION_ALLOWED_HOSTS` — comma-separated allowlist for goto/navigate automation actions

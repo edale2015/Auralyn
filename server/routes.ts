@@ -2515,7 +2515,9 @@ export async function registerRoutes(
   const { startLivePatientEngine }              = await import("./realtime/livePatientEngine");
   const { default: livePatientRoutes }          = await import("./realtime/livePatientRoutes");
   app.use("/api/patients", livePatientRoutes);
-  startLivePatientEngine();                 // begin broadcasting 5 patients every 2s
+  // Phase 1 Fix: clinicId is now required — prevents system-wide PHI broadcast across tenants.
+  // In production, replace DEV_CLINIC_ID with the authenticated clinic's ID at startup.
+  startLivePatientEngine(process.env.DEV_CLINIC_ID || "clinic-dev");
   console.log("[LivePatients] /api/patients/* + 2s WS stream active");
 
   // ── Batch 38: Autonomous Hospital Layer ──────────────────────────────────────

@@ -1,0 +1,223 @@
+1. PREDICTIVE DETERIORATION ENGINE
+
+This is where your system becomes proactive instead of reactive.
+
+// server/clinical/predictiveEngine.ts
+
+interface VitalsSnapshot {
+  time: number;
+  hr: number;
+  rr: number;
+  temp: number;
+  sbp: number;
+  spo2: number;
+}
+
+export function computeDeteriorationRisk(history: VitalsSnapshot[]) {
+  if (history.length < 2) return { risk: "LOW", score: 0 };
+
+  const latest = history[history.length - 1];
+  const prev   = history[history.length - 2];
+
+  let score = 0;
+
+  // TREND-BASED LOGIC (critical upgrade)
+  if (latest.hr > prev.hr) score += 1;
+  if (latest.rr > prev.rr) score += 1;
+  if (latest.sbp < prev.sbp) score += 2;
+  if (latest.spo2 < 92) score += 2;
+
+  // absolute thresholds
+  if (latest.temp > 38.5) score += 1;
+  if (latest.sbp < 90) score += 3;
+
+  return {
+    score,
+    risk:
+      score >= 5 ? "CRITICAL" :
+      score >= 3 ? "HIGH" :
+      score >= 2 ? "MODERATE" :
+      "LOW",
+  };
+}
+📈 2. TIME-SERIES STORAGE
+// server/state/vitalsHistory.ts
+
+const vitalsHistory = new Map<string, any[]>();
+
+export function addVitals(patientId: string, vitals: any) {
+  const history = vitalsHistory.get(patientId) || [];
+
+  history.push({
+    ...vitals,
+    time: Date.now(),
+  });
+
+  // keep last 50 snapshots
+  if (history.length > 50) history.shift();
+
+  vitalsHistory.set(patientId, history);
+
+  return history;
+}
+🛏 3. ICU BED ALLOCATION ENGINE
+
+Now we start making system-level decisions.
+
+// server/hospital/icuAllocator.ts
+
+interface Hospital {
+  id: string;
+  icuBedsTotal: number;
+  icuBedsAvailable: number;
+  distanceKm: number;
+}
+
+export function selectBestICU(
+  hospitals: Hospital[],
+  patientRisk: number
+) {
+  return hospitals
+    .map(h => ({
+      ...h,
+      score:
+        (h.icuBedsAvailable / h.icuBedsTotal) * 2 -
+        h.distanceKm * 0.1 +
+        patientRisk * 0.5,
+    }))
+    .sort((a, b) => b.score - a.score)[0];
+}
+🌐 4. MULTI-HOSPITAL ROUTER
+// server/hospital/router.ts
+
+import { selectBestICU } from "./icuAllocator";
+
+export function routePatient(patient, hospitals) {
+  if (patient.risk === "CRITICAL") {
+    return selectBestICU(hospitals, patient.score);
+  }
+
+  if (patient.risk === "HIGH") {
+    return hospitals.find(h => h.icuBedsAvailable > 0);
+  }
+
+  return null;
+}
+🤖 5. MULTI-AGENT CLINICAL COUNCIL
+
+This is where your system becomes intellectually layered.
+
+// server/agents/clinicalCouncil.ts
+
+export function runClinicalCouncil(input) {
+  const votes = [];
+
+  // ICU Agent
+  if (input.risk.score >= 4) {
+    votes.push({ agent: "ICU", decision: "ICU_ADMIT" });
+  }
+
+  // ED Agent
+  if (input.risk.score >= 2) {
+    votes.push({ agent: "ED", decision: "OBSERVE_OR_ADMIT" });
+  }
+
+  // Infectious Disease Agent
+  if (input.temp > 38) {
+    votes.push({ agent: "ID", decision: "ANTIBIOTICS" });
+  }
+
+  return votes;
+}
+🔴 6. REAL-TIME INTEGRATION
+
+Hook everything together:
+
+const history = addVitals(patientId, vitals);
+
+const prediction = computeDeteriorationRisk(history);
+
+const hospital = routePatient(
+  { ...patient, risk: prediction },
+  hospitalList
+);
+
+const council = runClinicalCouncil({
+  risk: prediction,
+  temp: vitals.temp,
+});
+
+publishEvent("broadcast", {
+  type: "PREDICTIVE_UPDATE",
+  data: {
+    patientId,
+    prediction,
+    recommendedHospital: hospital,
+    council,
+  },
+});
+🎨 FRONTEND UPGRADES
+📈 7. LIVE VITALS GRAPH
+// src/components/VitalsChart.tsx
+
+import { LineChart, Line, XAxis, YAxis } from "recharts";
+
+export function VitalsChart({ data }) {
+  return (
+    <LineChart width={400} height={200} data={data}>
+      <XAxis dataKey="time" />
+      <YAxis />
+      <Line dataKey="hr" />
+      <Line dataKey="sbp" />
+    </LineChart>
+  );
+}
+🛏 8. ICU PANEL
+// src/components/ICUPanel.tsx
+
+export function ICUPanel({ recommendation }) {
+  if (!recommendation) return null;
+
+  return (
+    <div className="p-4 bg-blue-200 rounded-xl">
+      <h2>ICU Recommendation</h2>
+      <div>Hospital: {recommendation.id}</div>
+      <div>Beds Available: {recommendation.icuBedsAvailable}</div>
+    </div>
+  );
+}
+🤖 9. AGENT DECISION PANEL
+// src/components/AgentPanel.tsx
+
+export function AgentPanel({ council }) {
+  return (
+    <div className="bg-purple-100 p-4 rounded-xl">
+      <h2>Clinical Council</h2>
+      {council.map((c, i) => (
+        <div key={i}>
+          {c.agent}: {c.decision}
+        </div>
+      ))}
+    </div>
+  );
+}
+🧠 COMMAND CENTER V3 PAGE
+// src/pages/CommandCenterV3.tsx
+
+export default function CommandCenterV3() {
+  const events = useLiveFeed();
+
+  const predictive = events.filter(e => e.type === "PREDICTIVE_UPDATE");
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-6">
+      <PatientGrid />
+      <AlertsPanel />
+      <WriteStream />
+
+      <VitalsChart data={...} />
+      <ICUPanel recommendation={...} />
+      <AgentPanel council={...} />
+    </div>
+  );
+}

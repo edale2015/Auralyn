@@ -10,6 +10,26 @@ import {
   sendPhysicianAlert,
 } from "../engine/hospitalRouting";
 import { requirePhysician } from "../auth/requirePhysician";
+import { auditLog }          from "../security/auditLogger";
+
+// ── On-call physician lookup (server-side, not user-supplied) ──────────────────
+// Phase 6 Fix: physician phone must come from a server-controlled source, never
+// from the request body. An attacker with a valid physician JWT could otherwise
+// trigger Twilio SMS to any phone number (SMS toll fraud / abuse).
+//
+// Resolution order:
+//   1. Env var ON_CALL_PHONE_<CLINIC_ID_UPPERCASE_UNDERSCORE> e.g. ON_CALL_PHONE_CLINIC_NYC_01
+//   2. Global fallback ON_CALL_PHYSICIAN_PHONE
+//   3. null → caller returns 500 "No on-call physician configured"
+async function getOnCallPhysician(clinicId: string): Promise<{ id: string; phone: string } | null> {
+  const safeKey = clinicId.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  const phone =
+    process.env[`ON_CALL_PHONE_${safeKey}`] ??
+    process.env.ON_CALL_PHYSICIAN_PHONE ??
+    null;
+  if (!phone) return null;
+  return { id: `on-call-${clinicId}`, phone };
+}
 
 const router = express.Router();
 
@@ -244,20 +264,41 @@ router.get("/ems-units", async (_req: Request, res: Response) => {
 });
 
 // ── POST /api/command/physician-alert ─────────────────────────────────────────
-// FIX: requirePhysician — prevents unauthenticated callers from triggering
-// Twilio SMS/WhatsApp messages to arbitrary phone numbers (SMS abuse vector).
+// Phase 6 Fix: physician phone is now resolved server-side via getOnCallPhysician().
+// Previously accepted physicianPhone from req.body — any authenticated physician
+// could supply an arbitrary phone number and trigger Twilio SMS (toll fraud vector).
+// Now: phone comes only from env-var config scoped to the authenticated clinic.
 router.post("/physician-alert", requirePhysician, async (req: Request, res: Response) => {
   try {
-    const { patientId, physicianName, physicianPhone, message } = req.body;
-    if (!physicianPhone || !message) {
-      return res.status(400).json({ error: "physicianPhone and message are required" });
+    const physician = (req as any).physician;
+    const { patientId, message } = req.body;
+
+    if (!message?.trim()) {
+      return res.status(400).json({ error: "message is required" });
     }
+
+    const onCall = await getOnCallPhysician(physician.clinicId);
+    if (!onCall) {
+      return res.status(500).json({
+        error: "No on-call physician configured for this clinic",
+        hint: "Set ON_CALL_PHYSICIAN_PHONE or ON_CALL_PHONE_<CLINIC_ID> environment variable",
+      });
+    }
+
     const result = await sendPhysicianAlert(
       patientId ?? "unknown",
-      physicianName ?? "Physician",
-      physicianPhone,
-      message
+      `On-Call [${physician.clinicId}]`,
+      onCall.phone,
+      message.trim()
     );
+
+    // Audit every physician-alert — immutable record for HIPAA compliance
+    auditLog({
+      actor:   physician.id ?? "unknown",
+      action:  "PHYSICIAN_ALERT",
+      details: { onCallId: onCall.id, patientId: patientId ?? "unknown", clinicId: physician.clinicId },
+    });
+
     return res.json(result);
   } catch (e: any) { return res.status(500).json({ error: e.message }); }
 });

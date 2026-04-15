@@ -1,0 +1,223 @@
+1. 🧠 clinicalWriteOrchestrator.ts (THE HEART)
+// server/ehr/clinicalWriteOrchestrator.ts
+
+import { ehrWrite } from "./ehrWriter";
+import { syncEncounterToFhir } from "./fhir/fhirService";
+import { executeWithScope } from "../execution/executeWithScope";
+import { logEvent } from "../ops/auditEvents";
+
+export interface ClinicalWriteInput {
+  clinicId: string;
+  patientId: string;
+  physicianId: string;
+
+  disposition: string;
+  notes: string;
+
+  encounter?: any;
+  patient?: any;
+
+  system?: "athena" | "epic" | "ecw";
+
+  physicianSigned: boolean;
+  confidence: number;
+}
+
+export async function executeClinicalWrite(input: ClinicalWriteInput) {
+  return executeWithScope(
+    {
+      agentRole: "clinical_writer",
+      action: "write:clinical",
+      context: {
+        physicianSigned: input.physicianSigned,
+        confidence: input.confidence,
+        clinicId: input.clinicId,
+      },
+    },
+    async () => {
+      const startedAt = Date.now();
+
+      // ── STEP 1: EHR WRITE (PRIMARY SOURCE OF TRUTH) ──
+      const ehrResult = await ehrWrite({
+        patientId: input.patientId,
+        disposition: input.disposition,
+        notes: input.notes,
+        physicianId: input.physicianId,
+        system: input.system,
+      });
+
+      // ── STEP 2: FHIR SYNC (SECONDARY / INTEROP) ──
+      let fhirResult = null;
+
+      if (input.encounter && input.patient) {
+        try {
+          fhirResult = await syncEncounterToFhir({
+            clinicId: input.clinicId,
+            encounter: input.encounter,
+            patient: input.patient,
+          });
+        } catch (err: any) {
+          // FHIR failure does NOT invalidate EHR success
+          fhirResult = { ok: false, error: err.message };
+        }
+      }
+
+      // ── STEP 3: AUDIT LOG ──
+      logEvent({
+        actor: input.physicianId,
+        action: "clinical.write.completed",
+        entityType: "patient",
+        entityId: input.patientId,
+        details: {
+          ehrSuccess: ehrResult.success,
+          fhirSuccess: fhirResult?.ok ?? null,
+          latencyMs: Date.now() - startedAt,
+        },
+      });
+
+      return {
+        success: true,
+        ehr: ehrResult,
+        fhir: fhirResult,
+      };
+    }
+  );
+}
+2. 🔐 HARD BLOCK: REMOVE ALL OTHER WRITE PATHS
+🚫 DELETE:
+ehrOrchestrator.ts
+fallbackChain() in visionAgent
+Direct fhirPost() usage in business logic
+Any direct adapter calls
+3. 🔐 ENFORCE WRITE LOCK (GLOBAL GUARD)
+// server/ehr/writeGuard.ts
+
+export function assertNoDirectWriteAccess(caller: string) {
+  if (!caller.includes("clinicalWriteOrchestrator")) {
+    throw new Error(
+      `ILLEGAL EHR WRITE PATH: ${caller}. All writes must go through executeClinicalWrite().`
+    );
+  }
+}
+4. 🧾 AUDIT HASH CHAIN (FDA-READY)
+// server/audit/hashChain.ts
+
+import crypto from "crypto";
+
+let lastHash = "";
+
+export function appendAudit(entry: any) {
+  const payload = JSON.stringify(entry);
+  const hash = crypto
+    .createHash("sha256")
+    .update(payload + lastHash)
+    .digest("hex");
+
+  lastHash = hash;
+
+  return {
+    ...entry,
+    hash,
+    previousHash: lastHash,
+  };
+}
+5. 🔁 FAILURE ESCALATION ENGINE
+// server/ehr/failureEscalation.ts
+
+export async function handleWriteFailure(error: Error, context: any) {
+  console.error("CRITICAL EHR FAILURE:", error.message);
+
+  // 1. Notify physician UI
+  // 2. Trigger alert system
+  // 3. Prevent patient discharge
+
+  return {
+    requiresImmediateAttention: true,
+    error: error.message,
+  };
+}
+6. 🔐 SECURE FHIR ROUTES (FINAL)
+// server/ehr/fhir/fhirRoutes.ts
+
+import { requireAuth, requireClinicAccess } from "../../middleware/auth";
+
+fhirRoutes.use(requireAuth);
+
+fhirRoutes.post(
+  "/sync-encounter",
+  requireClinicAccess,
+  async (req, res) => {
+    ...
+  }
+);
+7. 🧠 MULTI-TENANT TOKEN CACHE
+// server/ehr/fhir/fhirAuth.ts
+
+const tokenCache = new Map<string, TokenCache>();
+
+export async function getBearerToken(clinicId: string) {
+  const cached = tokenCache.get(clinicId);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+
+  const token = await fetchNewToken(clinicId);
+
+  tokenCache.set(clinicId, {
+    token,
+    expiresAt: Date.now() + 3600 * 1000,
+  });
+
+  return token;
+}
+8. 🔐 ENCRYPTED CREDENTIAL VAULT
+
+(Production-ready version)
+
+// server/automation/credentialVault.ts
+
+import { encrypt, decrypt } from "../security/crypto";
+
+export async function saveAutomationCredential(input) {
+  const encrypted = encrypt(input.secretJson);
+
+  return query(
+    `INSERT INTO automation_credentials (...) VALUES (...)`,
+    [encrypted]
+  );
+}
+
+export async function getAutomationCredential(key: string) {
+  const row = await query(...);
+  return decrypt(row.secret_json);
+}
+9. 🧠 CONTROL TOWER INTEGRATION (CRITICAL)
+
+Expose REAL status:
+
+// server/api/clinicalWriteStatus.ts
+
+export function mapWriteStatus(result) {
+  return {
+    ehr: result.ehr.success ? "SUCCESS" : "FAILED",
+    fhir: result.fhir?.ok ? "SYNCED" : "FAILED",
+    requiresAttention: !result.ehr.success,
+  };
+}
+10. 🚀 FINAL ENTRYPOINT (USE THIS EVERYWHERE)
+// server/api/writeEncounter.ts
+
+import { executeClinicalWrite } from "../ehr/clinicalWriteOrchestrator";
+
+export async function writeEncounter(req, res) {
+  try {
+    const result = await executeClinicalWrite(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+}

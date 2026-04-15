@@ -10,12 +10,20 @@
  */
 
 import express from "express";
-import { requireRole } from "../middleware/requireRole";
+import { requireRole }      from "../middleware/requireRole";
+import { requirePhysician } from "../auth/requirePhysician";
 import { getCurrentPatients, getEngineStats } from "./livePatientEngine";
 import { generatePatientInsight }              from "../llm/insightEngine";
 import { generateInterventions }               from "../engines/interventionEngine";
 
 const router = express.Router();
+
+// Phase 2 Fix: Apply requirePhysician globally on this router.
+// Previously only per-route requireRole("staff") — but "staff" includes non-clinical
+// roles that should not receive live patient PHI streams in a multi-tenant context.
+// requirePhysician sets req.physician with clinicId-bound identity; all downstream
+// handlers can use req.physician.clinicId for tenant-scoped filtering.
+router.use(requirePhysician);
 
 // All routes require at minimum "staff" — they expose live patient data (PHI).
 const requireStaff = requireRole(["admin", "physician", "nurse", "staff"]);
