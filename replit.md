@@ -34,6 +34,28 @@
 
 - **NYC Pilot + FDA** (`/nyc-pilot`): Operational metrics (3 sites, 12,847+ patients), 24h throughput chart, FDNY EMS activity feed, FDA 510(k) readiness checklist (12 items), deployment environment promoter (dev→staging→prod→nyc-pilot), HIPAA/FDA/security compliance scoreboard. Backend: `server/routes/nycPilotRoutes.ts` → `/api/nyc-pilot/*`
 
+## Second Wave — Unified Write Architecture (April 2026)
+
+### Canonical EHR Write Path
+All clinical EHR writes now flow through a single, guarded pipeline:
+
+```
+POST /api/write-encounter
+  → requirePhysician (auth gate)
+  → executeClinicalWrite() [clinicalWriteOrchestrator.ts]
+      → executeWithScope() [scope gate: physicianSigned + confidence ≥ 0.9]
+          → ehrWrite() [ehrWriter.ts — primary EHR write]
+          → syncEncounterToFhir() [fhirService.ts — secondary interop]
+          → logEvent() [audit trail]
+      → handleWriteFailure() [escalation + real-time alert on failure]
+```
+
+**New files:**
+- `server/ehr/clinicalWriteOrchestrator.ts` — `executeClinicalWrite()` ties the whole pipeline together. EHR failure triggers `handleWriteFailure()` and re-throws; FHIR failure is logged but non-blocking.
+- `server/ehr/writeGuard.ts` — `assertWriteAccess(callerModule)` throws in dev if code bypasses the orchestrator. No-op in prod (logs error instead of crashing).
+- `server/ehr/failureEscalation.ts` — `handleWriteFailure()` generates a unique `escalationId`, writes a `clinical.write.FAILED` audit event, and broadcasts an `EHR_WRITE_FAILURE` event over the WS event bus.
+- `server/routes/writeEncounterRoute.ts` — `POST /api/write-encounter`, zod-validated, requirePhysician-gated. Extracts `clinicId` from session only (never from request body).
+
 ## Phase 1-7 Security + Tenant Isolation Fixes (April 2026)
 
 ### Phase 1 — livePatientEngine Tenant Isolation
