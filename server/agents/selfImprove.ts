@@ -413,24 +413,61 @@ export async function rejectImprovementAction(
 }
 
 // ── Approve + apply by a physician reviewer ───────────────────────────────────
+/**
+ * Atomically approve + apply an improvement action.
+ *
+ * FIX (TOCTOU race — Code Review Finding #3):
+ * The previous implementation issued two separate DB operations (UPDATE + apply)
+ * outside of a single transaction.  Between the UPDATE that set status="approved"
+ * and the subsequent applyImprovementAction() call, the row was visible in the
+ * "approved" state to any concurrent caller, allowing double-application of the
+ * same threshold change.
+ *
+ * Fix: both the approval record write AND the application happen inside one
+ * transaction that acquires the per-action advisory lock first.  A concurrent
+ * caller hitting applyImprovementAction() for the same actionId will block
+ * on the advisory lock until this transaction commits, then see status="applied"
+ * and return { applied: false, reason: "already applied" }.
+ */
 export async function approveAndApplyAction(
   actionId:   number,
   reviewerId: string,
   note?:      string
 ): Promise<{ applied: boolean; reason: string }> {
-  await db
-    .update(improvementActions)
-    .set({ status: "approved", decidedAt: new Date(), decidedBy: reviewerId })
-    .where(eq(improvementActions.id, actionId));
+  return db.transaction(async (tx) => {
+    // Acquire advisory lock inside the transaction — held until tx commits/rolls back.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTION_LOCK_BASE + actionId})`);
 
-  await db.insert(improvementReviews).values({
-    actionId,
-    reviewerId,
-    decision: "approved",
-    note:     note ?? null,
+    // Guard: re-read status under lock to detect concurrent application
+    const [current] = await tx
+      .select({ status: improvementActions.status })
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!current) return { applied: false, reason: "action not found" };
+    if (current.status === "applied") return { applied: false, reason: "already applied" };
+    if (!["proposed", "pending_review"].includes(current.status)) {
+      return { applied: false, reason: `status '${current.status}' cannot be approved` };
+    }
+
+    await tx
+      .update(improvementActions)
+      .set({ status: "approved", decidedAt: new Date(), decidedBy: reviewerId })
+      .where(eq(improvementActions.id, actionId));
+
+    await tx.insert(improvementReviews).values({
+      actionId,
+      reviewerId,
+      decision: "approved",
+      note:     note ?? null,
+    });
+
+    // applyImprovementAction uses its own transaction + advisory lock.
+    // Since we already hold the lock here, the inner call will block on the same slot —
+    // but pg_advisory_xact_lock is re-entrant within the same session, so it proceeds.
+    return applyImprovementAction(actionId, reviewerId);
   });
-
-  return applyImprovementAction(actionId, reviewerId);
 }
 
 // ── DB-backed log / threshold accessors ─────────────────────────────────────

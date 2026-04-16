@@ -15,17 +15,32 @@ interface PatientFlowSample {
 }
 
 const MAX_SAMPLES = 500;
+const BASELINE_MIN_SAMPLES = 50;
+// FIX: Baseline was computed once and never refreshed — seasonal/demographic
+// shifts rendered drift detection meaningless over time. Now refreshed on a
+// rolling 7-day window so the detector stays calibrated to the current clinic population.
+const BASELINE_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
 let recentSamples: PatientFlowSample[] = [];
 let baseline: DriftBaseline | null = null;
+let lastBaselineRefreshAt = 0;
+
+function maybeRefreshBaseline(): void {
+  const now = Date.now();
+  const shouldInit    = !baseline && recentSamples.length >= BASELINE_MIN_SAMPLES;
+  const shouldRefresh = !!baseline && (now - lastBaselineRefreshAt) > BASELINE_REFRESH_INTERVAL_MS;
+
+  if (shouldInit || shouldRefresh) {
+    baseline             = computeBaseline(recentSamples);
+    lastBaselineRefreshAt = now;
+    console.log(`[DataDrift] Baseline ${shouldInit ? "established" : "refreshed"} from ${recentSamples.length} samples:`, baseline);
+  }
+}
 
 export function recordSample(sample: PatientFlowSample): void {
   recentSamples.push(sample);
   if (recentSamples.length > MAX_SAMPLES) recentSamples.shift();
-
-  if (!baseline && recentSamples.length >= 50) {
-    baseline = computeBaseline(recentSamples);
-    console.log("[DataDrift] Baseline established from first 50 samples:", baseline);
-  }
+  maybeRefreshBaseline();
 }
 
 function computeBaseline(samples: PatientFlowSample[]): DriftBaseline {

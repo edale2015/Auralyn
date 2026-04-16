@@ -112,19 +112,24 @@ function evaluateSimpleCondition(
   if (!expr || expr === "true") return true;
   if (expr === "false") return false;
 
+  // FIX: was `new Function(...)` — a tampered CSV file could achieve server-side
+  // code execution. Replaced with vm.runInNewContext() using a restricted sandbox
+  // that only exposes interpolated string/number literals (no globals, no require).
   try {
     const safeExpr = expr
       .replace(/answers\.(\w+)/g, (_, key) => {
         const val = answers[key];
         if (val === undefined || val === null) return "undefined";
         if (typeof val === "number") return String(val);
-        return `"${String(val)}"`;
+        return `"${String(val).replace(/"/g, '\\"')}"`;
       })
       .replace(/scores\.\w+/g, "0")
       .replace(/redFlagGate\.gateResult/g, '"NONE"');
 
-    const fn = new Function(`return (${safeExpr});`);
-    return !!fn();
+    // Sandbox has no prototype chain and no Node.js globals
+    const sandbox = Object.create(null);
+    const script  = new (require("vm").Script)(`!!(${safeExpr})`, { filename: "synthetic-case-rule" });
+    return script.runInNewContext(sandbox, { timeout: 20 });
   } catch {
     return false;
   }

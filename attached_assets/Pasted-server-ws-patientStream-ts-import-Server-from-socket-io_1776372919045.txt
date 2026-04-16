@@ -1,0 +1,197 @@
+server/ws/patientStream.ts
+import { Server } from "socket.io";
+
+let io: Server;
+
+export function initWebSocket(server: any) {
+  io = new Server(server, {
+    cors: { origin: "*" },
+  });
+
+  io.on("connection", (socket) => {
+    console.log("🟢 Client connected:", socket.id);
+
+    socket.on("disconnect", () => {
+      console.log("🔴 Client disconnected:", socket.id);
+    });
+  });
+}
+
+export function broadcastPatientUpdate(data: any) {
+  if (io) {
+    io.emit("patient_update", data);
+  }
+}
+📁 Hook into app.ts
+import http from "http";
+import { initWebSocket } from "./ws/patientStream";
+
+const server = http.createServer(app);
+initWebSocket(server);
+
+server.listen(3000, () => {
+  console.log("🚀 Auralyn WS running");
+});
+📁 Emit updates from engine
+import { broadcastPatientUpdate } from "../ws/patientStream";
+
+export function pushToControlTower(patient: any) {
+  broadcastPatientUpdate({
+    patientId: patient.id,
+    risk: patient.risk,
+    diagnosis: patient.topDiagnosis,
+    flags: patient.flags,
+  });
+}
+📁 Frontend WebSocket Hook
+import { io } from "socket.io-client";
+import { useEffect, useState } from "react";
+
+export function usePatientStream() {
+  const [patients, setPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    const socket = io("http://localhost:3000");
+
+    socket.on("patient_update", (data) => {
+      setPatients(prev => {
+        const updated = prev.filter(p => p.patientId !== data.patientId);
+        return [data, ...updated];
+      });
+    });
+
+    return () => socket.disconnect();
+  }, []);
+
+  return patients;
+}
+🧠 2. CLINICAL DIGITAL TWIN SIMULATOR
+
+(run 1000 patients continuously)
+
+📁 server/simulation/digitalTwin.ts
+import { runDiagnosis } from "../clinical/diagnosisEngine";
+import { runDispositionSafetyPipeline } from "../clinical/dispositionEngine";
+import { generateFullCaseSet } from "../validation/fullCaseGenerator";
+import { pushToControlTower } from "../wsEmitter";
+
+export async function runDigitalTwin() {
+  const cases = generateFullCaseSet();
+
+  for (const c of cases) {
+    const diagnosis = await runDiagnosis(c, global.kb);
+
+    const result = runDispositionSafetyPipeline({
+      ...c,
+      posterior: diagnosis.posterior,
+    });
+
+    pushToControlTower({
+      id: c.id,
+      risk: Math.random() * 5,
+      topDiagnosis: result.topDiagnosis,
+      flags: result.reasons,
+    });
+  }
+}
+📁 Continuous Simulation Loop
+export function startSimulationLoop() {
+  setInterval(() => {
+    runDigitalTwin();
+  }, 2000); // every 2 sec
+}
+📊 3. FULL FDA DASHBOARD UI
+📁 frontend/src/pages/FDADashboard.tsx
+import { useEffect, useState } from "react";
+
+export default function FDADashboard() {
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/control-tower/validation-dashboard")
+      .then(res => res.json())
+      .then(setData);
+  }, []);
+
+  if (!data) return <div>Loading...</div>;
+
+  return (
+    <div className="p-6 bg-black text-white">
+      <h1 className="text-2xl mb-4">📊 FDA Validation Dashboard</h1>
+
+      <div className="mb-4">
+        <div>Pass Rate: {data.latest.passRate}</div>
+        <div>Unsafe Undercalls: {data.latest.unsafeUndercalls}</div>
+      </div>
+
+      {/* Graph */}
+      <div className="bg-gray-800 p-4 rounded">
+        <h2>Pass Rate Trend</h2>
+        {data.passRates.map((p: number, i: number) => (
+          <div key={i} style={{ width: `${p * 100}%` }} className="bg-green-500 h-2 mb-1" />
+        ))}
+      </div>
+
+      <button
+        className="mt-4 bg-blue-600 p-2 rounded"
+        onClick={() => window.open("/fda_report.json")}
+      >
+        Export FDA Report
+      </button>
+    </div>
+  );
+}
+🏥 4. NYC PILOT DEPLOYMENT PACKAGE
+📁 deploy/docker/Dockerfile
+FROM node:20
+
+WORKDIR /app
+
+COPY . .
+
+RUN npm install
+
+RUN npm run build
+
+EXPOSE 3000
+
+CMD ["node", "server/app.js"]
+📁 deploy/docker/docker-compose.yml
+version: '3'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://user:pass@db:5432/auralyn
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: auralyn
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+📁 deploy/nycPilotChecklist.md
+# NYC Pilot Deployment Checklist
+
+## Clinical Safety
+- [ ] Unsafe undercall rate = 0
+- [ ] All red flags escalate
+
+## Integration
+- [ ] Athena / ECW / Epic connection
+- [ ] Audit logs enabled
+
+## Monitoring
+- [ ] Control Tower live
+- [ ] WebSocket streaming working
+
+## Compliance
+- [ ] HIPAA encryption
+- [ ] Access logging
+
+## Validation
+- [ ] 1000+ cases run
+- [ ] FDA report generated

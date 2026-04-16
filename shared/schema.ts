@@ -1489,3 +1489,73 @@ export const kbAuditTrail = pgTable("kb_audit_trail", {
 export const insertKbAuditTrailSchema = createInsertSchema(kbAuditTrail).omit({ id: true, createdAt: true });
 export type InsertKbAuditTrail = z.infer<typeof insertKbAuditTrailSchema>;
 export type KbAuditTrailEntry = typeof kbAuditTrail.$inferSelect;
+
+// ── ICU Predictor + Digital Twin (Batch 6 security/architecture wave) ─────────
+
+export const patientSnapshots = pgTable(
+  "patient_snapshots",
+  {
+    id:        serial("id").primaryKey(),
+    patientId: text("patient_id").notNull(),
+    clinicId:  text("clinic_id"),
+    complaint: text("complaint"),
+    ageYears:  integer("age_years"),
+    vitals:    jsonb("vitals").$type<Record<string, unknown>>().notNull().default({}),
+    labs:      jsonb("labs").$type<Record<string, unknown>>().notNull().default({}),
+    timeline:  jsonb("timeline").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    source:    text("source").notNull().default("command_center_v3"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("patient_snapshots_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+export const insertPatientSnapshotSchema = createInsertSchema(patientSnapshots).omit({ id: true, createdAt: true });
+export type InsertPatientSnapshot = z.infer<typeof insertPatientSnapshotSchema>;
+export type PatientSnapshot = typeof patientSnapshots.$inferSelect;
+
+export const icuPredictions = pgTable(
+  "icu_predictions",
+  {
+    id:                     serial("id").primaryKey(),
+    patientId:              text("patient_id").notNull(),
+    clinicId:               text("clinic_id"),
+    modelVersion:           text("model_version").notNull().default("icu-v3-news2-lactate"),
+    riskScore:              real("risk_score").notNull(),
+    riskBand:               text("risk_band").notNull(),
+    recommendedLevel:       text("recommended_level").notNull(),
+    explanation:            jsonb("explanation").$type<Array<{ factor: string; value: number | string; impact: number; note: string }>>().notNull().default([]),
+    features:               jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
+    requiresPhysicianReview:boolean("requires_physician_review").notNull().default(true),
+    createdAt:              timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("icu_predictions_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+export const insertIcuPredictionSchema = createInsertSchema(icuPredictions).omit({ id: true, createdAt: true });
+export type InsertIcuPrediction = z.infer<typeof insertIcuPredictionSchema>;
+export type IcuPrediction = typeof icuPredictions.$inferSelect;
+
+export const digitalTwinRuns = pgTable(
+  "digital_twin_runs",
+  {
+    id:                serial("id").primaryKey(),
+    patientId:         text("patient_id").notNull(),
+    clinicId:          text("clinic_id"),
+    scenarioName:      text("scenario_name").notNull(),
+    horizonHours:      integer("horizon_hours").notNull().default(12),
+    inputs:            jsonb("inputs").$type<Record<string, unknown>>().notNull().default({}),
+    output:            jsonb("output").$type<Record<string, unknown>>().notNull().default({}),
+    riskDelta:         real("risk_delta").notNull().default(0),
+    recommendedAction: text("recommended_action"),
+    createdBy:         text("created_by").notNull(),
+    createdAt:         timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("digital_twin_runs_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+export const insertDigitalTwinRunSchema = createInsertSchema(digitalTwinRuns).omit({ id: true, createdAt: true });
+export type InsertDigitalTwinRun = z.infer<typeof insertDigitalTwinRunSchema>;
+export type DigitalTwinRun = typeof digitalTwinRuns.$inferSelect;

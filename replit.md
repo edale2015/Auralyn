@@ -34,6 +34,43 @@
 
 - **NYC Pilot + FDA** (`/nyc-pilot`): Operational metrics (3 sites, 12,847+ patients), 24h throughput chart, FDNY EMS activity feed, FDA 510(k) readiness checklist (12 items), deployment environment promoter (dev→staging→prod→nyc-pilot), HIPAA/FDA/security compliance scoreboard. Backend: `server/routes/nycPilotRoutes.ts` → `/api/nyc-pilot/*`
 
+## Batch 6 — Monitoring, RLHF, and Safety Fixes (April 2026)
+
+### 10 Fixes Applied
+
+**1. alertRules.ts — Silent error swallowing**
+`catch { continue }` in `evalRules()` now logs rule ID + expression + error. A broken rule that silently never fired is now visible to operators.
+
+**2. safeRuleEngine.ts — NEW structured rule engine**
+`server/monitoring/safeRuleEngine.ts`: `SafeRule { metric, operator, value }` + `evaluateSafeRule()` + `validateSafeRule()`. Zero dynamic code execution — no eval, no vm, no Function. Drop-in alternative to the vm sandbox in alertRules.ts when expression flexibility is not needed.
+
+**3. selfModify.ts — Unbounded duplicate prompt injection**
+The `successRate < 0.7` branch was unconditionally calling `.push()` with no dedup check, potentially appending hundreds of identical instructions. Fixed via shared `appendIfMissing()` helper (consistent with all other branches). Added `MAX_APPENDED_INSTRUCTIONS = 20` cap. Every mutation now emits a `console.warn` documenting that it's in-memory only and not audited.
+
+**4. selfImprove.ts — TOCTOU race in approveAndApplyAction()**
+The approval UPDATE and the apply call were two separate DB operations with no locking between them. A concurrent caller could observe the "approved" state and double-apply the same threshold change. Fixed: wrapped both operations in a single `db.transaction()` that acquires `pg_advisory_xact_lock(ACTION_LOCK_BASE + actionId)` before touching the row.
+
+**5. dataDrift.ts — Frozen baseline**
+Baseline was set once from the first 50 samples and never refreshed. A clinic population that shifts seasonally would gradually invalidate drift detection. Fixed: `maybeRefreshBaseline()` called on every `recordSample()`. Refresh runs on first init and every `BASELINE_REFRESH_INTERVAL_MS = 7 days`.
+
+**6. vitalsMonitor.ts — SpO2 sensor dropout misclassified as clinical hypoxia**
+SpO2 ≤ 0 or > 100 is physiologically impossible and indicates sensor failure, not patient hypoxia. Added a `sensor_error / high` alert before the clinical threshold block. Responders now see the distinction between "sensor problem" vs "patient deteriorating."
+
+**7. syntheticCaseGenerator.ts — new Function() RCE via CSV**
+`evaluateSimpleCondition()` was using `new Function(safeExpr)` — a tampered DISPOSITION_RULES.csv or CORE_QUESTIONS.csv could achieve server-side code execution. Replaced with `vm.Script.runInNewContext()` using an empty prototype-free sandbox with a 20ms timeout.
+
+**8. weightAdapter.ts — Silent weight changes**
+`adjust()` previously logged only reductions. Every weight change is now logged with `prevWeight`, `weight`, `score`, and `successRate` for full operator visibility.
+
+**9. icuPredictor.ts — NEW NEWS2 + Lactate ICU predictor**
+`server/monitoring/icuPredictor.ts`: `calculateIcuRisk()` (synchronous, pure) + `predictAndStoreIcuRisk()` (async, DB-persisted). Scores RR, SpO2, temp, SBP, HR, mental status, O2 support, lactate, and age ≥75. Every prediction is written to `icu_predictions` and audited. `requiresPhysicianReview: true` always.
+
+**10. Schema additions (psql, not db:push)**
+Three new tables created via `psql $DATABASE_URL` to avoid drizzle's destructive table-rename behavior:
+- `patient_snapshots` — timestamped vitals/labs snapshots with source tag
+- `icu_predictions` — persisted NEWS2+lactate predictions with explanation array
+- `digital_twin_runs` — persisted scenario runs with riskDelta and recommended action
+
 ## Second Wave — Unified Write Architecture (April 2026)
 
 ### Canonical EHR Write Path

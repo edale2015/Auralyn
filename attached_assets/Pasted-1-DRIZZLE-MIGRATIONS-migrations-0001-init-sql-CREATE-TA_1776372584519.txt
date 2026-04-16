@@ -1,0 +1,211 @@
+1) DRIZZLE MIGRATIONS
+migrations/0001_init.sql
+CREATE TABLE diagnoses (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  prior NUMERIC
+);
+
+CREATE TABLE feature_likelihoods (
+  id TEXT PRIMARY KEY,
+  diagnosis_id TEXT,
+  feature TEXT,
+  present_prob NUMERIC,
+  absent_prob NUMERIC
+);
+
+CREATE TABLE evidence_map (
+  diagnosis_id TEXT,
+  features JSONB
+);
+
+CREATE TABLE contradiction_map (
+  diagnosis_id TEXT,
+  features JSONB
+);
+
+CREATE TABLE audit_log (
+  id TEXT PRIMARY KEY,
+  payload JSONB
+);
+
+CREATE TABLE review_queue (
+  id TEXT PRIMARY KEY,
+  case_id TEXT,
+  reason TEXT,
+  payload JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE validation_runs (
+  id TEXT PRIMARY KEY,
+  summary JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+🌱 2) SEEDED GOLDEN CASE PACK
+server/validation/seedCases.ts
+import { GoldenCase } from './goldenCaseTypes';
+
+export const seedGoldenCases: GoldenCase[] = [
+  // --- PULMONARY EMBOLISM ---
+  {
+    id: "pe_1",
+    complaint: "shortness_of_breath",
+    title: "PE classic pleuritic pain",
+    observations: [
+      { feature: "sob", value: true },
+      { feature: "pleuritic_chest_pain", value: true },
+      { feature: "tachycardia", value: true },
+    ],
+    presentationProfile: {
+      complaint: "shortness_of_breath",
+      requiredFeaturesAnyOf: ["sob"],
+      stronglyExpectedFeaturesAnyOf: ["tachycardia", "pleuritic_chest_pain"],
+    },
+    expectedTopDiagnosis: "pe",
+    expectedDisposition: "ed",
+    minimumSafeDisposition: "ed",
+    redFlagCount: 1,
+  },
+
+  // --- ACS ---
+  {
+    id: "acs_1",
+    complaint: "chest_pain",
+    title: "Typical ACS",
+    observations: [
+      { feature: "chest_pain", value: true },
+      { feature: "radiation_left_arm", value: true },
+      { feature: "diaphoresis", value: true },
+    ],
+    presentationProfile: {
+      complaint: "chest_pain",
+      requiredFeaturesAnyOf: ["chest_pain"],
+      stronglyExpectedFeaturesAnyOf: ["radiation_left_arm", "diaphoresis"],
+    },
+    expectedTopDiagnosis: "acs",
+    expectedDisposition: "ed",
+    minimumSafeDisposition: "ed",
+    redFlagCount: 1,
+  },
+
+  // --- PNEUMONIA ---
+  {
+    id: "pna_1",
+    complaint: "cough",
+    title: "Classic pneumonia",
+    observations: [
+      { feature: "fever", value: true },
+      { feature: "cough", value: true },
+      { feature: "sob", value: true },
+    ],
+    presentationProfile: {
+      complaint: "cough",
+      requiredFeaturesAnyOf: ["cough"],
+      stronglyExpectedFeaturesAnyOf: ["fever", "sob"],
+    },
+    expectedTopDiagnosis: "pneumonia",
+    expectedDisposition: "urgent_care",
+  },
+
+  // --- SEPSIS ---
+  {
+    id: "sepsis_1",
+    complaint: "fever",
+    title: "Sepsis pattern",
+    observations: [
+      { feature: "fever", value: true },
+      { feature: "tachycardia", value: true },
+      { feature: "hypotension", value: true },
+    ],
+    presentationProfile: {
+      complaint: "fever",
+      requiredFeaturesAnyOf: ["fever"],
+    },
+    expectedTopDiagnosis: "sepsis",
+    expectedDisposition: "ed",
+    minimumSafeDisposition: "ed",
+    redFlagCount: 2,
+  },
+
+  // --- PEDIATRIC FEVER ---
+  {
+    id: "peds_fever_1",
+    complaint: "fever",
+    title: "Pediatric fever lethargy",
+    observations: [
+      { feature: "fever", value: true },
+      { feature: "lethargy", value: true },
+    ],
+    presentationProfile: {
+      complaint: "fever",
+      requiredFeaturesAnyOf: ["fever"],
+    },
+    expectedDisposition: "ed",
+    minimumSafeDisposition: "ed",
+    redFlagCount: 1,
+  },
+
+  // --- STROKE ---
+  {
+    id: "stroke_1",
+    complaint: "neurologic",
+    title: "Stroke FAST positive",
+    observations: [
+      { feature: "facial_droop", value: true },
+      { feature: "arm_weakness", value: true },
+      { feature: "speech_difficulty", value: true },
+    ],
+    presentationProfile: {
+      complaint: "neurologic",
+      requiredFeaturesAnyOf: ["facial_droop", "arm_weakness"],
+    },
+    expectedTopDiagnosis: "stroke",
+    expectedDisposition: "call_911",
+    minimumSafeDisposition: "call_911",
+    redFlagCount: 2,
+  },
+];
+🌱 3) SEED SCRIPT
+server/scripts/seed.ts
+import { db } from '../db/client';
+import { diagnoses, evidenceMap, contradictionMap } from '../db/schema';
+import { seedGoldenCases } from '../validation/seedCases';
+
+export async function seedDatabase() {
+  console.log("Seeding database...");
+
+  await db.insert(diagnoses).values([
+    { id: "pe", name: "Pulmonary Embolism", prior: "0.05" },
+    { id: "acs", name: "Acute Coronary Syndrome", prior: "0.05" },
+    { id: "pneumonia", name: "Pneumonia", prior: "0.2" },
+    { id: "sepsis", name: "Sepsis", prior: "0.03" },
+    { id: "stroke", name: "Stroke", prior: "0.02" },
+  ]);
+
+  await db.insert(evidenceMap).values([
+    { diagnosisId: "pe", features: ["sob", "pleuritic_chest_pain", "tachycardia"] },
+    { diagnosisId: "acs", features: ["chest_pain", "radiation_left_arm", "diaphoresis"] },
+    { diagnosisId: "pneumonia", features: ["fever", "cough", "sob"] },
+  ]);
+
+  await db.insert(contradictionMap).values([
+    { diagnosisId: "pe", features: ["fever_high"] },
+    { diagnosisId: "acs", features: ["pleuritic_chest_pain"] },
+  ]);
+
+  console.log("Seed complete.");
+}
+
+seedDatabase();
+🧪 4) RUN VALIDATION IMMEDIATELY
+Step 1: expand adversarial set
+POST /api/validation/golden/adversarial-expand
+Step 2: run harness
+POST /api/validation/golden/run
+Expected output
+{
+  "summary": {
+    "passRate": 0.82,
+    "unsafeUndercalls": 0
+  }

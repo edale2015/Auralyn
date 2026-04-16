@@ -1,0 +1,176 @@
+1. Validation Gate (BLOCK DEPLOY / FEATURE USE)
+// server/validation/validationGate.ts
+
+type ValidationSummary = {
+  passRate: number;
+  unsafeUndercalls: number;
+  calibrationError: number;
+};
+
+export function enforceValidationGate(summary: ValidationSummary) {
+  const errors: string[] = [];
+
+  if (summary.unsafeUndercalls > 0) {
+    errors.push("Unsafe undercalls detected");
+  }
+
+  if (summary.passRate < 0.85) {
+    errors.push("Validation pass rate too low");
+  }
+
+  if (summary.calibrationError > 0.15) {
+    errors.push("Model overconfidence detected");
+  }
+
+  return {
+    allowed: errors.length === 0,
+    errors,
+  };
+}
+
+👉 Use this before:
+
+deploying KB updates
+enabling new complaint logic
+allowing auto-disposition
+🔁 2. Continuous Validation Runner (AUTO)
+// server/validation/validationRunner.ts
+
+import { runGoldenCases, summarizeValidation } from './goldenCaseHarness';
+import { expandAdversarialSet } from './adversarialGenerator';
+import { computeBrierScore } from './calibrationMonitor';
+
+export async function runFullValidation(cases: any[]) {
+  const expanded = expandAdversarialSet(cases);
+
+  const results = await runGoldenCases(expanded);
+  const summary = summarizeValidation(results);
+
+  const calibrationRows = results.map(r => ({
+    predictedConfidence: 0.7, // plug real value
+    correct: r.pass,
+  }));
+
+  const calibrationError = computeBrierScore(calibrationRows);
+
+  return {
+    ...summary,
+    calibrationError,
+  };
+}
+🧾 3. Store Every Validation Run
+// server/services/validationLogService.ts
+
+import { db } from '../db/client';
+
+export async function logValidationRun(summary: any) {
+  await db.execute(`
+    INSERT INTO validation_runs (id, summary)
+    VALUES ($1, $2)
+  `, [
+    `val_${Date.now()}`,
+    JSON.stringify(summary)
+  ]);
+}
+⛔ 4. Runtime Kill Switch (VERY IMPORTANT)
+// server/ai/runtimeSafety.ts
+
+export function runtimeSafetyCheck(validationSummary: any) {
+  if (validationSummary.unsafeUndercalls > 0) {
+    return {
+      allowAutonomy: false,
+      forcePhysicianReview: true,
+      reason: "Unsafe validation detected"
+    };
+  }
+
+  return {
+    allowAutonomy: true,
+    forcePhysicianReview: false,
+  };
+}
+📊 5. Drift Detector (SILENT FAILURE PREVENTION)
+// server/validation/driftDetector.ts
+
+export function detectDrift(previous: any, current: any) {
+  const drift = Math.abs(current.passRate - previous.passRate);
+
+  return {
+    drift,
+    alert: drift > 0.1,
+  };
+}
+🧠 PART 2 — 5 MORE HALLUCINATION MANAGEMENT SYSTEMS
+
+These are high-value, real-world failure blockers
+
+🧱 1. “Impossible Combo” Detector
+export function detectImpossibleCombo(observations: any[]) {
+  const features = new Set(observations.map(o => o.feature));
+
+  if (features.has("hypotension") && features.has("normal_perfusion")) {
+    return {
+      blocked: true,
+      reason: "Impossible physiologic combination"
+    };
+  }
+
+  return { blocked: false };
+}
+🧠 2. Confidence Compression (ANTI-OVERCONFIDENCE)
+export function compressConfidence(prob: number) {
+  if (prob > 0.8) return 0.8;
+  if (prob < 0.2) return 0.2;
+  return prob;
+}
+
+👉 Prevents fake certainty
+
+🧬 3. Multi-Diagnosis Coverage Requirement
+export function requireDifferentialSpread(posterior: any) {
+  const top3 = Object.values(posterior)
+    .sort((a: any, b: any) => b - a)
+    .slice(0, 3);
+
+  const spread = top3[0] - top3[2];
+
+  if (spread < 0.2) {
+    return {
+      forceReview: true,
+      reason: "Diagnosis uncertainty too high"
+    };
+  }
+
+  return { forceReview: false };
+}
+🔍 4. Missing “Rule-Out Dangerous First” Check
+export function ensureDangerousRuledOut(topDx: string, posterior: any) {
+  const dangerous = ["pe", "acs", "stroke", "sepsis"];
+
+  for (const dx of dangerous) {
+    if ((posterior[dx] ?? 0) > 0.1 && topDx !== dx) {
+      return {
+        blocked: true,
+        reason: `Dangerous condition ${dx} not ruled out`
+      };
+    }
+  }
+
+  return { blocked: false };
+}
+🧠 5. Consistency Across Time (MULTI-STEP MEMORY)
+export function checkConsistency(history: any[], current: any) {
+  if (!history.length) return { ok: true };
+
+  const last = history[history.length - 1];
+
+  if (last.topDiagnosis !== current.topDiagnosis &&
+      Math.abs(last.confidence - current.confidence) < 0.1) {
+    return {
+      flag: true,
+      reason: "Diagnosis flipped without evidence change"
+    };
+  }
+
+  return { ok: true };
+}

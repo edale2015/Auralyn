@@ -81,7 +81,10 @@ export async function evalRules(metrics: Record<string, number>): Promise<string
         }
         fired.push(rule.id);
       }
-    } catch {
+    } catch (err: any) {
+      // FIX: was `catch { continue }` — errors were silently discarded.
+      // A broken rule appeared active but never fired. Now surfaced to operators.
+      console.error(`[AlertRules] Rule ${rule.id} evaluation failed: ${err?.message ?? err} | expr: ${rule.expr}`);
       continue;
     }
   }

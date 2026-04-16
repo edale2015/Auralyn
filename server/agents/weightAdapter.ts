@@ -31,12 +31,30 @@ export class WeightAdapter {
     if (!redis) return;
 
     try {
-      const health = await selfHealingEngine.getHealth(agent);
-      const weight = scoreToWeight(health.score);
+      const health    = await selfHealingEngine.getHealth(agent);
+      const weight    = scoreToWeight(health.score);
+      const prevRaw   = await redis.hget(WEIGHT_HASH_KEY, agent);
+      const prevWeight = prevRaw !== null ? Number(prevRaw) : null;
+
       await redis.hset(WEIGHT_HASH_KEY, agent, weight);
 
+      // FIX: Weight changes had no audit trail — invisible to operators.
+      // Log every change (or reduction) so they are discoverable in operator dashboards.
       if (weight < 1.0) {
-        logger.warn("[WeightAdapter] Weight reduced", { agent, weight, score: health.score });
+        logger.warn("[WeightAdapter] Weight reduced", {
+          agent,
+          weight,
+          prevWeight,
+          score:       health.score,
+          successRate: health.successRate,
+        });
+      } else if (prevWeight !== null && prevWeight !== weight) {
+        logger.info("[WeightAdapter] Weight changed", {
+          agent,
+          weight,
+          prevWeight,
+          score: health.score,
+        });
       }
     } catch (err) {
       logger.warn("[WeightAdapter] adjust failed", { agent, err });

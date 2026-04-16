@@ -1,0 +1,267 @@
+1. ❌ REMOVE new Function() (RCE) → ✅ SAFE RULE ENGINE
+Replace:
+const fn = new Function(...keys, `return !!(${rule.expr});`);
+With this: Structured Rule Engine
+// server/monitoring/safeRuleEngine.ts
+
+export type Operator = ">" | "<" | ">=" | "<=" | "==" | "!=";
+
+export interface SafeRule {
+  metric: string;
+  operator: Operator;
+  value: number;
+}
+
+export function evaluateSafeRule(rule: SafeRule, metrics: Record<string, number>): boolean {
+  const metricValue = metrics[rule.metric];
+
+  if (metricValue === undefined) return false;
+
+  switch (rule.operator) {
+    case ">": return metricValue > rule.value;
+    case "<": return metricValue < rule.value;
+    case ">=": return metricValue >= rule.value;
+    case "<=": return metricValue <= rule.value;
+    case "==": return metricValue === rule.value;
+    case "!=": return metricValue !== rule.value;
+    default: return false;
+  }
+}
+Update alertRules.ts:
+import { evaluateSafeRule, SafeRule } from "./safeRuleEngine";
+
+export interface AlertRule {
+  id: string;
+  rule: SafeRule;
+  target: "slack" | "whatsapp" | "both";
+  createdAt: string;
+}
+export async function evalRules(metrics: Record<string, number>): Promise<string[]> {
+  const fired: string[] = [];
+
+  for (const rule of rules) {
+    try {
+      if (evaluateSafeRule(rule.rule, metrics)) {
+        await dispatchAlert(rule);
+        fired.push(rule.id);
+      }
+    } catch (err) {
+      console.error("[AlertRules] Rule failed:", rule.id, err);
+    }
+  }
+
+  return fired;
+}
+2. ❌ DELETE unsafe selfModify.ts → ✅ GOVERNED PROMPT SYSTEM
+Replace with:
+// server/agents/promptGovernance.ts
+
+import { db } from "../db";
+import { auditStep } from "../audit/auditLogger";
+
+export async function proposePromptChange(agentId: string, change: string, proposedBy: string) {
+  const proposal = await db.insert("prompt_changes").values({
+    agentId,
+    change,
+    status: "pending_review",
+    proposedBy,
+    createdAt: new Date()
+  }).returning();
+
+  await auditStep({
+    traceId: `prompt-${proposal[0].id}`,
+    step: "prompt_change_proposed",
+    input: { agentId, change },
+    output: null
+  });
+
+  return proposal[0];
+}
+export async function applyPromptChange(id: number, reviewerId: string) {
+  return db.transaction(async (tx) => {
+    const change = await tx.select().from("prompt_changes")
+      .where({ id })
+      .limit(1);
+
+    if (!change.length) throw new Error("Not found");
+
+    await tx.update("prompt_changes")
+      .set({ status: "applied", reviewedBy: reviewerId })
+      .where({ id });
+
+    await auditStep({
+      traceId: `prompt-${id}`,
+      step: "prompt_change_applied",
+      input: null,
+      output: change[0]
+    });
+
+    return change[0];
+  });
+}
+
+👉 This converts “AI hallucinating its own upgrades” → FDA-auditable controlled evolution
+
+3. ❌ TOCTOU RACE → ✅ ATOMIC APPROVE + APPLY
+Replace this:
+await db.update(...)
+return applyImprovementAction(...)
+With:
+export async function approveAndApplyAtomic(actionId: number, reviewerId: string) {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${100000 + actionId})`);
+
+    const action = await tx.select()
+      .from(improvementActions)
+      .where(eq(improvementActions.id, actionId))
+      .limit(1);
+
+    if (!action.length) throw new Error("Action not found");
+
+    if (action[0].status !== "pending_review") {
+      throw new Error("Invalid state");
+    }
+
+    await tx.update(improvementActions)
+      .set({ status: "approved", decidedBy: reviewerId })
+      .where(eq(improvementActions.id, actionId));
+
+    return applyImprovementAction(actionId, reviewerId);
+  });
+}
+
+👉 Now the door cannot be opened halfway.
+
+4. ❌ RLHF IN-MEMORY → ✅ DATABASE-PERSISTENT RLHF
+// server/services/rlhfService.ts (FIXED)
+
+import { rlhfFeedbackTable, rlhfProposalsTable } from "../../shared/schema";
+
+async addFeedback(event: Omit<AuditedFeedback, "id" | "createdAt">) {
+  const [row] = await db.insert(rlhfFeedbackTable).values({
+    ...event,
+    createdAt: new Date()
+  }).returning();
+
+  return row;
+}
+async listFeedback(clinicId?: string) {
+  return db.select()
+    .from(rlhfFeedbackTable)
+    .where(clinicId ? eq(rlhfFeedbackTable.clinicId, clinicId) : undefined);
+}
+
+👉 Now your RLHF is legal evidence, not vapor.
+
+5. ❌ SELF-HEALING CHAOS LOOP → ✅ SAFE WEIGHT ADJUSTMENT
+// server/agents/safeWeightAdjuster.ts
+
+export async function safeAdjustWeight(agent: string, score: number) {
+  if (score < 0) {
+    throw new Error(`Circuit breaker: ${agent} unsafe`);
+  }
+
+  const bounds = { min: 0.5, max: 1.5 };
+
+  return db.transaction(async (tx) => {
+    const current = await tx.select()
+      .from("agent_weights")
+      .where({ agent })
+      .limit(1);
+
+    let newWeight = current[0].weight * (1 + score * 0.01);
+
+    newWeight = Math.max(bounds.min, Math.min(bounds.max, newWeight));
+
+    await tx.update("agent_weights")
+      .set({ weight: newWeight })
+      .where({ agent });
+
+    await auditStep({
+      traceId: `weight-${agent}`,
+      step: "weight_adjustment",
+      input: { score },
+      output: { newWeight }
+    });
+
+    return newWeight;
+  });
+}
+6. ❌ DATA DRIFT FROZEN → ✅ MOVING BASELINE
+// server/monitoring/dataDrift.ts
+
+const BASELINE_REFRESH_INTERVAL = 7 * 24 * 60 * 60 * 1000;
+
+let lastBaselineUpdate = 0;
+
+export function maybeRefreshBaseline() {
+  const now = Date.now();
+
+  if (!baseline || now - lastBaselineUpdate > BASELINE_REFRESH_INTERVAL) {
+    baseline = computeBaseline(recentSamples);
+    lastBaselineUpdate = now;
+
+    console.log("[DataDrift] Baseline refreshed");
+  }
+}
+
+Call inside recordSample():
+
+maybeRefreshBaseline();
+7. ❌ VITALS INVALID INPUT → ✅ PHYSIOLOGICAL VALIDATION
+function validateSpo2(spo2: number): "valid" | "invalid" {
+  if (spo2 <= 0 || spo2 > 100) return "invalid";
+  return "valid";
+}
+if (vitals.spo2 !== undefined) {
+  if (validateSpo2(vitals.spo2) === "invalid") {
+    alerts.push({
+      type: "sensor_error",
+      severity: "high",
+      value: vitals.spo2,
+      unit: "%",
+      message: `Invalid SpO2 reading: ${vitals.spo2}`
+    });
+    return alerts;
+  }
+}
+
+👉 You just separated device failure vs patient death.
+
+8. ❌ SYNTHETIC CASE RCE → ✅ SAFE EXPRESSION PARSER
+
+Replace new Function() with:
+
+import { Parser } from "expr-eval";
+
+const parser = new Parser({
+  operators: {
+    logical: true,
+    comparison: true,
+  }
+});
+
+function safeEvaluate(expr: string, context: Record<string, any>): boolean {
+  try {
+    const parsed = parser.parse(expr);
+    return !!parsed.evaluate(context);
+  } catch (e) {
+    console.error("[SafeEval] Failed:", expr);
+    return false;
+  }
+}
+9. ❌ HARD-CODED THRESHOLDS → ✅ MULTI-TENANT CONFIG
+// server/config/tenantThresholds.ts
+
+export async function getThresholds(tenantId: string) {
+  const row = await db.select()
+    .from("tenant_config")
+    .where({ tenantId })
+    .limit(1);
+
+  return row[0]?.thresholds ?? DEFAULT_THRESHOLDS;
+}
+10. ❌ BAD STATS → ✅ SMALL-SAMPLE SAFE CI
+import { jStat } from "jstat";
+
+const t = jStat.studentt.inv(0.975, n - 1);

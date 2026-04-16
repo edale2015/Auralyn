@@ -1,0 +1,253 @@
+TOP 10 FINDINGS
+1.
+Issue Title: evalRules() Uses new Function() with Unsanitized Alert Rule Expressions — Remote Code Execution Risk
+Severity: Critical
+Files: server/monitoring/alertRules.ts
+One-sentence risk: Any user who can POST an alert rule can execute arbitrary JavaScript on the server via new Function(...keys, rule.expr).
+2.
+Issue Title: selfModify.ts Silently Appends to Agent Prompts In-Memory with No Persistence, Audit Trail, or Physician Gate
+Severity: Critical
+Files: server/agents/selfModify.ts
+One-sentence risk: Agent prompts mutate autonomously in process memory based on statistical feedback with no audit log, no physician review, no persistence, and no rollback — constituting uncontrolled autonomous clinical prompt modification.
+3.
+Issue Title: approveAndApplyAction() Has a TOCTOU Race — Approval and Application Are Not Atomic
+Severity: Critical
+Files: server/agents/selfImprove.ts
+One-sentence risk: The status update to approved and the subsequent applyImprovementAction() call are two separate transactions with no locking between them, allowing a concurrent caller to observe and act on the intermediate approved state.
+4.
+Issue Title: alertRules.ts Errors Are Silently Swallowed in evalRules() — Failed Rules Are Invisible
+Severity: High
+Files: server/monitoring/alertRules.ts
+One-sentence risk: catch { continue } discards evaluation errors with no logging, meaning broken or malicious rule expressions fail silently and never fire, defeating the entire alerting layer.
+5.
+Issue Title: dataDrift.ts Baseline Is Frozen on First 50 Samples and Never Updated
+Severity: High
+Files: server/monitoring/dataDrift.ts
+One-sentence risk: The baseline is computed once from the first 50 patients and never refreshed, meaning seasonal or demographic shifts gradually render drift detection meaningless as the clinic's population evolves.
+6.
+Issue Title: selfModify.ts Prompt Accumulation Is Unbounded — appendedInstructions Grows Without Limit
+Severity: High
+Files: server/agents/selfModify.ts
+One-sentence risk: Every improveAgent() call that triggers the successRate < 0.7 condition appends a duplicate instruction without checking for existing entries, leading to unbounded prompt bloat that corrupts the LLM context window.
+7.
+Issue Title: vitalsMonitor.ts Has No Lower Bound on SpO2 — A Value of 0 Produces a "High" Not "Critical" Alert
+Severity: High
+Files: server/monitoring/vitalsMonitor.ts
+One-sentence risk: The SpO2 threshold logic fires critical only below 88 and high below 95, meaning SpO2 of 0 (sensor dropout or artifact) produces a non-critical alert and is treated identically to borderline hypoxia.
+8.
+Issue Title: syntheticCaseGenerator.ts Uses new Function() on CSV-Sourced Expressions — Server-Side Code Injection via Data File
+Severity: High
+Files: server/services/testing/syntheticCaseGenerator.ts
+One-sentence risk: DISPOSITION_RULES.csv and CORE_QUESTIONS.csv WHEN_EXPR/ASK_IF columns are executed via new Function() — a tampered or externally supplied CSV file achieves server-side code execution.
+9.
+Issue Title: selfHealingLoop.ts Calls weightAdapter.adjust() With No Bounds Validation, Rollback, or Physician Gate on Weight Changes
+Severity: High
+Files: server/agents/selfHealingLoop.ts
+One-sentence risk: Agent routing weights are modified automatically every 30 seconds based on health scores alone, with no upper/lower bound enforcement, no audit trail written at the application layer, and no clinical review gate.
+10.
+Issue Title: rlhfService.ts Stores All Data In-Process Memory — All Feedback and Proposals Are Lost on Restart
+Severity: High
+Files: server/services/rlhfService.ts
+One-sentence risk: feedback and proposals are private in-memory arrays with no database persistence, meaning every server restart silently destroys the entire RLHF feedback corpus and audit trail.
+
+FULL FINDINGS
+
+Issue Title: evalRules() Uses new Function() with Unsanitized Alert Rule Expressions
+Severity: Critical
+Category: Security / Remote Code Execution
+Files: server/monitoring/alertRules.ts
+What is wrong: evalRules() constructs a JavaScript function at runtime using new Function(...keys, \return !!(${rule.expr});`)whererule.expr` comes directly from API callers with no sanitization. Any authenticated user who can POST to the alert rule endpoint can execute arbitrary Node.js code in the server process.
+Why it matters: This is a textbook server-side code injection vulnerability. On a HIPAA-regulated system, this means any authenticated actor — including a compromised physician account — can exfiltrate PHI, modify the database, or crash the server. The catch block discards errors without logging, meaning failed injection attempts are invisible.
+Evidence from code:
+tsconst fn = new Function(...keys, `return !!(${rule.expr});`);
+ts} catch {
+  continue;  // silent discard
+}
+Recommended fix: Remove new Function() entirely. Replace expr with a structured rule schema (e.g., { metric: "errorRate", op: ">", value: 0.05 }). Evaluate rules with a whitelist comparator, not eval. If expression flexibility is truly required, use a sandboxed expression library (e.g., expr-eval) with a strict AST allowlist.
+Type: Real defect
+
+Issue Title: selfModify.ts Autonomously Mutates Clinical Agent Prompts In-Memory with Zero Governance
+Severity: Critical
+Category: Autonomous unsafe behavior / Clinical safety / Regulatory
+Files: server/agents/selfModify.ts
+What is wrong: improveAgent() appends clinical instructions to agent prompts based on raw successRate thresholds — with no physician review, no audit log, no persistence to DB, no RBAC gate, and no rollback mechanism. A process restart silently reverts all modifications, creating a divergence between what was supposedly "improved" and what actually runs.
+Why it matters: This is autonomous modification of clinical decision-making prompts. Under FDA SaMD guidance and any reasonable interpretation of HIPAA audit requirements, every change to how a clinical AI reasons about patients must be traceable, reversible, and physician-approved. This system has none of those properties. The selfImprove.ts / selfImproveOrchestrator.ts path has governance gates; selfModify.ts bypasses all of them entirely.
+Evidence from code:
+tsconfig.appendedInstructions.push("Consider alternative diagnoses before committing to primary.");
+// No auditStep(), no DB write, no physician gate, no persistence
+Recommended fix: Delete selfModify.ts or gate every call through the selfImprove.ts governance pipeline. Any prompt mutation must go through pending_review status, require physician approval, be persisted to DB, and be audited via auditStep(). The in-memory config map must be eliminated for anything affecting clinical reasoning.
+Type: Architectural risk / Real defect
+
+Issue Title: approveAndApplyAction() Has a TOCTOU Race Between Approval and Application
+Severity: Critical
+Category: Concurrency / Data integrity
+Files: server/agents/selfImprove.ts
+What is wrong: approveAndApplyAction() issues two separate database operations: first an UPDATE to set status = 'approved', then a separate call to applyImprovementAction() which opens a new transaction. Between these two operations, the record is in an approved state that could be observed and acted on by a concurrent caller (e.g., another admin triggering the /apply route), resulting in double-application of the same threshold change.
+Why it matters: A threshold parameter could be applied twice in rapid succession, pushing it beyond its intended ceiling and past THRESHOLD_BOUNDS.max. The CAS check in applyImprovementAction() provides some protection but only if the threshold record was already written — and the gap between approval and application is precisely when concurrent exploitation occurs.
+Evidence from code:
+tsawait db.update(improvementActions).set({ status: "approved" ... }); // tx 1
+// gap — concurrent caller can now see "approved" and also call apply
+return applyImprovementAction(actionId, reviewerId); // tx 2
+Recommended fix: Wrap the entire approve-and-apply operation in a single database transaction with the advisory lock already acquired inside applyImprovementAction. Alternatively, eliminate approveAndApplyAction() and require callers to use separate review then apply routes, letting the advisory lock in applyImprovementAction serialize concurrent apply attempts.
+Type: Real defect
+
+Issue Title: evalRules() Silently Discards All Evaluation Errors
+Severity: High
+Category: Observability / Silent failure
+Files: server/monitoring/alertRules.ts
+What is wrong: The catch { continue } in evalRules() discards every evaluation error — syntax errors, runtime exceptions, and type errors — with no log output whatsoever. A broken rule expression never fires and is never reported.
+Why it matters: An operator who creates a malformed rule believes it is active. When a threshold breach occurs, the rule silently fails to fire. The alerting layer appears healthy but is non-functional for any rule that has ever thrown an error.
+Evidence from code:
+ts} catch {
+  continue;
+}
+Recommended fix: Log the rule ID, expression, and error at minimum console.error level. Consider returning a structured error list from evalRules() so callers can surface broken rules. Mark rules that repeatedly throw as disabled in the rules store.
+Type: Real defect
+
+Issue Title: Data Drift Baseline Is Frozen on First 50 Samples Forever
+Severity: High
+Category: Clinical monitoring / Statistical validity
+Files: server/monitoring/dataDrift.ts
+What is wrong: baseline is computed once when recentSamples.length >= 50 and never updated. The drift detector forever compares the current population against a snapshot that may be months old. As the patient population naturally shifts, the baseline becomes increasingly unrepresentative, and the detector either never triggers (if the new normal has diverged far from the frozen baseline) or triggers continuously on legitimate population evolution.
+Why it matters: A drift detector that never resets its baseline provides false assurance. In a clinical AI, undetected distribution shift in complaint patterns or patient demographics means the model's performance assumptions no longer hold — exactly the scenario the monitor is meant to catch.
+Evidence from code:
+tsif (!baseline && recentSamples.length >= 50) {
+  baseline = computeBaseline(recentSamples);
+  // Never updated after this point
+}
+Recommended fix: Implement a sliding or periodic baseline refresh — e.g., recompute baseline every N samples or every 7 days using the oldest available window. Expose resetBaseline() as an admin action with an audit entry. Consider using an exponentially weighted moving average rather than a frozen snapshot.
+Type: Architectural risk
+
+Issue Title: selfModify.ts Appends Duplicate Instructions on Every Call Without Deduplication
+Severity: High
+Category: Clinical safety / Prompt integrity
+Files: server/agents/selfModify.ts
+What is wrong: The successRate < 0.7 branch unconditionally appends "Consider alternative diagnoses..." every time it is called, without checking whether that instruction already exists. Only the otoscopy branch has a deduplication check. With repeated evaluation cycles, a single agent's prompt could accumulate dozens of identical instructions.
+Why it matters: Prompt bloat degrades LLM output quality and increases token costs. More critically, repeated identical instructions can cause the model to over-weight a single clinical heuristic, introducing a systematic bias in triage decisions across all patients.
+Evidence from code:
+tsif (feedback.successRate < 0.7) {
+  config.appendedInstructions.push("Consider alternative diagnoses before committing to primary.");
+  // No dedup check — appends on every call
+Recommended fix: Add an includes() guard consistent with the otoscopy branch for every appended instruction. Cap appendedInstructions at a maximum length. Better: eliminate the entire approach and use the governed selfImprove.ts pipeline.
+Type: Real defect
+
+Issue Title: vitalsMonitor.ts SpO2 of 0 (Sensor Dropout) Produces "High" Not "Critical" Alert
+Severity: High
+Category: Clinical safety
+Files: server/monitoring/vitalsMonitor.ts
+What is wrong: The SpO2 threshold logic is:
+
+< 88 → critical
+< 95 → high
+
+A value of 0 satisfies < 88 and correctly fires critical. However, a value of 0 is also an implausible physiological reading that indicates sensor failure, disconnection, or motion artifact — none of which are handled. Additionally, there is no upper-bound sanity check: an SpO2 of 110 (impossible) would produce no alert at all.
+Why it matters: A sensor dropout producing SpO2 = 0 should be distinguished from true hypoxia and trigger a "sensor error" alert rather than a clinical intervention alert. Failure to validate input ranges means the system cannot distinguish equipment failure from patient deterioration.
+Evidence from code:
+tsif (vitals.spo2 < THRESHOLDS.spo2.critical) {
+  alerts.push({ type: "hypoxia", severity: "critical" ... });
+No validation that spo2 is in [0, 100] or that implausible values (0, >100) are flagged as data quality issues.
+Recommended fix: Add a physiological plausibility gate before the threshold evaluation: if spo2 <= 0 || spo2 > 100, push a data_quality alert with severity warn and skip the clinical evaluation. Apply the same pattern to all vital sign inputs.
+Type: Real defect
+
+Issue Title: syntheticCaseGenerator.ts Executes CSV-Sourced Expressions via new Function()
+Severity: High
+Category: Security / Code injection
+Files: server/services/testing/syntheticCaseGenerator.ts
+What is wrong: evaluateSimpleCondition() constructs and executes a JavaScript function from WHEN_EXPR and ASK_IF strings loaded from CSV files. The regex substitution is not a security control — it only replaces known variable patterns, leaving arbitrary JavaScript in the expression body reachable.
+Why it matters: If the CSV files are externally sourced, version-controlled without review, or accessible to an attacker who can write to the filesystem, this is server-side code execution. Even if the CSV is internally controlled, this is an unnecessary attack surface in a HIPAA environment.
+Evidence from code:
+tsconst fn = new Function(`return (${safeExpr});`);
+The variable safeExpr is called "safe" but is only partially sanitized via regex, not actually sandboxed.
+Recommended fix: Define a restricted expression grammar (e.g., ANDs/ORs of comparisons on known field names) and parse it with a proper AST evaluator. Do not use new Function() for data-file-sourced expressions in any production path.
+Type: Real defect
+
+Issue Title: selfHealingLoop.ts Applies Weight Changes Every 30 Seconds with No Bounds, No Audit Trail, No Physician Gate
+Severity: High
+Category: Autonomous unsafe behavior / Auditability
+Files: server/agents/selfHealingLoop.ts
+What is wrong: The loop calls weightAdapter.adjust(a.agent) every 30 seconds for every degraded agent. There is no evidence that weightAdapter.adjust() enforces bounds, writes an audit record, or requires physician review. The loop itself writes only a logger.warn for agents below zero — there is no circuit breaker that stops adjustments when scores are critically negative.
+Why it matters: Unconstrained autonomous weight adjustment in a clinical routing system means the system can progressively degrade routing quality without operator awareness. The 30-second interval means 2 adjustments per minute — 120 per hour — all with no paper trail.
+Evidence from code:
+tsawait weightAdapter.adjust(a.agent);
+// No bounds check, no audit call, no limit on consecutive adjustments
+if (a.score < 0) {
+  logger.warn(...)  // warn only — no circuit breaker, no stop
+}
+Recommended fix: Add a circuit breaker: if score < 0, suspend further automated adjustments for that agent and require physician acknowledgment. Wrap weightAdapter.adjust() with a call to auditStep(). Enforce and verify bounds inside weightAdapter.adjust() and return the resulting value so the loop can validate it.
+Type: Architectural risk / Real defect
+
+Issue Title: rlhfService.ts Stores All Feedback and Proposals in Process Memory Only
+Severity: High
+Category: Data durability / HIPAA auditability
+Files: server/services/rlhfService.ts
+What is wrong: private readonly feedback: AuditedFeedback[] = [] and private readonly proposals: AuditedProposal[] = [] are plain JavaScript arrays. Every server restart — planned or crash — destroys the entire RLHF feedback corpus, all proposal history, all reviewer identity records, and all audit information.
+Why it matters: RLHF feedback from physicians constitutes a clinical quality improvement record. Under HIPAA and FDA SaMD expectations, this must be durable. A crash immediately after a physician submits a safety-critical feedback event erases that event permanently. The /feedback GET endpoint can return an empty list after a restart with no indication that data was lost.
+Evidence from code:
+tsclass RLHFService {
+  private readonly feedback:   AuditedFeedback[]  = [];
+  private readonly proposals:  AuditedProposal[]  = [];
+Recommended fix: Persist every addFeedback() and every proposal mutation to the database immediately. The in-memory arrays can serve as a read cache but must not be the source of truth. Follow the pattern already established in selfImprove.ts which uses improvementActions and improvementReviews DB tables.
+Type: Architectural risk / Real defect
+
+Issue Title: anomalyDetector.ts Thresholds Are Hardcoded and Not Tenant-Scoped
+Severity: Medium
+Category: Multi-tenant isolation / Configuration
+Files: server/monitoring/anomalyDetector.ts
+What is wrong: Latency and error rate thresholds (avgLatency > 2000, errorRate > 0.1) are compile-time constants, identical for all tenants. A high-volume clinic has different baseline latency than a small practice, and a single global threshold will either over-alert or under-alert depending on tenant traffic patterns.
+Why it matters: In a multi-tenant SaaS system, hardcoded alerting thresholds prevent appropriate per-clinic calibration and will produce alert fatigue for high-volume tenants or miss degradation for low-volume ones.
+Recommended fix: Move thresholds to a per-tenant configuration table. Seed defaults from the constants. Allow tenant-admin override with physician approval and audit trail.
+Type: Architectural risk
+
+Issue Title: statisticalValidationService.ts Uses Z-Score (Normal Approximation) Without Checking Sample Size Validity
+Severity: Medium
+Category: Statistical validity
+Files: server/services/testing/statisticalValidationService.ts
+What is wrong: The CI computation uses z = 1.96 (the 95% Z critical value for large samples) regardless of n. For n < 30, a t-distribution should be used. The function returns a result for n = 1 using variance / (n - 1 || 1) which avoids division by zero but produces a meaningless standard error of 0 (since se = stdDev / sqrt(1)).
+Why it matters: Confidence intervals presented to physicians for small validation runs will be artificially narrow, suggesting false statistical certainty. This could support premature approval of threshold changes.
+Recommended fix: For n < 30, use t-distribution critical values (lookup table or approximation). Return a statistically_invalid flag for n < 5 and refuse to compute a CI. Document the limitation prominently in any UI that displays these values.
+Type: Real defect
+
+Issue Title: alertEngine.ts Recovery Alerts Fire for Each Active Alert Key But May Reference Already-Cleared Metrics
+Severity: Low
+Category: Alert quality
+Files: server/monitoring/alertEngine.ts
+What is wrong: When anomalies.length === 0, recovery alerts are fired for all keys in activeAlerts using a static reason string. The actual metrics at recovery time are not included in the recovery alert, making it impossible for an operator to know what the system recovered to.
+Why it matters: Without current metric values in the recovery alert, operators cannot confirm the system returned to a healthy baseline versus simply having the anomaly pattern change.
+Recommended fix: Pass the current metrics snapshot into the recovery alert payload, including avgLatency, errorRate, and p95Latency at recovery time, so operators have a complete picture.
+Type: Real defect (low severity)
+
+SUMMARY TABLE
+SeverityCountCritical3High7Medium2Low1
+
+SPECIAL SECTIONS
+Most dangerous to ship:
+
+alertRules.ts — new Function() on caller-supplied expressions is RCE in a HIPAA environment.
+selfModify.ts — Unaudited autonomous clinical prompt mutation with no physician gate, no persistence, no rollback.
+approveAndApplyAction() TOCTOU — threshold double-application possible under concurrent load.
+
+Likely theater / scaffolding:
+
+selfModify.ts in its entirety — it claims to "improve" agents but all state is lost on restart, there is no audit trail, and it bypasses the entire governance pipeline established in selfImprove.ts. It reads like an early prototype that was never wired to the production governance layer.
+rlhfService.ts in-memory storage — the routes, auth, and identity capture are well-constructed, but the underlying storage is ephemeral, making the entire RLHF subsystem non-functional for production use.
+statisticalValidationService.ts — the math looks rigorous but the Z-score approximation for small n and the lack of a validity flag make the output misleading for the small sample sizes this system will realistically encounter during validation cycles.
+
+Highest ROI fixes:
+
+Replace new Function() in both alertRules.ts and syntheticCaseGenerator.ts with structured evaluation — eliminates two RCE surfaces in one architectural decision.
+Persist rlhfService.ts feedback and proposals to the database — one sprint of work, makes the entire RLHF audit trail durable and regulatory-defensible.
+Delete or gate selfModify.ts through the selfImprove.ts governance pipeline — eliminates the most significant autonomous unsafe behavior finding.
+Fix approveAndApplyAction() atomicity — single transaction wrapping both operations.
+
+Needs cross-file review confirmation:
+
+weightAdapter.adjust() is called in selfHealingLoop.ts but its implementation is not in this batch — bounds enforcement, audit calls, and idempotency need to be verified in that file before the loop can be considered safe.
+requirePhysician middleware is referenced in rlhfRoutes.ts but not reviewed here — the JWT extraction and role validation it performs is critical to the security of the entire RLHF control plane.
+bufferedInsert() in systemMonitor.ts — the buffer implementation is not reviewed; if it drops records on flush failure, engine health logs are silently lost.
+broadcastPatientUpdate() in vitalsMonitor.ts — the WebSocket implementation must be reviewed to confirm it enforces tenant isolation before broadcasting critical vitals alerts.
+
+        @keyframes ccInstallNudgeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      Claude works directly with your codebaseLet Claude edit files, run commands, and ship changes right inside your terminal or IDE.InstallSonnet 4.6Claude is AI an

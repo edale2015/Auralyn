@@ -1,0 +1,733 @@
+1) shared/schema.ts
+
+Add DB tables for ICU predictions, digital twin scenarios, and patient snapshots.
+
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  jsonb,
+  real,
+  integer,
+  boolean,
+  index,
+} from "drizzle-orm/pg-core";
+
+// Existing exports above...
+
+export const patientSnapshots = pgTable(
+  "patient_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    patientId: text("patient_id").notNull(),
+    clinicId: text("clinic_id"),
+    complaint: text("complaint"),
+    ageYears: integer("age_years"),
+    vitals: jsonb("vitals").$type<Record<string, unknown>>().notNull().default({}),
+    labs: jsonb("labs").$type<Record<string, unknown>>().notNull().default({}),
+    timeline: jsonb("timeline").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    source: text("source").notNull().default("command_center_v3"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("patient_snapshots_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+
+export const icuPredictions = pgTable(
+  "icu_predictions",
+  {
+    id: serial("id").primaryKey(),
+    patientId: text("patient_id").notNull(),
+    clinicId: text("clinic_id"),
+    modelVersion: text("model_version").notNull().default("icu-v3-news2-lactate"),
+    riskScore: real("risk_score").notNull(),
+    riskBand: text("risk_band").notNull(), // low | moderate | high | critical
+    recommendedLevel: text("recommended_level").notNull(), // floor | monitored | stepdown | icu
+    explanation: jsonb("explanation").$type<Array<{ factor: string; value: number | string; impact: number; note: string }>>().notNull().default([]),
+    features: jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
+    requiresPhysicianReview: boolean("requires_physician_review").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("icu_predictions_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+
+export const digitalTwinRuns = pgTable(
+  "digital_twin_runs",
+  {
+    id: serial("id").primaryKey(),
+    patientId: text("patient_id").notNull(),
+    clinicId: text("clinic_id"),
+    scenarioName: text("scenario_name").notNull(),
+    horizonHours: integer("horizon_hours").notNull().default(12),
+    inputs: jsonb("inputs").$type<Record<string, unknown>>().notNull().default({}),
+    output: jsonb("output").$type<Record<string, unknown>>().notNull().default({}),
+    riskDelta: real("risk_delta").notNull().default(0),
+    recommendedAction: text("recommended_action"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    patientIdx: index("digital_twin_runs_patient_idx").on(t.patientId, t.createdAt),
+  })
+);
+2) server/monitoring/icuPredictor.ts
+
+A deterministic, auditable ICU predictor using NEWS2-style vitals plus lactate and hypotension. It stores all outputs durably instead of keeping them in process memory, which was one of the big weaknesses called out in the review.
+
+import { db } from "../db";
+import { icuPredictions, patientSnapshots } from "../../shared/schema";
+import { desc } from "drizzle-orm";
+import { auditStep } from "../audit/auditLogger";
+
+export interface PredictorVitals {
+  rr?: number;
+  spo2?: number;
+  tempC?: number;
+  systolicBP?: number;
+  hr?: number;
+  mentalStatus?: "alert" | "voice" | "pain" | "unresponsive" | "confused";
+  supplementalO2?: boolean;
+}
+
+export interface PredictorLabs {
+  lactate?: number;
+  wbc?: number;
+  creatinine?: number;
+}
+
+export interface PredictorInput {
+  patientId: string;
+  clinicId?: string;
+  complaint?: string;
+  ageYears?: number;
+  vitals: PredictorVitals;
+  labs?: PredictorLabs;
+}
+
+export interface PredictorResult {
+  patientId: string;
+  riskScore: number;
+  riskBand: "low" | "moderate" | "high" | "critical";
+  recommendedLevel: "floor" | "monitored" | "stepdown" | "icu";
+  explanation: Array<{ factor: string; value: number | string; impact: number; note: string }>;
+  features: Record<string, unknown>;
+}
+
+function scoreRespiratoryRate(rr?: number): number {
+  if (rr == null) return 0;
+  if (rr <= 8) return 3;
+  if (rr >= 25) return 3;
+  if (rr >= 21) return 2;
+  if (rr >= 9 && rr <= 11) return 1;
+  return 0;
+}
+
+function scoreSpo2(spo2?: number): number {
+  if (spo2 == null) return 0;
+  if (spo2 <= 91) return 3;
+  if (spo2 <= 93) return 2;
+  if (spo2 <= 95) return 1;
+  return 0;
+}
+
+function scoreTemp(tempC?: number): number {
+  if (tempC == null) return 0;
+  if (tempC <= 35) return 3;
+  if (tempC >= 39.1) return 2;
+  if (tempC >= 38.1) return 1;
+  if (tempC >= 35.1 && tempC <= 36) return 1;
+  return 0;
+}
+
+function scoreSbp(sbp?: number): number {
+  if (sbp == null) return 0;
+  if (sbp <= 90) return 3;
+  if (sbp <= 100) return 2;
+  if (sbp >= 220) return 3;
+  if (sbp >= 101 && sbp <= 110) return 1;
+  return 0;
+}
+
+function scoreHeartRate(hr?: number): number {
+  if (hr == null) return 0;
+  if (hr <= 40) return 3;
+  if (hr >= 131) return 3;
+  if (hr >= 111) return 2;
+  if (hr >= 91) return 1;
+  if (hr >= 41 && hr <= 50) return 1;
+  return 0;
+}
+
+function scoreMentalStatus(ms?: PredictorVitals["mentalStatus"]): number {
+  if (!ms) return 0;
+  return ms === "alert" ? 0 : 3;
+}
+
+function scoreSupplementalO2(flag?: boolean): number {
+  return flag ? 2 : 0;
+}
+
+function scoreLactate(lactate?: number): number {
+  if (lactate == null) return 0;
+  if (lactate >= 4) return 4;
+  if (lactate >= 2) return 2;
+  return 0;
+}
+
+function mapBand(score: number): PredictorResult["riskBand"] {
+  if (score >= 13) return "critical";
+  if (score >= 9) return "high";
+  if (score >= 5) return "moderate";
+  return "low";
+}
+
+function mapLevel(score: number): PredictorResult["recommendedLevel"] {
+  if (score >= 13) return "icu";
+  if (score >= 9) return "stepdown";
+  if (score >= 5) return "monitored";
+  return "floor";
+}
+
+export function calculateIcuRisk(input: PredictorInput): PredictorResult {
+  const explanation: PredictorResult["explanation"] = [];
+
+  const push = (factor: string, value: number | string, impact: number, note: string) => {
+    if (impact > 0) explanation.push({ factor, value, impact, note });
+  };
+
+  const rr = scoreRespiratoryRate(input.vitals.rr);
+  const spo2 = scoreSpo2(input.vitals.spo2);
+  const temp = scoreTemp(input.vitals.tempC);
+  const sbp = scoreSbp(input.vitals.systolicBP);
+  const hr = scoreHeartRate(input.vitals.hr);
+  const ment = scoreMentalStatus(input.vitals.mentalStatus);
+  const o2 = scoreSupplementalO2(input.vitals.supplementalO2);
+  const lactate = scoreLactate(input.labs?.lactate);
+
+  push("rr", input.vitals.rr ?? "n/a", rr, "Respiratory stress contribution");
+  push("spo2", input.vitals.spo2 ?? "n/a", spo2, "Hypoxemia contribution");
+  push("tempC", input.vitals.tempC ?? "n/a", temp, "Temperature instability contribution");
+  push("systolicBP", input.vitals.systolicBP ?? "n/a", sbp, "Shock / perfusion contribution");
+  push("hr", input.vitals.hr ?? "n/a", hr, "Hemodynamic stress contribution");
+  push("mentalStatus", input.vitals.mentalStatus ?? "n/a", ment, "Neurologic deterioration contribution");
+  push("supplementalO2", input.vitals.supplementalO2 ? "yes" : "no", o2, "Oxygen support requirement");
+  push("lactate", input.labs?.lactate ?? "n/a", lactate, "Tissue hypoperfusion contribution");
+
+  let score = rr + spo2 + temp + sbp + hr + ment + o2 + lactate;
+
+  if ((input.ageYears ?? 0) >= 75) {
+    score += 1;
+    explanation.push({ factor: "ageYears", value: input.ageYears!, impact: 1, note: "Advanced age risk modifier" });
+  }
+
+  const riskBand = mapBand(score);
+  const recommendedLevel = mapLevel(score);
+
+  return {
+    patientId: input.patientId,
+    riskScore: score,
+    riskBand,
+    recommendedLevel,
+    explanation: explanation.sort((a, b) => b.impact - a.impact),
+    features: {
+      complaint: input.complaint ?? null,
+      ageYears: input.ageYears ?? null,
+      vitals: input.vitals,
+      labs: input.labs ?? {},
+    },
+  };
+}
+
+export async function predictAndStoreIcuRisk(input: PredictorInput): Promise<PredictorResult> {
+  const result = calculateIcuRisk(input);
+
+  await db.insert(patientSnapshots).values({
+    patientId: input.patientId,
+    clinicId: input.clinicId ?? null,
+    complaint: input.complaint ?? null,
+    ageYears: input.ageYears ?? null,
+    vitals: input.vitals as Record<string, unknown>,
+    labs: (input.labs ?? {}) as Record<string, unknown>,
+    timeline: [],
+    source: "icu_predictor_v3",
+  });
+
+  await db.insert(icuPredictions).values({
+    patientId: input.patientId,
+    clinicId: input.clinicId ?? null,
+    riskScore: result.riskScore,
+    riskBand: result.riskBand,
+    recommendedLevel: result.recommendedLevel,
+    explanation: result.explanation,
+    features: result.features,
+    requiresPhysicianReview: true,
+  });
+
+  await auditStep({
+    traceId: `icu-predict-${input.patientId}-${Date.now()}`,
+    step: "icu_risk_predicted",
+    input,
+    output: result,
+    metadata: {
+      modelVersion: "icu-v3-news2-lactate",
+      requiresPhysicianReview: true,
+    },
+  });
+
+  return result;
+}
+
+export async function getLatestIcuPredictions(limit = 50) {
+  return db.select().from(icuPredictions).orderBy(desc(icuPredictions.createdAt)).limit(limit);
+}
+3) server/simulation/digitalTwinEngine.ts
+
+A digital twin that simulates near-term scenarios and records them. This stays on the right side of governance: it recommends and compares scenarios, but does not autonomously change routing weights or mutate prompts behind the curtain, which the review flagged as dangerous.
+
+import { db } from "../db";
+import { digitalTwinRuns, patientSnapshots } from "../../shared/schema";
+import { auditStep } from "../audit/auditLogger";
+import { calculateIcuRisk, PredictorInput } from "../monitoring/icuPredictor";
+
+export interface TwinScenarioInput {
+  patientId: string;
+  clinicId?: string;
+  createdBy: string;
+  scenarioName: string;
+  horizonHours?: number;
+  base: PredictorInput;
+  interventions: {
+    oxygenLiters?: number;
+    ivFluidsMl?: number;
+    antibioticsGiven?: boolean;
+    vasopressor?: boolean;
+  };
+}
+
+export interface TwinScenarioOutput {
+  baselineRisk: number;
+  projectedRisk: number;
+  riskDelta: number;
+  baselineBand: string;
+  projectedBand: string;
+  recommendedAction: string;
+  narrative: string[];
+}
+
+function clone<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj)) as T;
+}
+
+function applyInterventions(base: PredictorInput, interventions: TwinScenarioInput["interventions"]): PredictorInput {
+  const simulated = clone(base);
+
+  if (interventions.oxygenLiters && interventions.oxygenLiters > 0) {
+    const currentSpo2 = simulated.vitals.spo2 ?? 92;
+    simulated.vitals.spo2 = Math.min(99, currentSpo2 + Math.min(4, Math.floor(interventions.oxygenLiters / 2)));
+    simulated.vitals.supplementalO2 = true;
+  }
+
+  if (interventions.ivFluidsMl && interventions.ivFluidsMl >= 500) {
+    const currentSbp = simulated.vitals.systolicBP ?? 95;
+    simulated.vitals.systolicBP = Math.min(125, currentSbp + Math.floor(interventions.ivFluidsMl / 500) * 4);
+    if (typeof simulated.labs?.lactate === "number") {
+      simulated.labs!.lactate = Math.max(0.8, simulated.labs!.lactate - 0.4);
+    }
+  }
+
+  if (interventions.antibioticsGiven && typeof simulated.labs?.lactate === "number") {
+    simulated.labs!.lactate = Math.max(0.8, simulated.labs!.lactate - 0.2);
+  }
+
+  if (interventions.vasopressor) {
+    const currentSbp = simulated.vitals.systolicBP ?? 85;
+    simulated.vitals.systolicBP = Math.min(135, currentSbp + 10);
+  }
+
+  return simulated;
+}
+
+export async function runDigitalTwinScenario(input: TwinScenarioInput): Promise<TwinScenarioOutput> {
+  const baseline = calculateIcuRisk(input.base);
+  const simulatedInput = applyInterventions(input.base, input.interventions);
+  const projected = calculateIcuRisk(simulatedInput);
+
+  const riskDelta = Number((projected.riskScore - baseline.riskScore).toFixed(2));
+
+  const narrative: string[] = [];
+  if (riskDelta < 0) narrative.push(`Projected deterioration risk improves by ${Math.abs(riskDelta)} points.`);
+  if (riskDelta === 0) narrative.push("Projected risk remains unchanged.");
+  if (riskDelta > 0) narrative.push(`Projected deterioration risk worsens by ${riskDelta} points.`);
+
+  if ((input.interventions.ivFluidsMl ?? 0) > 0) narrative.push("Fluid responsiveness was simulated.");
+  if (input.interventions.oxygenLiters) narrative.push("Supplemental oxygen effect was simulated.");
+  if (input.interventions.antibioticsGiven) narrative.push("Source-control timing proxy was simulated.");
+  if (input.interventions.vasopressor) narrative.push("Hemodynamic support was simulated.");
+
+  const recommendedAction =
+    projected.riskBand === "critical" ? "Escalate to ICU physician review now" :
+    projected.riskBand === "high" ? "Stepdown/ICU screening and repeat vitals/lactate" :
+    "Continue monitored care and reassess";
+
+  const output: TwinScenarioOutput = {
+    baselineRisk: baseline.riskScore,
+    projectedRisk: projected.riskScore,
+    riskDelta,
+    baselineBand: baseline.riskBand,
+    projectedBand: projected.riskBand,
+    recommendedAction,
+    narrative,
+  };
+
+  await db.insert(digitalTwinRuns).values({
+    patientId: input.patientId,
+    clinicId: input.clinicId ?? null,
+    scenarioName: input.scenarioName,
+    horizonHours: input.horizonHours ?? 12,
+    inputs: {
+      base: input.base,
+      interventions: input.interventions,
+    },
+    output,
+    riskDelta,
+    recommendedAction,
+    createdBy: input.createdBy,
+  });
+
+  await db.insert(patientSnapshots).values({
+    patientId: input.patientId,
+    clinicId: input.clinicId ?? null,
+    complaint: input.base.complaint ?? null,
+    ageYears: input.base.ageYears ?? null,
+    vitals: simulatedInput.vitals as Record<string, unknown>,
+    labs: (simulatedInput.labs ?? {}) as Record<string, unknown>,
+    timeline: [
+      { at: new Date().toISOString(), event: "digital_twin_projection", scenarioName: input.scenarioName },
+    ],
+    source: "digital_twin_v3",
+  });
+
+  await auditStep({
+    traceId: `digital-twin-${input.patientId}-${Date.now()}`,
+    step: "digital_twin_run",
+    input,
+    output,
+    metadata: {
+      scenarioName: input.scenarioName,
+      createdBy: input.createdBy,
+    },
+  });
+
+  return output;
+}
+4) server/routes/commandCenterV3Routes.ts
+
+Endpoints for live prediction, scenario simulation, and recent dashboard data.
+
+import express from "express";
+import { predictAndStoreIcuRisk, getLatestIcuPredictions } from "../monitoring/icuPredictor";
+import { runDigitalTwinScenario } from "../simulation/digitalTwinEngine";
+import { requirePhysician } from "../auth/requirePhysician";
+
+const router = express.Router();
+
+router.use(requirePhysician);
+
+router.post("/icu/predict", async (req, res) => {
+  try {
+    const physician = req.physician!;
+    const result = await predictAndStoreIcuRisk({
+      ...req.body,
+      clinicId: physician.clinicId,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Prediction failed",
+    });
+  }
+});
+
+router.post("/digital-twin/run", async (req, res) => {
+  try {
+    const physician = req.physician!;
+    const result = await runDigitalTwinScenario({
+      ...req.body,
+      clinicId: physician.clinicId,
+      createdBy: physician.id,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Digital twin run failed",
+    });
+  }
+});
+
+router.get("/icu/recent", async (_req, res) => {
+  try {
+    const rows = await getLatestIcuPredictions(100);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Could not load ICU predictions",
+    });
+  }
+});
+
+export default router;
+
+Wire it in your app:
+
+import commandCenterV3Routes from "./routes/commandCenterV3Routes";
+
+app.use("/api/command-center-v3", commandCenterV3Routes);
+5) server/realtime/commandCenterHub.ts
+
+A tiny broadcast layer for wallboards.
+
+import type { Server as HttpServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+
+type HubMessage =
+  | { type: "icu_prediction"; payload: unknown }
+  | { type: "digital_twin"; payload: unknown };
+
+let wss: WebSocketServer | null = null;
+
+export function initCommandCenterHub(server: HttpServer) {
+  if (wss) return wss;
+  wss = new WebSocketServer({ server, path: "/ws/command-center-v3" });
+  return wss;
+}
+
+export function broadcastCommandCenter(msg: HubMessage) {
+  if (!wss) return;
+  const encoded = JSON.stringify(msg);
+
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(encoded);
+    }
+  }
+}
+
+Optional hook inside predictor/twin services after successful writes:
+
+import { broadcastCommandCenter } from "../realtime/commandCenterHub";
+
+// after storing result
+broadcastCommandCenter({ type: "icu_prediction", payload: result });
+
+and
+
+broadcastCommandCenter({ type: "digital_twin", payload: output });
+6) frontend/src/pages/CommandCenterV3.tsx
+
+A live wallboard page for ICU risk and digital twin output.
+
+import React, { useEffect, useMemo, useState } from "react";
+
+type Prediction = {
+  id?: number;
+  patientId: string;
+  riskScore: number;
+  riskBand: "low" | "moderate" | "high" | "critical";
+  recommendedLevel: "floor" | "monitored" | "stepdown" | "icu";
+  explanation: Array<{ factor: string; value: number | string; impact: number; note: string }>;
+  createdAt?: string;
+};
+
+type TwinResult = {
+  baselineRisk: number;
+  projectedRisk: number;
+  riskDelta: number;
+  baselineBand: string;
+  projectedBand: string;
+  recommendedAction: string;
+  narrative: string[];
+};
+
+export default function CommandCenterV3() {
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>("");
+  const [twin, setTwin] = useState<TwinResult | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/command-center-v3/icu/recent")
+      .then((r) => r.json())
+      .then((rows) => setPredictions(rows));
+
+    const ws = new WebSocket(`${window.location.origin.replace(/^http/, "ws")}/ws/command-center-v3`);
+    ws.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === "icu_prediction") {
+        setPredictions((prev) => [msg.payload, ...prev].slice(0, 100));
+      }
+      if (msg.type === "digital_twin") {
+        setTwin(msg.payload);
+      }
+    };
+    return () => ws.close();
+  }, []);
+
+  const selected = useMemo(
+    () => predictions.find((p) => p.patientId === selectedPatientId) ?? predictions[0] ?? null,
+    [predictions, selectedPatientId]
+  );
+
+  async function runTwin() {
+    if (!selected) return;
+
+    const res = await fetch("/api/command-center-v3/digital-twin/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientId: selected.patientId,
+        scenarioName: "oxygen-plus-fluids",
+        base: {
+          patientId: selected.patientId,
+          vitals: {
+            rr: Number(selected.explanation.find((x) => x.factor === "rr")?.value ?? 24),
+            spo2: Number(selected.explanation.find((x) => x.factor === "spo2")?.value ?? 91),
+            tempC: Number(selected.explanation.find((x) => x.factor === "tempC")?.value ?? 38.4),
+            systolicBP: Number(selected.explanation.find((x) => x.factor === "systolicBP")?.value ?? 92),
+            hr: Number(selected.explanation.find((x) => x.factor === "hr")?.value ?? 118),
+            mentalStatus: "alert",
+            supplementalO2: false,
+          },
+          labs: { lactate: 3.2 },
+        },
+        interventions: {
+          oxygenLiters: 4,
+          ivFluidsMl: 1000,
+          antibioticsGiven: true,
+        },
+      }),
+    });
+
+    const json = await res.json();
+    setTwin(json);
+  }
+
+  return (
+    <div className="p-6 grid grid-cols-12 gap-4">
+      <div className="col-span-7 rounded-2xl shadow-sm border p-4">
+        <div className="text-2xl font-semibold mb-3">Command Center v3</div>
+        <div className="text-sm text-slate-500 mb-4">Predictive ICU + Digital Twin</div>
+
+        <div className="grid grid-cols-1 gap-3">
+          {predictions.map((p) => (
+            <button
+              key={`${p.patientId}-${p.createdAt ?? Math.random()}`}
+              className={`text-left rounded-xl border p-4 ${selected?.patientId === p.patientId ? "border-black" : ""}`}
+              onClick={() => setSelectedPatientId(p.patientId)}
+            >
+              <div className="flex items-center justify-between">
+                <div className="font-medium">Patient {p.patientId}</div>
+                <div className="text-sm">{p.riskBand.toUpperCase()}</div>
+              </div>
+              <div className="text-sm mt-1">Score: {p.riskScore} • Level: {p.recommendedLevel}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="col-span-5 rounded-2xl shadow-sm border p-4">
+        {selected ? (
+          <>
+            <div className="text-xl font-semibold">Selected Patient</div>
+            <div className="mt-2 text-sm">Patient ID: {selected.patientId}</div>
+            <div className="mt-2 text-sm">Risk: {selected.riskScore} • {selected.riskBand}</div>
+            <div className="mt-2 text-sm">Recommended level: {selected.recommendedLevel}</div>
+
+            <div className="mt-4 font-medium">Key drivers</div>
+            <div className="mt-2 space-y-2">
+              {selected.explanation.slice(0, 6).map((e, i) => (
+                <div key={i} className="rounded-xl border p-3">
+                  <div className="font-medium">{e.factor}</div>
+                  <div className="text-sm">Value: {String(e.value)} • Impact: +{e.impact}</div>
+                  <div className="text-sm text-slate-500">{e.note}</div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              className="mt-4 rounded-xl border px-4 py-2"
+              onClick={() => void runTwin()}
+            >
+              Run Digital Twin Scenario
+            </button>
+
+            {twin && (
+              <div className="mt-4 rounded-2xl border p-4">
+                <div className="font-semibold">Digital Twin Result</div>
+                <div className="text-sm mt-2">Baseline risk: {twin.baselineRisk}</div>
+                <div className="text-sm">Projected risk: {twin.projectedRisk}</div>
+                <div className="text-sm">Delta: {twin.riskDelta}</div>
+                <div className="text-sm mt-2">Action: {twin.recommendedAction}</div>
+                <div className="mt-2 space-y-1">
+                  {twin.narrative.map((n, i) => (
+                    <div key={i} className="text-sm text-slate-600">{n}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-slate-500">No patient selected</div>
+        )}
+      </div>
+    </div>
+  );
+}
+7) server/monitoring/vitalsPlausibility.ts
+
+This plugs one of the review’s sharpest monitoring gaps: implausible vitals need to be flagged as data-quality issues before they are mistaken for clinical deterioration.
+
+export interface PlausibilityIssue {
+  field: string;
+  severity: "warn" | "critical";
+  message: string;
+}
+
+export function validateVitalsPlausibility(vitals: {
+  spo2?: number;
+  hr?: number;
+  rr?: number;
+  tempC?: number;
+  systolicBP?: number;
+}): PlausibilityIssue[] {
+  const issues: PlausibilityIssue[] = [];
+
+  if (vitals.spo2 != null && (vitals.spo2 <= 0 || vitals.spo2 > 100)) {
+    issues.push({ field: "spo2", severity: "critical", message: `Invalid SpO2: ${vitals.spo2}` });
+  }
+  if (vitals.hr != null && (vitals.hr <= 0 || vitals.hr > 260)) {
+    issues.push({ field: "hr", severity: "critical", message: `Invalid HR: ${vitals.hr}` });
+  }
+  if (vitals.rr != null && (vitals.rr <= 0 || vitals.rr > 80)) {
+    issues.push({ field: "rr", severity: "critical", message: `Invalid RR: ${vitals.rr}` });
+  }
+  if (vitals.tempC != null && (vitals.tempC < 30 || vitals.tempC > 43)) {
+    issues.push({ field: "tempC", severity: "warn", message: `Implausible tempC: ${vitals.tempC}` });
+  }
+  if (vitals.systolicBP != null && (vitals.systolicBP <= 20 || vitals.systolicBP > 300)) {
+    issues.push({ field: "systolicBP", severity: "critical", message: `Invalid systolicBP: ${vitals.systolicBP}` });
+  }
+
+  return issues;
+}
+
+Use it in the predictor before scoring:
+
+import { validateVitalsPlausibility } from "./vitalsPlausibility";
+
+const plausibilityIssues = validateVitalsPlausibility(input.vitals);
+if (plausibilityIssues.some((i) => i.severity === "critical")) {
+  throw new Error(`Vitals plausibility failed: ${plausibilityIssues.map((i) => i.message).join("; ")}`);
+}

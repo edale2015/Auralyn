@@ -57,7 +57,19 @@ export function evaluateVitals(vitals: VitalSigns): VitalsAlert[] {
   }
 
   if (vitals.spo2 !== undefined) {
-    if (vitals.spo2 < THRESHOLDS.spo2.critical) {
+    // FIX: SpO2 of 0 (sensor dropout / disconnection / artifact) was being evaluated
+    // as clinical hypoxia and returning a "critical" alert indistinguishable from real
+    // hypoxia. SpO2 > 100 is physiologically impossible and also indicates sensor failure.
+    // Sensor errors are now classified separately so responders understand the distinction.
+    if (vitals.spo2 <= 0 || vitals.spo2 > 100) {
+      alerts.push({
+        type:     "sensor_error",
+        severity: "high",
+        value:    vitals.spo2,
+        unit:     "%",
+        message:  `Invalid SpO2 reading: ${vitals.spo2}% — sensor dropout, disconnection, or artifact suspected`,
+      });
+    } else if (vitals.spo2 < THRESHOLDS.spo2.critical) {
       alerts.push({ type: "hypoxia", severity: "critical", value: vitals.spo2, unit: "%", message: `Critical hypoxia: SpO2 ${vitals.spo2}%` });
     } else if (vitals.spo2 < THRESHOLDS.spo2.low) {
       alerts.push({ type: "hypoxia", severity: "high", value: vitals.spo2, unit: "%", message: `Low oxygen: SpO2 ${vitals.spo2}%` });

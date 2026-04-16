@@ -1,0 +1,511 @@
+ADD THESE FILES
+server/
+  validation/
+    goldenCaseTypes.ts
+    goldenCaseHarness.ts
+    adversarialGenerator.ts
+    calibrationMonitor.ts
+  ai/
+    hallucinationExtensions.ts
+  services/
+    reviewQueueService.ts
+  routes/
+    validationRoutes.ts
+1) Golden case types
+// server/validation/goldenCaseTypes.ts
+
+
+export type GoldenCaseObservation = {
+  feature: string;
+  value: boolean | string | number;
+  weight?: number;
+};
+
+
+export type GoldenCase = {
+  id: string;
+  complaint: string;
+  title: string;
+  observations: GoldenCaseObservation[];
+  presentationProfile: {
+    complaint: string;
+    requiredFeaturesAnyOf: string[];
+    stronglyExpectedFeaturesAnyOf?: string[];
+  };
+  expectedTopDiagnosis?: string;
+  expectedDisposition: 'home' | 'urgent_care' | 'ed' | 'call_911' | 'physician_review_required';
+  minimumSafeDisposition?: 'home' | 'urgent_care' | 'ed' | 'call_911' | 'physician_review_required';
+  redFlagCount?: number;
+  notes?: string;
+};
+
+
+export type ValidationRunResult = {
+  caseId: string;
+  pass: boolean;
+  topDiagnosis?: string;
+  finalDisposition: string;
+  expectedDisposition: string;
+  expectedTopDiagnosis?: string;
+  diagnosisMatch: boolean;
+  dispositionMatch: boolean;
+  unsafeUndercall: boolean;
+  reasons: string[];
+};
+2) Golden case harness
+// server/validation/goldenCaseHarness.ts
+  physician_review_required: 2,
+  ed: 3,
+  call_911: 4,
+};
+
+
+export async function runGoldenCases(cases: GoldenCase[]): Promise<ValidationRunResult[]> {
+  const kb = await loadKB();
+  const results: ValidationRunResult[] = [];
+
+
+  for (const gc of cases) {
+    const dx = await runDiagnosis(
+      {
+        observations: gc.observations,
+        presentationProfile: gc.presentationProfile,
+      },
+      kb,
+    );
+
+
+    const final = runDispositionSafetyPipeline({
+      posterior: dx.posterior,
+      observations: gc.observations,
+      proposedRuleDisposition: gc.expectedDisposition,
+      proposedBayesianDisposition: gc.expectedDisposition,
+      redFlagCount: gc.redFlagCount ?? 0,
+      evidenceMap: Object.fromEntries((kb.evidence ?? []).map((e: any) => [e.diagnosisId, e.features])),
+      contradictionMap: Object.fromEntries((kb.contradictions ?? []).map((c: any) => [c.diagnosisId, c.features])),
+      presentationProfile: gc.presentationProfile,
+    });
+
+
+    const topDiagnosis = Object.entries(dx.posterior).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0];
+    const diagnosisMatch = gc.expectedTopDiagnosis ? topDiagnosis === gc.expectedTopDiagnosis : true;
+    const dispositionMatch = final.finalDisposition === gc.expectedDisposition;
+
+
+    const minSafe = gc.minimumSafeDisposition ?? gc.expectedDisposition;
+    const unsafeUndercall =
+      severityOrder[final.finalDisposition] < severityOrder[minSafe];
+
+
+    const reasons: string[] = [];
+    if (!diagnosisMatch) reasons.push(`Top diagnosis mismatch: got ${topDiagnosis}, expected ${gc.expectedTopDiagnosis}`);
+    if (!dispositionMatch) reasons.push(`Disposition mismatch: got ${final.finalDisposition}, expected ${gc.expectedDisposition}`);
+    if (unsafeUndercall) reasons.push(`Unsafe undercall: got ${final.finalDisposition}, minimum safe is ${minSafe}`);
+
+
+    results.push({
+      caseId: gc.id,
+      pass: !unsafeUndercall && dispositionMatch && diagnosisMatch,
+      topDiagnosis,
+      finalDisposition: final.finalDisposition,
+      expectedDisposition: gc.expectedDisposition,
+      expectedTopDiagnosis: gc.expectedTopDiagnosis,
+      diagnosisMatch,
+      dispositionMatch,
+      unsafeUndercall,
+      reasons,
+    });
+  }
+
+
+  return results;
+}
+
+
+export function summarizeValidation(results: ValidationRunResult[]) {
+  const total = results.length;
+  const passed = results.filter(r => r.pass).length;
+  const unsafeUndercalls = results.filter(r => r.unsafeUndercall).length;
+  const dxMisses = results.filter(r => !r.diagnosisMatch).length;
+  const dispMisses = results.filter(r => !r.dispositionMatch).length;
+
+
+  return {
+    total,
+    passed,
+    failed: total - passed,
+    passRate: total ? passed / total : 0,
+    unsafeUndercalls,
+    diagnosisMisses: dxMisses,
+    dispositionMisses: dispMisses,
+  };
+}
+3) Adversarial generator
+
+This creates brittle, sparse, contradictory, and omission-heavy cases so the engine gets stress-tested instead of pampered.
+
+// server/validation/adversarialGenerator.ts
+
+
+import { GoldenCase } from './goldenCaseTypes';
+
+
+export function generateSparseVariant(base: GoldenCase): GoldenCase {
+  return {
+    ...base,
+    id: `${base.id}__sparse`,
+    title: `${base.title} [Sparse]`,
+    observations: base.observations.slice(0, Math.max(1, Math.floor(base.observations.length / 2))),
+  };
+}
+
+
+export function generateContradictoryVariant(base: GoldenCase): GoldenCase {
+  const contradictory = [...base.observations];
+  contradictory.push({ feature: 'contradiction_marker', value: true });
+
+
+  return {
+    ...base,
+    id: `${base.id}__contradictory`,
+    title: `${base.title} [Contradictory]`,
+    observations: contradictory,
+  };
+}
+
+
+export function generateMissingCriticalVariant(base: GoldenCase, missingFeature: string): GoldenCase {
+  return {
+    ...base,
+    id: `${base.id}__missing_${missingFeature}`,
+    title: `${base.title} [Missing ${missingFeature}]`,
+    observations: base.observations.filter(o => o.feature !== missingFeature),
+  };
+}
+
+
+export function expandAdversarialSet(baseCases: GoldenCase[]): GoldenCase[] {
+  const out: GoldenCase[] = [];
+  for (const c of baseCases) {
+    out.push(c);
+    out.push(generateSparseVariant(c));
+    out.push(generateContradictoryVariant(c));
+    if (c.observations[0]?.feature) {
+      out.push(generateMissingCriticalVariant(c, c.observations[0].feature));
+    }
+  }
+  return out;
+}
+4) Calibration monitor
+
+This watches for a nasty pattern: high confidence with poor correctness.
+
+// server/validation/calibrationMonitor.ts
+
+
+export type CalibrationRow = {
+  predictedConfidence: number;
+  correct: boolean;
+};
+
+
+export function computeBrierScore(rows: CalibrationRow[]): number {
+  if (!rows.length) return 0;
+  return rows.reduce((sum, r) => {
+    const y = r.correct ? 1 : 0;
+    return sum + Math.pow(r.predictedConfidence - y, 2);
+  }, 0) / rows.length;
+}
+
+
+export function bucketCalibration(rows: CalibrationRow[], bucketSize = 0.1) {
+  const buckets: Array<{ bucket: string; avgConfidence: number; accuracy: number; count: number }> = [];
+
+
+  for (let start = 0; start < 1; start += bucketSize) {
+    const end = start + bucketSize;
+    const inBucket = rows.filter(r => r.predictedConfidence >= start && r.predictedConfidence < end);
+    if (!inBucket.length) continue;
+
+
+    const avgConfidence = inBucket.reduce((a, b) => a + b.predictedConfidence, 0) / inBucket.length;
+    const accuracy = inBucket.filter(r => r.correct).length / inBucket.length;
+    buckets.push({
+      bucket: `${start.toFixed(1)}-${end.toFixed(1)}`,
+      avgConfidence,
+      accuracy,
+      count: inBucket.length,
+    });
+  }
+
+
+  return buckets;
+}
+
+
+export function detectOverconfidence(rows: CalibrationRow[]) {
+  const buckets = bucketCalibration(rows);
+  return buckets
+    .filter(b => b.avgConfidence - b.accuracy >= 0.15 && b.count >= 10)
+    .map(b => ({
+      ...b,
+      flag: 'overconfident',
+    }));
+}
+5) Five more anti-hallucination guards
+// server/ai/hallucinationExtensions.ts
+}
+
+
+export function checkTemporalConsistency(observations: Observation[]): ExtraGuardResult {
+  const reasons: string[] = [];
+  const featureMap = new Map(observations.map(o => [o.feature, o.value]));
+
+
+  const onset = featureMap.get('onset_hours');
+  const duration = featureMap.get('duration_days');
+  if (typeof onset === 'number' && typeof duration === 'number' && onset > 24 && duration < 1) {
+    reasons.push('Temporal inconsistency between onset_hours and duration_days.');
+  }
+
+
+  return {
+    blocked: reasons.length > 0,
+    abstain: false,
+    reasons,
+  };
+}
+
+
+export function applyRiskFloor(
+  topDiagnosis: string,
+  proposedDisposition: string,
+  riskFloors: Record<string, string>,
+): ExtraGuardResult {
+  const minimum = riskFloors[topDiagnosis];
+  if (!minimum) return { blocked: false, abstain: false, reasons: [] };
+
+
+  const severityOrder: Record<string, number> = {
+    home: 0,
+    urgent_care: 1,
+    physician_review_required: 2,
+    ed: 3,
+    call_911: 4,
+  };
+
+
+  if (severityOrder[proposedDisposition] < severityOrder[minimum]) {
+    return {
+      blocked: true,
+      abstain: false,
+      reasons: [`Disposition ${proposedDisposition} below risk floor ${minimum} for ${topDiagnosis}.`],
+    };
+  }
+
+
+  return { blocked: false, abstain: false, reasons: [] };
+}
+
+
+export function lowSupportAbstention(
+  evidenceCoverageScore: number,
+  contradictionScore: number,
+  posteriorTopProb: number,
+): ExtraGuardResult {
+  const reasons: string[] = [];
+  const abstain =
+    evidenceCoverageScore < 0.2 ||
+    contradictionScore > 0.5 ||
+    posteriorTopProb < 0.35;
+
+
+  if (evidenceCoverageScore < 0.2) reasons.push('Evidence coverage too low.');
+  if (contradictionScore > 0.5) reasons.push('Contradiction burden too high.');
+  if (posteriorTopProb < 0.35) reasons.push('Posterior confidence too low.');
+
+
+  return {
+    blocked: false,
+    abstain,
+    reasons,
+  };
+}
+6) Human review queue writer
+// server/services/reviewQueueService.ts
+
+
+import { db } from '../db/client';
+import { pgTable, text, jsonb, timestamp } from 'drizzle-orm/pg-core';
+
+
+export const reviewQueue = pgTable('review_queue', {
+  id: text('id').primaryKey(),
+  caseId: text('case_id'),
+  reason: text('reason'),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+
+export async function enqueueReview(caseId: string, reason: string, payload: any) {
+  const id = `${caseId}__${Date.now()}`;
+  await db.insert(reviewQueue).values({
+    id,
+    caseId,
+    reason,
+    payload,
+  });
+  return id;
+}
+7) Wire the new guards into disposition pipeline
+
+Replace your disposition engine with this upgraded version.
+
+// server/clinical/dispositionEngine.ts
+  });
+
+
+  const consensus = resolveConsensus([
+    {
+      engine: 'rules',
+      disposition: input.proposedRuleDisposition,
+      confidence: 0.8,
+      topDiagnosis: topDxName,
+    },
+    {
+      engine: 'bayesian_fisher',
+      disposition: input.proposedBayesianDisposition,
+      confidence: topDxProb,
+      topDiagnosis: topDxName,
+    },
+  ] as EngineOpinion[]);
+
+
+  const governed = governDisposition(
+    input.posterior,
+    consensus.finalDisposition,
+    guard,
+    input.redFlagCount,
+  );
+
+
+  const extraChecks = [
+    checkMissingCriticalData(input.observations, input.requiredCriticalFeatures ?? []),
+    checkTemporalConsistency(input.observations),
+    applyRiskFloor(topDxName, governed.allowedDisposition, input.riskFloors ?? {}),
+    lowSupportAbstention(guard.evidenceCoverageScore, guard.contradictionScore, topDxProb),
+    checkComplaintWhitelist(input.complaint, topDxName, governed.allowedDisposition, input.complaintWhitelist ?? {}),
+    ...(input.reasonTrace ? [checkReasonTraceSupport(input.reasonTrace)] : []),
+  ];
+
+
+  const blockedReasons = extraChecks.flatMap(c => c.reasons);
+  const blocked = extraChecks.some(c => c.blocked);
+  const abstain = extraChecks.some(c => c.abstain);
+
+
+  let finalDisposition: Disposition = governed.allowedDisposition;
+  if (blocked || abstain) {
+    finalDisposition = 'physician_review_required';
+  }
+
+
+  if ((blocked || abstain) && input.caseId) {
+    await enqueueReview(input.caseId, 'Hallucination safety escalation', {
+      complaint: input.complaint,
+      topDxName,
+      topDxProb,
+      guard,
+      consensus,
+      governed,
+      blockedReasons,
+      observations: input.observations,
+    });
+  }
+
+
+  return {
+    topDiagnosis: topDxName,
+    topDiagnosisProbability: topDxProb,
+    guard,
+    consensus,
+    governed,
+    extraChecks,
+    finalDisposition,
+    requiresReview: blocked || abstain,
+    reasons: blockedReasons,
+  };
+}
+8) Validation routes
+// server/routes/validationRoutes.ts
+
+
+import express from 'express';
+import { runGoldenCases, summarizeValidation } from '../validation/goldenCaseHarness';
+import { expandAdversarialSet } from '../validation/adversarialGenerator';
+import { computeBrierScore, detectOverconfidence } from '../validation/calibrationMonitor';
+
+
+const router = express.Router();
+
+
+router.post('/golden/run', async (req, res) => {
+  try {
+    const cases = req.body.cases ?? [];
+    const results = await runGoldenCases(cases);
+    const summary = summarizeValidation(results);
+    res.json({ ok: true, summary, results });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+
+router.post('/golden/adversarial-expand', (req, res) => {
+  try {
+    const cases = req.body.cases ?? [];
+    const expanded = expandAdversarialSet(cases);
+    res.json({ ok: true, count: expanded.length, cases: expanded });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+
+router.post('/calibration/analyze', (req, res) => {
+  try {
+    const rows = req.body.rows ?? [];
+    const brier = computeBrierScore(rows);
+    const overconfidence = detectOverconfidence(rows);
+    res.json({ ok: true, brier, overconfidence });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+
+export default router;
+9) Update app.ts
+// server/app.ts
+
+
+import express from 'express';
+import diagnosisRoutes from './routes/diagnosisRoutes';
+import controlTowerRoutes from './routes/controlTowerRoutes';
+import validationRoutes from './routes/validationRoutes';
+
+
+const app = express();
+app.use(express.json({ limit: '2mb' }));
+
+
+app.use('/api/diagnosis', diagnosisRoutes);
+app.use('/api/control-tower', controlTowerRoutes);
+app.use('/api/validation', validationRoutes);
+
+
+app.listen(3000, () => {
+  console.log('Auralyn system running on port 3000');
+});
+10) Recomm
