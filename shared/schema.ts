@@ -1559,3 +1559,46 @@ export const digitalTwinRuns = pgTable(
 export const insertDigitalTwinRunSchema = createInsertSchema(digitalTwinRuns).omit({ id: true, createdAt: true });
 export type InsertDigitalTwinRun = z.infer<typeof insertDigitalTwinRunSchema>;
 export type DigitalTwinRun = typeof digitalTwinRuns.$inferSelect;
+
+// ─── Clinical Knowledge Base ───────────────────────────────────────────────
+export const clinicalKnowledge = pgTable("clinical_knowledge", {
+  id:        serial("id").primaryKey(),
+  title:     text("title").notNull(),
+  content:   text("content").notNull(),
+  category:  text("category").notNull().default("general"),
+  source:    text("source").notNull().default("internal"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+export const insertClinicalKnowledgeSchema = createInsertSchema(clinicalKnowledge).omit({ id: true, updatedAt: true });
+export type InsertClinicalKnowledge = z.infer<typeof insertClinicalKnowledgeSchema>;
+export type ClinicalKnowledge = typeof clinicalKnowledge.$inferSelect;
+
+// ─── Physician Review Queue ────────────────────────────────────────────────
+export const physicianReviewQueue = pgTable("physician_review_queue", {
+  id:               serial("id").primaryKey(),
+  query:            text("query").notNull(),
+  proposedAnswer:   text("proposed_answer").notNull(),
+  finalAnswer:      text("final_answer"),
+  confidenceScore:  integer("confidence_score").notNull(),
+  confidenceLevel:  text("confidence_level").notNull(),
+  sourceCount:      integer("source_count").notNull(),
+  hedgeWordCount:   integer("hedge_word_count").notNull().default(0),
+  patientContextId: text("patient_context_id"),
+  requestedBy:      text("requested_by"),
+  status:           text("status").notNull().default("pending"),
+  reviewedBy:       text("reviewed_by"),
+  reviewNote:       text("review_note"),
+  createdAt:        timestamp("created_at", { withTimezone: true }).defaultNow(),
+  reviewedAt:       timestamp("reviewed_at", { withTimezone: true }),
+});
+export const insertPhysicianReviewQueueSchema = createInsertSchema(physicianReviewQueue).omit({ id: true, createdAt: true });
+export type InsertPhysicianReviewQueue = z.infer<typeof insertPhysicianReviewQueueSchema>;
+export type PhysicianReviewQueue = typeof physicianReviewQueue.$inferSelect;
+
+// ─── Clinical Answer Audit ─────────────────────────────────────────────────
+export const clinicalAnswerAudit = pgTable("clinical_answer_audit", {
+  id:        text("id").primaryKey(),
+  payload:   jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ClinicalAnswerAudit = typeof clinicalAnswerAudit.$inferSelect;

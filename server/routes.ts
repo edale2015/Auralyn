@@ -2658,6 +2658,11 @@ export async function registerRoutes(
   app.use("/api/agent-fleet", agentFleetRoutes);
   console.log("[AgentFleet] /api/agent-fleet/* active (run, best-of-n, artifacts, memory, health)");
 
+  // ── Clinical Answer (RAG-grounded, KB-only, physician-review-gated) ───────
+  const { default: clinicalAnswerRoute } = await import("./routes/clinicalAnswerRoute");
+  app.use(clinicalAnswerRoute);
+  console.log("[ClinicalAnswer] /api/clinical-answer/* active (POST answer, GET review-queue, POST review-decision)");
+
   return httpServer;
 }
 

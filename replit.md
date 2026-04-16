@@ -34,6 +34,58 @@
 
 - **NYC Pilot + FDA** (`/nyc-pilot`): Operational metrics (3 sites, 12,847+ patients), 24h throughput chart, FDNY EMS activity feed, FDA 510(k) readiness checklist (12 items), deployment environment promoter (dev→staging→prod→nyc-pilot), HIPAA/FDA/security compliance scoreboard. Backend: `server/routes/nycPilotRoutes.ts` → `/api/nyc-pilot/*`
 
+## Diagnostic Engine Wave — Fisher / Bayesian / RAG / Validation (April 2026)
+
+### 22 New Files
+
+**Fisher Information Matrix + Natural Gradient (`server/ai/`)**
+- `fisher.ts` — `computeDiagonalFisher(probs, gradients)` + `rankFeaturesByFisher()`. Used by the adaptive question engine to pick the next most-informative symptom question.
+- `naturalGradient.ts` — `naturalGradientStep()` preconditions gradient updates by the Fisher matrix, projects onto the probability simplex (all values ≥ 0, sum = 1).
+- `bayesianUpdater.ts` — `updateBeliefsWithFisher(prior, likelihoods, observations)`. Combines log-likelihood gradient with natural gradient step for geometry-aware Bayesian belief updates.
+- `hallucinationExtensions.ts` — Seven additional hallucination guards: impossible physiologic combo detector, confidence compression [0.2, 0.8], differential spread enforcer, dangerous-condition rule-out check (PE/ACS/stroke/sepsis/meningitis/dissection), temporal consistency, risk floor enforcement, low-support abstention.
+- `clinicalRagGrounding.ts` — KB-only retrieval-augmented answer generation. Full-text search → confidence scoring → grounded answer builder. `kbOnly: true` is a TypeScript-enforced constant — this module never sets disposition.
+- `uncertaintySignaling.ts` — Traffic-light confidence annotator (HIGH/MEDIUM/LOW → green/yellow/red). Detects hedge phrases, adjusts for source count, emits structured `UncertaintySignal` for dashboard rendering.
+
+**Validation System (`server/validation/`)**
+- `goldenCaseTypes.ts` — Rich `GoldenCase` type with `minimumSafeDisposition`, `presentationProfile`, `redFlagCount`, plus `ValidationRunResult` and `ValidationSummary`.
+- `adversarialGenerator.ts` — `expandAdversarialSet()` generates 4× variants: original + sparse (⌊n/2⌋ obs) + contradictory (impossible marker) + missing-first-critical-feature.
+- `calibrationMonitor.ts` — `computeBrierScore()`, `bucketCalibration()`, `detectOverconfidence()` (flags buckets where confidence exceeds accuracy by ≥ 0.15).
+- `validationGate.ts` — `enforceValidationGate()` blocks deployment when passRate < 85%, unsafeUndercalls > 0, or calibrationError > 0.15. `runtimeSafetyCheck()` disables AI autonomy instantly. `detectValidationDrift()` alerts on > 10% run-to-run shift.
+- `fullCaseGenerator.ts` — `generateFullCaseSet()` produces 1000 synthetic cases (200×PE, ACS, sepsis, stroke, pediatric fever) with probabilistic adversarial features. Plus `seedGoldenCases` (6 canonical hand-crafted cases for CI).
+- `goldenCaseHarness.ts` — `runGoldenCases(cases, runFn)` — engine-agnostic harness using a caller-supplied async function so tests run against the live production pipeline. `summarizeValidation()` returns full summary.
+- `validationRunner.ts` — `runFullValidation()` — expands adversarial set + runs harness + computes Brier-score calibration in one call. Returns `FullValidationResult`.
+
+**RLHF Bounded Update Engine (`server/rlhf/`)**
+- `rlhfEngine.ts` — `boundedUpdate()` clips all weight deltas to ±2%. `computeDeltas()`, `applyBoundedUpdates()`, `pendingApprovalItems()` (changes >1% require physician sign-off).
+- `trainer.ts` — `trainFromOutcomes(model, outcomes)` — batch feedback → bounded deltas → updated model.
+- `approval.ts` — `requireApproval()` formats change summary for physician review queue. `applyIfAutomatic()` returns null if approval is needed.
+
+**FDA Audit Chain (`server/fda/`)**
+- `auditChain.ts` — `buildAuditChain(entries)` — SHA-256 forward-linked chain (GENESIS anchor). `verifyAuditChain(chain)` validates integrity of any stored chain per 21 CFR Part 11.
+- `justification.ts` — `generateJustification(data)` — human-readable FDA justification statements from validation summary: pass rate, undercalls, calibration, hallucination blocks, escalation rate.
+
+**Control Tower Additions (`server/controlTower/`)**
+- `validationDashboard.ts` — `getValidationDashboard()` reads last 50 `validation_runs` rows and returns passRate trend, unsafeUndercall trend, timestamps for chart rendering. `logValidationRun()` persists summaries.
+- `calibrationService.ts` — `calibrationByComplaint(results)` groups calibration rows by complaint and computes per-complaint avgConfidence, accuracy, gap. `flagOverconfidentComplaints()` returns complaint names exceeding the gap threshold.
+
+**Services (`server/services/`)**
+- `clinicalKnowledgeService.ts` — `searchClinicalKnowledge(query)` — PostgreSQL FTS via `tsvector/tsquery`, top-5 results by recency. `insertKnowledgeEntry()` for KB management.
+- `clinicalAnswerAuditService.ts` — `logClinicalAnswerAudit(payload)` — SHA-256 content-addressed tamper-evident log to `clinical_answer_audit`.
+- `physicianReviewGate.ts` — `queueForReview()`, `getPendingReviews()` (sorted LOW→MEDIUM→HIGH), `submitReviewDecision()` with approved/overridden/rejected states.
+
+**Route (`server/routes/clinicalAnswerRoute.ts`)**
+- `POST /api/clinical-answer` — KB-grounded query, auto-queues LOW/MEDIUM confidence for physician review, audits every call. Safety boundary enforced: `kbOnly: true, canSetDisposition: false`.
+- `GET /api/clinical-answer/review-queue` — pending physician review items.
+- `POST /api/clinical-answer/review-decision` — physician submits approved/overridden/rejected decision.
+
+**Schema additions (`shared/schema.ts`)**
+- `clinicalKnowledge`, `physicianReviewQueue`, `clinicalAnswerAudit` — Drizzle table definitions with insert schemas and TypeScript types.
+
+**DB tables created via psql (NOT db:push — drizzle proposes catastrophic renames on this schema)**
+- `clinical_knowledge` — with GIN full-text search index
+- `physician_review_queue` — with status+created_at composite index
+- `clinical_answer_audit` — SHA-256 primary key, conflict-safe INSERT
+
 ## Batch 6 — Monitoring, RLHF, and Safety Fixes (April 2026)
 
 ### 10 Fixes Applied

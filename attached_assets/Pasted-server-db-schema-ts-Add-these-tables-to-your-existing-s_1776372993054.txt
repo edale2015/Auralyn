@@ -1,0 +1,585 @@
+server/db/schema.ts
+
+Add these tables to your existing schema.
+
+import {
+  pgTable,
+  text,
+  jsonb,
+  numeric,
+  timestamp,
+  serial,
+  integer,
+} from 'drizzle-orm/pg-core';
+
+export const clinicalKnowledge = pgTable('clinical_knowledge', {
+  id: serial('id').primaryKey(),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  category: text('category').notNull().default('general'),
+  source: text('source').notNull().default('internal'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
+
+export const physicianReviewQueue = pgTable('physician_review_queue', {
+  id: serial('id').primaryKey(),
+  query: text('query').notNull(),
+  proposedAnswer: text('proposed_answer').notNull(),
+  finalAnswer: text('final_answer'),
+  confidenceScore: integer('confidence_score').notNull(),
+  confidenceLevel: text('confidence_level').notNull(),
+  sourceCount: integer('source_count').notNull(),
+  hedgeWordCount: integer('hedge_word_count').notNull(),
+  patientContextId: text('patient_context_id'),
+  requestedBy: text('requested_by'),
+  status: text('status').notNull().default('pending'),
+  reviewedBy: text('reviewed_by'),
+  reviewNote: text('review_note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+});
+
+export const clinicalAnswerAudit = pgTable('clinical_answer_audit', {
+  id: text('id').primaryKey(),
+  payload: jsonb('payload').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+server/services/clinicalAnswerAuditService.ts
+import crypto from 'crypto';
+import { db } from '../db/client';
+import { clinicalAnswerAudit } from '../db/schema';
+
+export async function logClinicalAnswerAudit(payload: unknown) {
+  const id = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(payload))
+    .digest('hex');
+
+  await db.insert(clinicalAnswerAudit).values({
+    id,
+    payload,
+  });
+
+  return id;
+}
+server/services/clinicalKnowledgeService.ts
+
+This replaces direct raw pg usage with your existing Drizzle client.
+
+import { db } from '../db/client';
+import { clinicalKnowledge } from '../db/schema';
+import { sql } from 'drizzle-orm';
+
+export type ClinicalKnowledgeRow = {
+  id: number;
+  title: string;
+  content: string;
+  category: string;
+  source: string;
+  updatedAt: Date | null;
+};
+
+export async function searchClinicalKnowledge(query: string): Promise<ClinicalKnowledgeRow[]> {
+  const tsQuery = query
+    .trim()
+    .split(/\s+/)
+    .map((t) => `${t}:*`)
+    .join(' & ');
+
+  const rows = await db.execute(sql`
+    SELECT
+      id,
+      title,
+      content,
+      category,
+      source,
+      updated_at as "updatedAt"
+    FROM clinical_knowledge
+    WHERE to_tsvector('english', title || ' ' || content)
+      @@ to_tsquery('english', ${tsQuery})
+    ORDER BY updated_at DESC
+    LIMIT 5
+  `);
+
+  return rows.rows as ClinicalKnowledgeRow[];
+}
+server/ai/clinicalRagGrounding.ts
+
+This is a safer Auralyn-adapted version of ragGrounding.ts.
+
+import { searchClinicalKnowledge } from '../services/clinicalKnowledgeService';
+
+export interface GroundedAnswerSource {
+  id: number;
+  title: string;
+  content: string;
+  category: string;
+  source: string;
+  updatedAt: Date | null;
+}
+
+export interface GroundedAnswer {
+  answer: string;
+  sources: GroundedAnswerSource[];
+  confidenceScore: number;
+  needsPhysicianReview: boolean;
+  rawQuery: string;
+  kbOnly: boolean;
+}
+
+const LOW_CONFIDENCE_THRESHOLD = 60;
+
+function scoreConfidence(query: string, sources: GroundedAnswerSource[]): number {
+  if (!sources.length) return 10;
+
+  let score = 40;
+
+  score += Math.min(25, sources.length * 8);
+
+  const qTokens = new Set(query.toLowerCase().split(/\W+/).filter(Boolean));
+  const topText = `${sources[0].title} ${sources[0].content}`.toLowerCase();
+  const overlap = [...qTokens].filter((t) => topText.includes(t)).length;
+
+  score += Math.min(20, overlap * 4);
+
+  const newest = sources[0]?.updatedAt ? new Date(sources[0].updatedAt).getTime() : 0;
+  const ageDays = newest ? (Date.now() - newest) / (1000 * 60 * 60 * 24) : 9999;
+
+  if (ageDays <= 180) score += 10;
+  else if (ageDays <= 365) score += 5;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+function buildStrictGroundedAnswer(
+  query: string,
+  sources: GroundedAnswerSource[],
+  confidenceScore: number,
+): string {
+  if (!sources.length) {
+    return [
+      'No sufficiently relevant clinical knowledge base entries were found for this query.',
+      'This system should not answer from general model memory here.',
+      'Please verify using a primary source or physician review.',
+    ].join(' ');
+  }
+
+  const cited = sources.map((s, i) =>
+    `Source ${i + 1}: ${s.title} (${s.source}${s.updatedAt ? `, updated ${new Date(s.updatedAt).toISOString().slice(0, 10)}` : ''})`
+  );
+
+  const excerpts = sources.map((s, i) =>
+    `Source ${i + 1} says: ${s.content.slice(0, 500)}`
+  );
+
+  const lowConfNote =
+    confidenceScore < LOW_CONFIDENCE_THRESHOLD
+      ? 'Confidence is limited. Review the cited sources carefully and require physician verification.'
+      : 'This answer is grounded in the cited knowledge base sources.';
+
+  return [
+    `Query: ${query}`,
+    lowConfNote,
+    ...cited,
+    '',
+    'Grounded summary:',
+    ...excerpts,
+  ].join('\n');
+}
+
+export async function getGroundedAnswer(query: string): Promise<GroundedAnswer> {
+  const sources = await searchClinicalKnowledge(query);
+  const confidenceScore = scoreConfidence(query, sources);
+  const answer = buildStrictGroundedAnswer(query, sources, confidenceScore);
+
+  return {
+    answer,
+    sources,
+    confidenceScore,
+    needsPhysicianReview: confidenceScore < LOW_CONFIDENCE_THRESHOLD,
+    rawQuery: query,
+    kbOnly: true,
+  };
+}
+server/ai/uncertaintySignaling.ts
+
+This keeps the useful idea, but I’d tighten the semantics a bit.
+
+import { GroundedAnswer } from './clinicalRagGrounding';
+
+export type UncertaintyLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+export type TrafficLightColor = 'green' | 'yellow' | 'red';
+
+export interface UncertaintySignal {
+  level: UncertaintyLevel;
+  color: TrafficLightColor;
+  label: string;
+  warningText: string | null;
+  annotatedAnswer: string;
+  confidenceScore: number;
+  hedgeWordsFound: string[];
+  needsPhysicianReview: boolean;
+  sourceCount: number;
+}
+
+const HEDGE_PHRASES = [
+  'may be',
+  'might be',
+  'possibly',
+  'unclear',
+  'could be',
+  'typically',
+  'usually',
+  'not explicitly stated',
+  'cannot confirm',
+  'unable to confirm',
+  'no sufficiently relevant',
+];
+
+function detectHedgeWords(answerText: string): string[] {
+  const lower = answerText.toLowerCase();
+  return HEDGE_PHRASES.filter((phrase) => lower.includes(phrase));
+}
+
+function computeLevel(
+  confidenceScore: number,
+  hedgeWordsFound: string[],
+  sourceCount: number,
+): UncertaintyLevel {
+  const adjusted = confidenceScore - hedgeWordsFound.length * 6 - (sourceCount === 0 ? 35 : 0);
+
+  if (adjusted >= 70) return 'HIGH';
+  if (adjusted >= 45) return 'MEDIUM';
+  return 'LOW';
+}
+
+export function annotateWithUncertainty(groundedAnswer: GroundedAnswer): UncertaintySignal {
+  const hedgeWordsFound = detectHedgeWords(groundedAnswer.answer);
+  const sourceCount = groundedAnswer.sources.length;
+  const level = computeLevel(
+    groundedAnswer.confidenceScore,
+    hedgeWordsFound,
+    sourceCount,
+  );
+
+  const config = {
+    HIGH: {
+      color: 'green' as const,
+      label: 'Grounded in knowledge base',
+      warningText: null,
+      prefix: null,
+    },
+    MEDIUM: {
+      color: 'yellow' as const,
+      label: 'Partially supported, review sources',
+      warningText: 'Moderate confidence. Review sources before clinical use.',
+      prefix:
+        '⚠️ MODERATE CONFIDENCE: This answer is only partially supported by the knowledge base.',
+    },
+    LOW: {
+      color: 'red' as const,
+      label: 'Low confidence, physician verification required',
+      warningText:
+        'Low confidence. This answer should not be used clinically without physician verification.',
+      prefix:
+        '🚨 LOW CONFIDENCE: This answer is not adequately supported for clinical use without physician review.',
+    },
+  }[level];
+
+  const annotatedAnswer = config.prefix
+    ? `${config.prefix}\n\n---\n\n${groundedAnswer.answer}`
+    : groundedAnswer.answer;
+
+  return {
+    level,
+    color: config.color,
+    label: config.label,
+    warningText: config.warningText,
+    annotatedAnswer,
+    confidenceScore: groundedAnswer.confidenceScore,
+    hedgeWordsFound,
+    needsPhysicianReview: groundedAnswer.needsPhysicianReview || level !== 'HIGH',
+    sourceCount,
+  };
+}
+
+export function formatForDashboard(signal: UncertaintySignal, rawQuery: string) {
+  return {
+    query: rawQuery,
+    answer: signal.annotatedAnswer,
+    confidence: {
+      score: signal.confidenceScore,
+      level: signal.level,
+      color: signal.color,
+      label: signal.label,
+    },
+    warning: signal.warningText,
+    needsPhysicianReview: signal.needsPhysicianReview,
+    sources: {
+      count: signal.sourceCount,
+    },
+    metadata: {
+      hedgeWordsDetected: signal.hedgeWordsFound.length,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+}
+server/services/physicianReviewGate.ts
+
+Safer Auralyn version using Drizzle.
+
+import { db } from '../db/client';
+import { physicianReviewQueue } from '../db/schema';
+import { eq, asc, sql } from 'drizzle-orm';
+import { UncertaintyLevel } from '../ai/uncertaintySignaling';
+
+export interface ReviewQueueItem {
+  query: string;
+  proposedAnswer: string;
+  confidenceScore: number;
+  confidenceLevel: UncertaintyLevel;
+  sourceCount: number;
+  hedgeCount: number;
+  patientContextId?: string;
+  requestedBy?: string;
+}
+
+export type ReviewDecision = 'approved' | 'overridden' | 'rejected';
+
+export async function queueForReview(item: ReviewQueueItem): Promise<number> {
+  const inserted = await db
+    .insert(physicianReviewQueue)
+    .values({
+      query: item.query,
+      proposedAnswer: item.proposedAnswer,
+      confidenceScore: item.confidenceScore,
+      confidenceLevel: item.confidenceLevel,
+      sourceCount: item.sourceCount,
+      hedgeWordCount: item.hedgeCount,
+      patientContextId: item.patientContextId ?? null,
+      requestedBy: item.requestedBy ?? null,
+      status: 'pending',
+    })
+    .returning({ id: physicianReviewQueue.id });
+
+  return inserted[0].id;
+}
+
+export async function getPendingReviews() {
+  return db
+    .select()
+    .from(physicianReviewQueue)
+    .where(eq(physicianReviewQueue.status, 'pending'))
+    .orderBy(
+      sql`CASE ${physicianReviewQueue.confidenceLevel}
+        WHEN 'LOW' THEN 1
+        WHEN 'MEDIUM' THEN 2
+        WHEN 'HIGH' THEN 3
+      END`,
+      asc(physicianReviewQueue.createdAt),
+    );
+}
+
+export async function submitReviewDecision(args: {
+  reviewId: number;
+  decision: ReviewDecision;
+  physicianId: string;
+  note?: string | null;
+  finalAnswer?: string | null;
+}) {
+  await db
+    .update(physicianReviewQueue)
+    .set({
+      status: args.decision,
+      reviewedBy: args.physicianId,
+      reviewNote: args.note ?? null,
+      finalAnswer: args.finalAnswer ?? null,
+      reviewedAt: new Date(),
+    })
+    .where(eq(physicianReviewQueue.id, args.reviewId));
+}
+server/routes/clinicalAnswerRoute.ts
+
+This is the main safe integration point.
+
+import express from 'express';
+import { getGroundedAnswer } from '../ai/clinicalRagGrounding';
+import {
+  annotateWithUncertainty,
+  formatForDashboard,
+} from '../ai/uncertaintySignaling';
+import {
+  queueForReview,
+  getPendingReviews,
+  submitReviewDecision,
+} from '../services/physicianReviewGate';
+import { logClinicalAnswerAudit } from '../services/clinicalAnswerAuditService';
+
+const router = express.Router();
+
+/**
+ * IMPORTANT:
+ * This route is for clinician-facing, source-backed answer assistance.
+ * It is NOT the final disposition engine.
+ */
+router.post('/api/clinical-answer', async (req, res) => {
+  const { query, requestedBy, patientContextId, complaint } = req.body ?? {};
+
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+
+  try {
+    const groundedAnswer = await getGroundedAnswer(query.trim());
+    const signal = annotateWithUncertainty(groundedAnswer);
+
+    let reviewQueueId: number | null = null;
+
+    // Queue all non-HIGH confidence answers
+    if (signal.needsPhysicianReview) {
+      reviewQueueId = await queueForReview({
+        query: query.trim(),
+        proposedAnswer: signal.annotatedAnswer,
+        confidenceScore: signal.confidenceScore,
+        confidenceLevel: signal.level,
+        sourceCount: signal.sourceCount,
+        hedgeCount: signal.hedgeWordsFound.length,
+        patientContextId: patientContextId ?? undefined,
+        requestedBy: requestedBy ?? undefined,
+      });
+    }
+
+    const dashboardPayload = formatForDashboard(signal, query.trim());
+
+    const auditId = await logClinicalAnswerAudit({
+      type: 'clinical_answer',
+      complaint: complaint ?? null,
+      query: query.trim(),
+      patientContextId: patientContextId ?? null,
+      requestedBy: requestedBy ?? null,
+      groundedAnswer,
+      signal,
+      reviewQueueId,
+      generatedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      ...dashboardPayload,
+      reviewQueueId,
+      auditId,
+      boundary: {
+        kbOnly: true,
+        canSetDisposition: false,
+        message:
+          'This route is for source-backed clinical answer assistance only and does not set final disposition.',
+      },
+      sources: groundedAnswer.sources.map((s) => ({
+        id: s.id,
+        title: s.title,
+        category: s.category,
+        source: s.source,
+        updatedAt: s.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error('[clinical-answer] error:', error);
+    return res.status(500).json({
+      error: 'Failed to process clinical answer request',
+    });
+  }
+});
+
+router.get('/api/physician-review/pending', async (_req, res) => {
+  try {
+    const rows = await getPendingReviews();
+    res.json({ items: rows });
+  } catch (error) {
+    console.error('[physician-review/pending] error:', error);
+    res.status(500).json({ error: 'Failed to load pending reviews' });
+  }
+});
+
+router.post('/api/physician-review/decision', async (req, res) => {
+  const { reviewId, decision, physicianId, note, finalAnswer } = req.body ?? {};
+
+  if (!reviewId || !decision || !physicianId) {
+    return res.status(400).json({
+      error: 'reviewId, decision, and physicianId are required',
+    });
+  }
+
+  try {
+    await submitReviewDecision({
+      reviewId: Number(reviewId),
+      decision,
+      physicianId,
+      note: note ?? null,
+      finalAnswer: finalAnswer ?? null,
+    });
+
+    await logClinicalAnswerAudit({
+      type: 'physician_review_decision',
+      reviewId: Number(reviewId),
+      decision,
+      physicianId,
+      note: note ?? null,
+      finalAnswer: finalAnswer ?? null,
+      decidedAt: new Date().toISOString(),
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[physician-review/decision] error:', error);
+    res.status(500).json({ error: 'Failed to save review decision' });
+  }
+});
+
+export default router;
+server/app.ts
+
+Add the route.
+
+import express from 'express';
+import clinicalAnswerRouter from './routes/clinicalAnswerRoute';
+
+const app = express();
+app.use(express.json({ limit: '2mb' }));
+
+app.use(clinicalAnswerRouter);
+SQL indexes I recommend
+CREATE TABLE IF NOT EXISTS clinical_knowledge (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  source TEXT NOT NULL DEFAULT 'internal',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_clinical_knowledge_fts
+ON clinical_knowledge
+USING GIN (to_tsvector('english', title || ' ' || content));
+
+CREATE TABLE IF NOT EXISTS physician_review_queue (
+  id SERIAL PRIMARY KEY,
+  query TEXT NOT NULL,
+  proposed_answer TEXT NOT NULL,
+  final_answer TEXT,
+  confidence_score INTEGER NOT NULL,
+  confidence_level TEXT NOT NULL,
+  source_count INTEGER NOT NULL,
+  hedge_word_count INTEGER NOT NULL,
+  patient_context_id TEXT,
+  requested_by TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reviewed_by TEXT,
+  review_note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS clinical_answer_audit (
+  id TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
