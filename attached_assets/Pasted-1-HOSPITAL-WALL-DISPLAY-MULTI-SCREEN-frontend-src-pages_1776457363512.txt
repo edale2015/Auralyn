@@ -1,0 +1,162 @@
+1) HOSPITAL WALL DISPLAY (MULTI-SCREEN)
+📁 frontend/src/pages/HospitalWall.tsx
+import { useEffect, useState } from "react";
+import { io } from "socket.io-client";
+
+export default function HospitalWall() {
+  const [patients, setPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    const socket = io("http://localhost:3000");
+
+    socket.on("patient_update", (p) => {
+      setPatients(prev => {
+        const rest = prev.filter(x => x.patientId !== p.patientId);
+        return [p, ...rest].slice(0, 100);
+      });
+    });
+
+    return () => socket.disconnect();
+  }, []);
+
+  return (
+    <div className="grid grid-cols-4 gap-2 p-4 bg-black text-white h-screen">
+      {patients.map((p, i) => (
+        <div key={i} className={`p-3 rounded 
+          ${p.alert ? "bg-red-700" : "bg-gray-800"}`}>
+          <div className="font-bold">{p.patientId}</div>
+          <div>Dx: {p.diagnosis}</div>
+          <div>Risk: {p.risk?.toFixed?.(2)}</div>
+          {p.alert && <div>🚨 {p.alert}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+👉 Deploy on:
+
+TV screens
+tablets
+multi-monitor setups
+📄 2) FDA DOSSIER GENERATOR (REAL PDF)
+
+Using reportlab (required per spec)
+
+📁 server/fda/generateFDAPdf.py
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+def generate_fda_pdf(data, filename="fda_dossier.pdf"):
+    doc = SimpleDocTemplate(filename)
+    styles = getSampleStyleSheet()
+
+    content = []
+
+    content.append(Paragraph("Auralyn Medical AI - FDA Dossier", styles['Title']))
+    content.append(Spacer(1, 12))
+
+    content.append(Paragraph(f"Pass Rate: {data['passRate']}", styles['Normal']))
+    content.append(Paragraph(f"Unsafe Undercalls: {data['unsafeUndercalls']}", styles['Normal']))
+    content.append(Paragraph(f"Calibration Error: {data['calibrationError']}", styles['Normal']))
+
+    content.append(Spacer(1, 12))
+    content.append(Paragraph("Safety Justification:", styles['Heading2']))
+
+    for line in data["justification"]:
+        content.append(Paragraph(f"- {line}", styles['Normal']))
+
+    doc.build(content)
+📁 Node wrapper
+import { spawn } from "child_process";
+
+export function generateFDAPdf(data: any) {
+  return new Promise((resolve) => {
+    const proc = spawn("python3", [
+      "server/fda/generateFDAPdf.py",
+      JSON.stringify(data)
+    ]);
+
+    proc.on("close", () => resolve(true));
+  });
+}
+🏥 3) EHR SANDBOX INTEGRATION (SMART on FHIR)
+📁 server/ehr/smartAuth.ts
+export async function getAccessToken() {
+  const res = await fetch(process.env.FHIR_TOKEN_URL!, {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: process.env.FHIR_CLIENT_ID!,
+      client_secret: process.env.FHIR_SECRET!,
+    }),
+  });
+
+  return res.json();
+}
+📁 server/ehr/fhirClient.ts
+export async function fhirRequest(resource: string, body: any) {
+  const token = await getAccessToken();
+
+  return fetch(`${process.env.FHIR_BASE}/${resource}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+📁 Write disposition
+export async function writeCarePlan(patientId: string, disposition: string) {
+  return fhirRequest("CarePlan", {
+    resourceType: "CarePlan",
+    subject: { reference: `Patient/${patientId}` },
+    description: `Disposition: ${disposition}`,
+  });
+}
+🤖 4) AUTONOMOUS TRIAGE ORCHESTRATOR
+📁 server/orchestrator/triageOrchestrator.ts
+import { runDiagnosis } from "../clinical/diagnosisEngine";
+import { runDispositionSafetyPipeline } from "../clinical/dispositionEngine";
+import { enforceSafeMode } from "../agents/runtimeSafety";
+
+export async function triagePatient(input: any) {
+  const safety = enforceSafeMode();
+
+  const dx = await runDiagnosis(input, global.kb);
+
+  const disposition = await runDispositionSafetyPipeline({
+    ...input,
+    posterior: dx.posterior,
+  });
+
+  // 🚨 HARD STOP
+  if (!safety.allowDisposition) {
+    return {
+      ...disposition,
+      finalDisposition: "physician_review_required",
+      reason: "System in safe mode",
+    };
+  }
+
+  return disposition;
+}
+📁 Add autonomous loop
+export function startAutonomousTriage(queue: any[]) {
+  setInterval(async () => {
+    for (const patient of queue) {
+      const result = await triagePatient(patient);
+
+      console.log("Triage:", result);
+    }
+  }, 2000);
+}
+🧠 FINAL SYSTEM STATE
+
+You now have:
+
+🖥️ Visualization
+Control Tower
+ICU Live Feed
+Hospital Wall

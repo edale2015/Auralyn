@@ -1,0 +1,527 @@
+1) Server-side slice exporter
+server/tools/exportClaudeSlices.ts
+import fs from 'fs';
+import path from 'path';
+import archiver from 'archiver';
+
+type SliceDef = {
+  id: string;
+  title: string;
+  prompt: string;
+  files: string[];
+};
+
+type ExportResult = {
+  exportDir: string;
+  zipPath: string;
+  manifestPath: string;
+  promptsPath: string;
+  sliceCount: number;
+};
+
+const ROOT = process.cwd();
+const EXPORT_ROOT = path.join(ROOT, 'exports', 'claude-review');
+
+const SLICE_DEFS: SliceDef[] = [
+  {
+    id: '01_system_overview',
+    title: 'System Overview',
+    prompt:
+      `Review this medical triage system overview.\n` +
+      `Focus on architecture, safety boundaries, and where hallucinations could bypass safeguards.\n` +
+      `Critical rule: only the disposition engine sets final clinical decisions.`,
+    files: [
+      'server/app.ts',
+      'server/db/schema.ts',
+    ],
+  },
+  {
+    id: '02_diagnosis_engine',
+    title: 'Diagnosis Engine',
+    prompt:
+      `Review this diagnosis engine.\n` +
+      `Focus on mathematical correctness, stability, contradictory inputs, and bias toward low-risk diagnoses.`,
+    files: [
+      'server/ai/fisher.ts',
+      'server/ai/bayesianUpdater.ts',
+      'server/ai/causalGraph.ts',
+      'server/clinical/diagnosisEngine.ts',
+    ],
+  },
+  {
+    id: '03_disposition_safety',
+    title: 'Disposition and Safety Core',
+    prompt:
+      `This is the core safety layer.\n` +
+      `Focus on unsafe undercall risk, red flag handling, guard conflicts, and any path where a dangerous case could pass.`,
+    files: [
+      'server/clinical/dispositionEngine.ts',
+      'server/ai/safetyGovernor.ts',
+      'server/ai/hallucinationGuards.ts',
+      'server/ai/hallucinationExtensions.ts',
+    ],
+  },
+  {
+    id: '04_validation',
+    title: 'Validation Discipline',
+    prompt:
+      `Review this validation system.\n` +
+      `Focus on unsafe cases slipping through, weak adversarial coverage, and calibration flaws.`,
+    files: [
+      'server/validation/goldenCaseHarness.ts',
+      'server/validation/adversarialGenerator.ts',
+      'server/validation/validationRunner.ts',
+      'server/validation/validationGate.ts',
+      'server/validation/calibrationMonitor.ts',
+    ],
+  },
+  {
+    id: '05_control_tower',
+    title: 'Control Tower and Streaming',
+    prompt:
+      `Review this real-time monitoring system.\n` +
+      `Focus on stale state, missed updates, race conditions, and incorrect risk prioritization.`,
+    files: [
+      'server/ws/patientStream.ts',
+      'server/controlTower/validationDashboard.ts',
+      'server/controlTower/calibrationService.ts',
+      'server/routes/controlTowerRoutes.ts',
+      'server/routes/controlTowerValidationRoutes.ts',
+    ],
+  },
+  {
+    id: '06_simulation',
+    title: 'Digital Twin and Case Generation',
+    prompt:
+      `Review this simulation and synthetic case generation layer.\n` +
+      `Focus on realism, edge-case coverage, and biases in generated data.`,
+    files: [
+      'server/simulation/digitalTwin.ts',
+      'server/validation/fullCaseGenerator.ts',
+      'server/validation/generators/peGenerator.ts',
+      'server/validation/generators/acsGenerator.ts',
+      'server/validation/generators/sepsisGenerator.ts',
+    ],
+  },
+  {
+    id: '07_clinical_rag',
+    title: 'Clinical RAG Copilot',
+    prompt:
+      `This KB-grounded clinical answer system must never influence final disposition.\n` +
+      `Review for grounding weakness, false confidence, and leakage into decision-making.`,
+    files: [
+      'server/ai/clinicalRagGrounding.ts',
+      'server/ai/uncertaintySignaling.ts',
+      'server/routes/clinicalAnswerRoute.ts',
+      'server/services/clinicalKnowledgeService.ts',
+      'server/services/clinicalAnswerAuditService.ts',
+      'server/services/physicianReviewGate.ts',
+    ],
+  },
+  {
+    id: '08_rlhf',
+    title: 'RLHF and Safe Learning',
+    prompt:
+      `Review this learning system.\n` +
+      `Focus on drift risk, unsafe weight updates, bounded changes, and physician gating.`,
+    files: [
+      'server/rlhf/rlhfEngine.ts',
+      'server/rlhf/trainer.ts',
+      'server/rlhf/approval.ts',
+    ],
+  },
+  {
+    id: '09_fda_audit',
+    title: 'FDA and Audit Layer',
+    prompt:
+      `Review this audit and regulatory layer.\n` +
+      `Focus on traceability, tamper resistance, and missing validation evidence.`,
+    files: [
+      'server/fda/fdaReport.ts',
+      'server/fda/justification.ts',
+      'server/fda/auditChain.ts',
+      'server/services/validationLogService.ts',
+      'server/services/auditService.ts',
+    ],
+  },
+];
+
+function ensureDir(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function readIfExists(filePath: string): string {
+  const abs = path.join(ROOT, filePath);
+  if (!fs.existsSync(abs)) {
+    return `// FILE NOT FOUND: ${filePath}\n`;
+  }
+  return fs.readFileSync(abs, 'utf8');
+}
+
+function writeSliceFile(sliceDir: string, slice: SliceDef) {
+  const outPath = path.join(sliceDir, `${slice.id}.md`);
+  const parts: string[] = [];
+
+  parts.push(`# ${slice.title}`);
+  parts.push('');
+  parts.push('## Review Prompt');
+  parts.push('');
+  parts.push(slice.prompt);
+  parts.push('');
+  parts.push('## Files');
+  parts.push('');
+
+  for (const file of slice.files) {
+    const ext = path.extname(file).replace('.', '') || 'txt';
+    const content = readIfExists(file);
+    parts.push(`### ${file}`);
+    parts.push('');
+    parts.push('```' + ext);
+    parts.push(content);
+    parts.push('```');
+    parts.push('');
+  }
+
+  fs.writeFileSync(outPath, parts.join('\n'));
+}
+
+function writeManifest(exportDir: string, slices: SliceDef[]) {
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    root: ROOT,
+    slices: slices.map((s) => ({
+      id: s.id,
+      title: s.title,
+      prompt: s.prompt,
+      files: s.files,
+      outputFile: `${s.id}.md`,
+    })),
+  };
+
+  const manifestPath = path.join(exportDir, 'manifest.json');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  return manifestPath;
+}
+
+function writeReviewPrompts(exportDir: string, slices: SliceDef[]) {
+  const lines: string[] = [];
+  lines.push('# Claude Review Prompts');
+  lines.push('');
+
+  for (const s of slices) {
+    lines.push(`## ${s.title}`);
+    lines.push('');
+    lines.push(`Use file: \`${s.id}.md\``);
+    lines.push('');
+    lines.push(s.prompt);
+    lines.push('');
+    lines.push(
+      'Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice."'
+    );
+    lines.push('');
+  }
+
+  lines.push('## Final Meta Prompt');
+  lines.push('');
+  lines.push(
+    'You have reviewed all modules of a medical triage system. Now answer:'
+  );
+  lines.push('1. Where can unsafe under-triage still occur?');
+  lines.push('2. What is the single most dangerous failure path?');
+  lines.push('3. Which module gives a false sense of safety?');
+  lines.push('4. What should be fixed first before clinical deployment?');
+  lines.push('');
+
+  const promptsPath = path.join(exportDir, 'REVIEW_PROMPTS.md');
+  fs.writeFileSync(promptsPath, lines.join('\n'));
+  return promptsPath;
+}
+
+async function zipDirectory(sourceDir: string, zipPath: string): Promise<void> {
+  ensureDir(path.dirname(zipPath));
+
+  await new Promise<void>((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    output.on('close', () => resolve());
+    archive.on('error', (err) => reject(err));
+
+    archive.pipe(output);
+    archive.directory(sourceDir, false);
+    archive.finalize();
+  });
+}
+
+export async function exportClaudeSlices(): Promise<ExportResult> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const exportDir = path.join(EXPORT_ROOT, timestamp);
+  ensureDir(exportDir);
+
+  for (const slice of SLICE_DEFS) {
+    writeSliceFile(exportDir, slice);
+  }
+
+  const manifestPath = writeManifest(exportDir, SLICE_DEFS);
+  const promptsPath = writeReviewPrompts(exportDir, SLICE_DEFS);
+
+  const zipPath = path.join(exportDir, 'claude-review-slices.zip');
+  await zipDirectory(exportDir, zipPath);
+
+  return {
+    exportDir,
+    zipPath,
+    manifestPath,
+    promptsPath,
+    sliceCount: SLICE_DEFS.length,
+  };
+}
+2) CLI script for Replit or terminal
+server/scripts/exportClaudeSlices.ts
+import { exportClaudeSlices } from '../tools/exportClaudeSlices';
+
+async function main() {
+  const result = await exportClaudeSlices();
+  console.log('Claude slice export complete.');
+  console.log(JSON.stringify(result, null, 2));
+}
+
+main().catch((err) => {
+  console.error('Failed to export Claude slices:', err);
+  process.exit(1);
+});
+
+Add an npm script:
+
+package.json
+{
+  "scripts": {
+    "export:claude-slices": "tsx server/scripts/exportClaudeSlices.ts"
+  }
+}
+3) Admin API route for in-app export
+server/routes/adminClaudeExportRoutes.ts
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { exportClaudeSlices } from '../tools/exportClaudeSlices';
+
+const router = express.Router();
+
+router.post('/export-claude-slices', async (_req, res) => {
+  try {
+    const result = await exportClaudeSlices();
+    res.json({
+      ok: true,
+      ...result,
+      downloadUrl: `/api/admin/claude-export/download?path=${encodeURIComponent(result.zipPath)}`,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: error?.message ?? 'Unknown export error',
+    });
+  }
+});
+
+router.get('/claude-export/download', async (req, res) => {
+  try {
+    const rawPath = String(req.query.path || '');
+    if (!rawPath) {
+      return res.status(400).json({ ok: false, error: 'path is required' });
+    }
+
+    const normalized = path.normalize(rawPath);
+    if (!fs.existsSync(normalized)) {
+      return res.status(404).json({ ok: false, error: 'file not found' });
+    }
+
+    res.download(normalized, 'claude-review-slices.zip');
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: error?.message ?? 'Download failed',
+    });
+  }
+});
+
+export default router;
+4) Wire route into app
+server/app.ts
+import adminClaudeExportRoutes from './routes/adminClaudeExportRoutes';
+
+// ...
+app.use('/api/admin', adminClaudeExportRoutes);
+5) Simple React admin page with button
+frontend/src/pages/AdminClaudeExport.tsx
+import { useState } from "react";
+
+type ExportResponse = {
+  ok: boolean;
+  exportDir?: string;
+  zipPath?: string;
+  manifestPath?: string;
+  promptsPath?: string;
+  sliceCount?: number;
+  downloadUrl?: string;
+  error?: string;
+};
+
+export default function AdminClaudeExport() {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<ExportResponse | null>(null);
+
+  const handleExport = async () => {
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const res = await fetch("/api/admin/export-claude-slices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const data = await res.json();
+      setResult(data);
+    } catch (err: any) {
+      setResult({
+        ok: false,
+        error: err?.message ?? "Export failed",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-neutral-950 text-white p-6">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Claude Review Export</h1>
+          <p className="text-neutral-400 mt-2">
+            Export repo slices, prompts, and manifest for a structured Claude review.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-6 shadow-lg">
+          <button
+            onClick={handleExport}
+            disabled={loading}
+            className="rounded-xl bg-blue-600 px-4 py-2 font-medium hover:bg-blue-500 disabled:opacity-50"
+          >
+            {loading ? "Exporting..." : "Export Claude Review Slices"}
+          </button>
+
+          {result && (
+            <div className="mt-6 rounded-xl bg-neutral-950 p-4 border border-neutral-800">
+              {result.ok ? (
+                <div className="space-y-2">
+                  <div className="text-green-400 font-semibold">Export complete</div>
+                  <div><span className="text-neutral-400">Slices:</span> {result.sliceCount}</div>
+                  <div><span className="text-neutral-400">Export dir:</span> {result.exportDir}</div>
+                  <div><span className="text-neutral-400">Manifest:</span> {result.manifestPath}</div>
+                  <div><span className="text-neutral-400">Prompts:</span> {result.promptsPath}</div>
+                  {result.downloadUrl && (
+                    <a
+                      href={result.downloadUrl}
+                      className="inline-block mt-3 rounded-xl bg-emerald-600 px-4 py-2 font-medium hover:bg-emerald-500"
+                    >
+                      Download ZIP
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="text-red-400">{result.error}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-6">
+          <h2 className="text-xl font-semibold mb-3">What gets exported</h2>
+          <ul className="space-y-2 text-neutral-300">
+            <li>Diagnosis engine slice</li>
+            <li>Disposition and safety slice</li>
+            <li>Validation slice</li>
+            <li>Control Tower slice</li>
+            <li>Digital twin slice</li>
+            <li>Clinical RAG slice</li>
+            <li>RLHF slice</li>
+            <li>FDA and audit slice</li>
+            <li>Manifest and review prompts</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+6) Route it in frontend
+
+If you use React Router:
+
+frontend/src/App.tsx
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import AdminClaudeExport from "./pages/AdminClaudeExport";
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/admin/claude-export" element={<AdminClaudeExport />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+7) Recommended upgrade: review-ready “slice notes”
+
+This is optional but useful. Add a repo-local config file for notes per slice.
+
+server/tools/claudeSliceConfig.ts
+export const CLAUDE_SLICE_NOTES: Record<string, string> = {
+  "03_disposition_safety":
+    "This is the highest-risk slice. Prioritize under-triage and paths that bypass physician review.",
+  "04_validation":
+    "Focus on whether unsafe cases can pass validation and whether adversarial coverage is sufficient.",
+  "07_clinical_rag":
+    "This must never set final disposition. Review for leakage into core triage.",
+};
+
+Then append notes into each slice file if present.
+
+8) My recommendation on whether the in-app button is worth it
+
+Yes. Very worth it.
+
+Because otherwise review prep becomes:
+
+manual
+inconsistent
+easy to postpone
+easy to do badly
+
+With the button, your workflow becomes:
+
+click Export Claude Review Slices
+download zip
+upload to Claude
+review by slice
+fix
+export again
+run second review pass
+
+That’s clean, repeatable, and much more “FDA brain” than “vibes and hope.”
+
+9) My advice for using it safely
+
+Do not export:
+
+.env
+secrets
+raw PHI
+production logs with identifiers
+
+So if you want the next version, I’d add:
+
+file allowlist only
+automatic secret-pattern scrubber
+optional PHI scrubber before export

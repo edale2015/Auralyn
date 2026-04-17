@@ -53,36 +53,51 @@ export type ExportResult = {
   skippedCount: number;
 };
 
-// ── Slice definitions (adapted to actual Auralyn codebase paths) ──────────────
+// ── Slice definitions ─────────────────────────────────────────────────────────
+//
+// Following the ChatGPT-recommended review structure exactly.
+// Files that don't exist in this codebase appear as "FILE NOT FOUND" inside the
+// slice — this is intentional: it tells Claude which architectural components
+// are missing or not yet implemented.
+// Actual codebase equivalents are added below each recommended file.
 
 export const SLICE_DEFS: SliceDef[] = [
   {
     id:    "01_system_overview",
-    title: "System Overview — Clinical Pipeline & Orchestration",
+    title: "System Overview",
     prompt:
-      "Review the top-level clinical pipeline and orchestration.\n" +
-      "Focus on: architecture clarity, safety boundaries, module coupling,\n" +
-      "and any place where a hallucination or logic gap could bypass clinical safeguards.\n" +
-      "Critical rule: only the disposition/decision engine sets final clinical decisions.",
+      "Review this medical triage system overview.\n" +
+      "Focus on architecture, safety boundaries, and where hallucinations could bypass safeguards.\n" +
+      "Critical rule: only the disposition engine sets final clinical decisions.\n\n" +
+      "Also note: any FILE NOT FOUND entries represent architectural components that do not\n" +
+      "yet exist — flag these as gaps in the review.",
     files: [
+      // ChatGPT recommended — entry point + schema
+      "server/app.ts",           // NOTE: this codebase uses server/index.ts instead
+      "server/db/schema.ts",     // NOTE: this codebase uses shared/schema.ts instead
+      // Actual equivalents in this codebase
+      "server/index.ts",
+      "shared/schema.ts",
       "server/clinical/finalPipeline.ts",
       "server/clinical/orchestrator.ts",
-      "server/clinical/decisionOrchestrator.ts",
-      "server/clinical/runFullClinicalFlow.ts",
     ],
   },
   {
     id:    "02_diagnosis_engine",
-    title: "Diagnosis Engine — Bayesian + Fisher + Natural Gradient",
+    title: "Diagnosis Engine",
     prompt:
       "Review this diagnosis engine.\n" +
-      "Focus on: mathematical correctness of posterior updates,\n" +
-      "stability under missing or contradictory inputs,\n" +
-      "Fisher information scaling, natural gradient step safety,\n" +
-      "and failure modes that could bias toward low-risk diagnoses.",
+      "Focus on mathematical correctness, stability under contradictory inputs,\n" +
+      "and failure modes that could bias toward low-risk diagnoses.\n\n" +
+      "Note any FILE NOT FOUND components — these represent architectural gaps\n" +
+      "where critical diagnosis logic may be absent or unimplemented.",
     files: [
+      // ChatGPT recommended
       "server/ai/fisher.ts",
       "server/ai/bayesianUpdater.ts",
+      "server/ai/causalGraph.ts",          // NOT in codebase — causal graph not implemented
+      "server/clinical/diagnosisEngine.ts", // NOT in codebase — see bayesianEngine.ts instead
+      // Actual equivalents
       "server/ai/naturalGradient.ts",
       "server/clinical/bayesianEngine.ts",
       "server/clinical/bayesianPriorService.ts",
@@ -90,32 +105,37 @@ export const SLICE_DEFS: SliceDef[] = [
   },
   {
     id:    "03_disposition_safety",
-    title: "Disposition & Safety Core (MOST CRITICAL)",
+    title: "Disposition and Safety Core",
     prompt:
       "This is the core safety layer. It determines whether a patient is sent home vs escalated.\n" +
       "CRITICAL — review for:\n" +
-      "  - Unsafe under-triage risk (patient sent home when they should be escalated)\n" +
-      "  - Logic gaps in red flag detection\n" +
+      "  - Unsafe under-triage risk\n" +
+      "  - Logic gaps in red flag handling\n" +
       "  - Conflicts between hallucination guards\n" +
-      "  - Any code path where a dangerous case could incorrectly pass all gates\n" +
-      "  - Race conditions between safety checks",
+      "  - Any code path where a dangerous case could incorrectly pass all gates\n\n" +
+      "FILE NOT FOUND entries = components the architecture expects but are absent.",
     files: [
+      // ChatGPT recommended
+      "server/clinical/dispositionEngine.ts", // NOT in codebase — see finalDecisionEngine.ts
+      "server/ai/safetyGovernor.ts",          // NOT in codebase — see safetyGate.ts
+      "server/ai/hallucinationGuards.ts",     // NOT in codebase — see hallucinationExtensions.ts
+      "server/ai/hallucinationExtensions.ts",
+      // Actual equivalents in this codebase
       "server/clinical/finalDecisionEngine.ts",
       "server/clinical/safetyGate.ts",
       "server/clinical/safetyPipeline.ts",
       "server/clinical/safetyEscalationGuard.ts",
-      "server/ai/hallucinationExtensions.ts",
     ],
   },
   {
     id:    "04_validation",
-    title: "Validation Discipline — Golden Cases, Adversarial, Calibration",
+    title: "Validation Discipline",
     prompt:
       "Review this validation system.\n" +
       "Focus on:\n" +
-      "  - Whether unsafe cases can slip through test coverage\n" +
+      "  - Whether unsafe cases can slip through testing\n" +
       "  - Weaknesses in adversarial case generation\n" +
-      "  - Missing failure scenarios (sepsis, PE, ACS, stroke edge cases)\n" +
+      "  - Missing failure scenarios (sepsis, PE, ACS, stroke)\n" +
       "  - Calibration flaws that could mask confidence errors\n" +
       "  - Whether the validation gate threshold is appropriately conservative",
     files: [
@@ -128,52 +148,60 @@ export const SLICE_DEFS: SliceDef[] = [
   },
   {
     id:    "05_control_tower",
-    title: "Control Tower & Real-Time Streaming",
+    title: "Control Tower and Streaming",
     prompt:
       "Review this real-time patient monitoring system.\n" +
       "Focus on:\n" +
       "  - Stale state and missed update scenarios\n" +
       "  - Race conditions in concurrent patient streams\n" +
-      "  - Incorrect risk prioritization (low-risk patient getting ICU slot)\n" +
+      "  - Incorrect risk prioritization\n" +
       "  - WebSocket auth and tenant isolation gaps\n" +
       "  - Dashboard data consistency under high load",
     files: [
-      "server/realtime/patientStream.ts",
+      // ChatGPT recommended
+      "server/ws/patientStream.ts",
       "server/controlTower/validationDashboard.ts",
       "server/controlTower/calibrationService.ts",
-      "server/controlTower/anomalyEngine.ts",
       "server/routes/controlTowerRoutes.ts",
+      "server/routes/controlTowerValidationRoutes.ts", // NOT in codebase
+      // Actual additional files
+      "server/controlTower/anomalyEngine.ts",
       "server/routes/clinicalControlTowerRoutes.ts",
     ],
   },
   {
     id:    "06_simulation",
-    title: "Digital Twin & Synthetic Case Generation",
+    title: "Digital Twin and Case Generation",
     prompt:
-      "Review this simulation and case generation layer.\n" +
+      "Review this simulation and synthetic case generation layer.\n" +
       "Focus on:\n" +
       "  - Realism of generated patient cases\n" +
-      "  - Adequate edge-case coverage (sepsis, shock, PE, ACS, stroke)\n" +
+      "  - Adequate edge-case coverage (sepsis, PE, ACS, stroke)\n" +
       "  - Biases in synthetic data that could hide validation gaps\n" +
-      "  - Whether the digital twin accurately reflects real clinical deterioration\n" +
-      "  - Failure to stress-test dangerous corner cases",
+      "  - Whether the digital twin accurately reflects clinical deterioration\n\n" +
+      "Note: FILE NOT FOUND for specific condition generators means those high-risk\n" +
+      "scenarios (PE, ACS, sepsis) are not explicitly stress-tested.",
     files: [
+      // ChatGPT recommended
       "server/simulation/digitalTwin.ts",
-      "server/simulation/digitalTwinEngine.ts",
       "server/validation/fullCaseGenerator.ts",
+      "server/validation/generators/peGenerator.ts",  // NOT in codebase — PE not explicitly tested
+      "server/validation/generators/acsGenerator.ts", // NOT in codebase — ACS not explicitly tested
+      "server/validation/generators/sepsisGenerator.ts", // NOT in codebase
+      // Actual equivalents
+      "server/simulation/digitalTwinEngine.ts",
       "server/simulation/clinicalScenarioGenerator.ts",
-      "server/simulation/clinicalTrialSimulator.ts",
     ],
   },
   {
     id:    "07_clinical_rag",
-    title: "Clinical RAG Copilot — KB-Grounded Answers",
+    title: "Clinical RAG Copilot",
     prompt:
       "This KB-grounded clinical answer system must NEVER influence final disposition.\n" +
       "Review for:\n" +
       "  - Any pathway where RAG output could leak into disposition decisions\n" +
       "  - False confidence signals from the uncertainty layer\n" +
-      "  - Weak grounding logic (hallucinated citations or unsupported claims)\n" +
+      "  - Weak grounding logic (hallucinated citations)\n" +
       "  - Missing physician review gate enforcement\n" +
       "  - Audit trail completeness for regulatory purposes",
     files: [
@@ -187,37 +215,44 @@ export const SLICE_DEFS: SliceDef[] = [
   },
   {
     id:    "08_rlhf",
-    title: "RLHF & Safe Learning System",
+    title: "RLHF and Safe Learning",
     prompt:
       "Review this learning system.\n" +
       "Focus on:\n" +
       "  - Risk of unsafe drift in clinical weights over time\n" +
-      "  - Whether the maxDeltaPct bound is sufficient to prevent dangerous updates\n" +
-      "  - Evidence threshold adequacy (minEvidence = 5 — is this enough?)\n" +
+      "  - Whether weight bounds are sufficient to prevent dangerous updates\n" +
+      "  - Evidence threshold adequacy\n" +
       "  - Physician gating effectiveness\n" +
-      "  - Whether rejected proposals correctly prevent future re-application\n" +
-      "  - Weight update persistence and DB durability",
+      "  - Whether rejected proposals correctly block future re-application",
     files: [
+      // ChatGPT recommended
       "server/rlhf/rlhfEngine.ts",
       "server/rlhf/trainer.ts",
       "server/rlhf/approval.ts",
+      // Actual additional files
       "server/rlhf/weightUpdater.ts",
     ],
   },
   {
     id:    "09_fda_audit",
-    title: "FDA & Audit Layer — 21 CFR Part 11 / Part 820",
+    title: "FDA and Audit Layer",
     prompt:
       "Review this audit and regulatory compliance layer.\n" +
       "Focus on:\n" +
-      "  - Completeness of audit traceability (every clinical decision traceable)\n" +
+      "  - Completeness of audit traceability\n" +
       "  - SHA-256 chain tamper resistance\n" +
-      "  - Missing required fields for 21 CFR Part 11 / Part 820 compliance\n" +
-      "  - Whether the audit chain can be forged or gaps introduced\n" +
-      "  - FDA De Novo submission readiness gaps",
+      "  - Missing required fields for 21 CFR Part 11 / Part 820\n" +
+      "  - Whether the audit chain can be forged or gapped\n" +
+      "  - FDA De Novo submission readiness\n\n" +
+      "FILE NOT FOUND entries represent missing regulatory infrastructure.",
     files: [
-      "server/fda/auditChain.ts",
+      // ChatGPT recommended
+      "server/fda/fdaReport.ts",              // NOT in codebase
       "server/fda/justification.ts",
+      "server/fda/auditChain.ts",
+      "server/services/validationLogService.ts", // NOT in codebase
+      "server/services/auditService.ts",         // NOT in codebase
+      // Actual equivalents
       "server/services/auditHashChain.ts",
       "server/services/auditReportService.ts",
       "server/services/fdaValidationService.ts",
