@@ -2134,3 +2134,52 @@ All vital sign values were used in scoring engines without range validation. An 
 - Tenant RLS: header spoofing mitigated ✅
 - Vitals: range-validated before scoring ✅
 - Server startup: `[StartupAssertions] All clinical startup invariants passed` ✅
+
+---
+
+## Claude Review Slice Exporter (Added April 2026)
+
+Admin-only tool at `/admin/claude-export` that packages the Auralyn codebase into 9 structured markdown slices + a ZIP archive for systematic Claude code review.
+
+### Architecture
+
+| File | Purpose |
+|------|---------|
+| `server/tools/allowlist.ts` | Deny-by-default allowlist (only server/ai, server/clinical, server/validation, etc.) |
+| `server/tools/secretScrubber.ts` | Redacts process.env.*, inline API keys, JWT tokens, DB URIs |
+| `server/tools/phiScrubber.ts` | Redacts SSN, DOB, MRN, phone numbers (best-effort static) |
+| `server/tools/diffTracker.ts` | SHA-256 hash-based diff tracker — enables changed-files-only export |
+| `server/tools/exportClaudeSlices.ts` | Main exporter: 9 SLICE_DEFS → markdown + ZIP via archiver |
+| `server/routes/adminClaudeExportRoutes.ts` | API: POST export, GET download (path-traversal safe), GET list |
+| `client/src/pages/AdminClaudeExportPage.tsx` | React admin page with options, slice map, export history |
+
+### 9 Review Slices
+1. System Overview — Clinical Pipeline & Orchestration
+2. Diagnosis Engine — Bayesian + Fisher + Natural Gradient
+3. **Disposition & Safety Core — MOST CRITICAL**
+4. Validation — Golden Cases, Adversarial, Calibration
+5. Control Tower & Real-Time Streaming
+6. Digital Twin & Synthetic Case Generation
+7. Clinical RAG Copilot
+8. RLHF & Safe Learning System
+9. FDA & Audit Layer — 21 CFR Part 11/820
+
+### Security Controls
+- Allowlist: only server/ai, server/clinical, server/validation, server/controlTower, server/rlhf, server/fda, server/services, server/routes, server/ws, server/realtime, server/simulation, shared/, client/src
+- Secret scrubber: 8 regex patterns (process.env.*, API keys, JWT, DB URIs, Bearer tokens)
+- PHI scrubber: SSN, DOB, MRN, US phone numbers, patient name patterns
+- Path traversal: downloads validated to `exports/claude-review/` only, zip-extension enforced
+- Auth: requirePhysician + requireRole(["admin"]) on all 3 endpoints
+- Both API endpoints verified to return 401 without authentication
+
+### API Routes
+- `POST /api/admin/export-claude-slices` — generate export (returns download URL)
+- `GET  /api/admin/claude-export/list`   — list previous exports
+- `GET  /api/admin/claude-export/download?path=<...>` — download ZIP (path-validated)
+
+### Export Output
+`exports/claude-review/<timestamp>/`
+- `01_system_overview.md` … `09_fda_audit.md`
+- `manifest.json`
+- `REVIEW_PROMPTS.md` (copy-paste prompts for each slice)
+- `claude-review-slices.zip`

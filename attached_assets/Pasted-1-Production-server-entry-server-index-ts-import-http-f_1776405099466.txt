@@ -1,0 +1,335 @@
+1) Production server entry
+server/index.ts
+import http from 'http';
+import express from 'express';
+import helmet from 'helmet';
+import compression from 'compression';
+import cors from 'cors';
+
+import diagnosisRoutes from './routes/diagnosisRoutes';
+import controlTowerRoutes from './routes/controlTowerRoutes';
+import validationRoutes from './routes/validationRoutes';
+import controlTowerValidationRoutes from './routes/controlTowerValidationRoutes';
+import clinicalAnswerRoute from './routes/clinicalAnswerRoute';
+import adminClaudeExportRoutes from './routes/adminClaudeExportRoutes';
+import metricsRoutes from './monitoring/metricsRoute';
+import { initWebSocket } from './ws/patientStream';
+import { validateEnv } from './startup/validateEnv';
+
+validateEnv();
+
+const app = express();
+
+app.use(helmet());
+app.use(compression());
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: '4mb' }));
+
+app.get('/api/healthz', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'auralyn',
+    ts: new Date().toISOString(),
+    mode: process.env.NODE_ENV || 'development',
+  });
+});
+
+app.use('/api/diagnosis', diagnosisRoutes);
+app.use('/api/control-tower', controlTowerRoutes);
+app.use('/api/validation', validationRoutes);
+app.use('/api/control-tower', controlTowerValidationRoutes);
+app.use('/api/admin', adminClaudeExportRoutes);
+app.use(clinicalAnswerRoute);
+app.use(metricsRoutes);
+
+const port = Number(process.env.PORT || 3000);
+const server = http.createServer(app);
+
+initWebSocket(server);
+
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Auralyn listening on ${port}`);
+});
+2) Environment validation
+server/startup/validateEnv.ts
+const REQUIRED_VARS = [
+  'DATABASE_URL',
+];
+
+const OPTIONAL_WARN_VARS = [
+  'FHIR_BASE',
+  'FHIR_TOKEN_URL',
+  'FHIR_CLIENT_ID',
+  'FHIR_SECRET',
+  'CLAUDE_API_KEY',
+];
+
+export function validateEnv() {
+  const missing = REQUIRED_VARS.filter((k) => !process.env[k]);
+
+  if (missing.length) {
+    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
+  }
+
+  const optionalMissing = OPTIONAL_WARN_VARS.filter((k) => !process.env[k]);
+  if (optionalMissing.length) {
+    console.warn(`Optional env vars missing: ${optionalMissing.join(', ')}`);
+  }
+}
+3) Dockerfile
+Dockerfile
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+EXPOSE 3000
+
+CMD ["node", "dist/server/index.js"]
+4) .dockerignore
+.dockerignore
+node_modules
+dist
+.git
+.env
+.env.*
+coverage
+exports
+*.log
+frontend/node_modules
+frontend/dist
+5) Docker Compose for local prod-like testing
+docker-compose.yml
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://auralyn:auralyn@db:5432/auralyn
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: auralyn
+      POSTGRES_USER: auralyn
+      POSTGRES_PASSWORD: auralyn
+    ports:
+      - "5432:5432"
+6) Replit config
+.replit
+run = "npm run build && node dist/server/index.js"
+entrypoint = "server/index.ts"
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PORT = "3000"
+NODE_ENV = "production"
+replit.nix
+{ pkgs }: {
+  deps = [
+    pkgs.nodejs_20
+    pkgs.python3
+    pkgs.postgresql
+  ];
+}
+7) Fly.io deployment
+fly.toml
+app = "auralyn-medical-ai"
+primary_region = "ewr"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = false
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 1
+8) AWS ECS/Fargate task definition
+deploy/aws/task-definition.json
+{
+  "family": "auralyn-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/auralynTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "auralyn-app",
+      "image": "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/auralyn:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:<ACCOUNT_ID>:secret:auralyn/database_url" },
+        { "name": "CLAUDE_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:<ACCOUNT_ID>:secret:auralyn/claude_api_key" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/auralyn",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+9) GitHub Actions deploy workflow
+.github/workflows/deploy.yml
+name: Deploy Auralyn
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Docker build
+        run: docker build -t auralyn:latest .
+
+      # Add your cloud-specific login + push + rollout steps here
+      # AWS ECR / ECS, or Fly.io deploy
+10) Production readiness guard
+
+This blocks boot if you forgot critical settings.
+
+server/startup/productionGuard.ts
+export function productionGuard() {
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) return;
+
+  const failures: string[] = [];
+
+  if (!process.env.DATABASE_URL) failures.push('DATABASE_URL missing');
+  if (!process.env.PORT) failures.push('PORT missing');
+
+  if (failures.length) {
+    throw new Error(`Production guard failed: ${failures.join('; ')}`);
+  }
+}
+
+Call it in server/index.ts after validateEnv().
+
+11) ALB / reverse proxy health path recommendation
+
+Use:
+
+/api/healthz
+
+for:
+
+Replit health checks
+Fly.io
+AWS ALB target groups
+uptime monitors
+12) WebSocket-safe frontend connection
+frontend/src/lib/socket.ts
+import { io } from 'socket.io-client';
+
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL || window.location.origin;
+
+export const socket = io(SOCKET_URL, {
+  transports: ['websocket', 'polling'],
+});
+13) Minimal deployment checklist
+deploy/DEPLOY_CHECKLIST.md
+# Auralyn Deployment Checklist
+
+## Required
+- [ ] DATABASE_URL configured
+- [ ] Health check passes at /api/healthz
+- [ ] Build succeeds
+- [ ] WebSocket connects
+- [ ] No secrets committed to repo
+
+## Validation
+- [ ] Golden case harness run
+- [ ] Unsafe undercalls = 0
+- [ ] Calibration checked
+- [ ] Review queue works
+
+## Safety
+- [ ] Safe mode tested
+- [ ] Physician review fallback tested
+- [ ] Audit logging verified
+
+## Release
+- [ ] Smoke test on deployed URL
+- [ ] Logs visible
+- [ ] Rollback path confirmed
+What I think is most helpful here
+
+The most useful deployment pieces are:
+
+Docker + health check
+environment validation
+a single production entrypoint
+one-click cloud configs
+deployment checklist tied to validation
+
+That combination keeps deployment from becoming a trapdoor.

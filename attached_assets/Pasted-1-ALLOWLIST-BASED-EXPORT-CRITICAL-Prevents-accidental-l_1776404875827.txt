@@ -1,0 +1,204 @@
+1. ALLOWLIST-BASED EXPORT (CRITICAL)
+
+👉 Prevents accidental leakage of:
+
+.env
+credentials
+random scripts
+logs
+📁 server/tools/allowlist.ts
+export const ALLOWLIST = [
+  "server/ai/",
+  "server/clinical/",
+  "server/validation/",
+  "server/controlTower/",
+  "server/rlhf/",
+  "server/fda/",
+  "server/services/",
+  "server/routes/",
+  "server/ws/",
+  "server/simulation/",
+  "frontend/src/pages/",
+];
+🔧 Update file reader
+
+Modify readIfExists in your exporter:
+
+import { ALLOWLIST } from "./allowlist";
+
+function isAllowed(filePath: string) {
+  return ALLOWLIST.some(prefix => filePath.startsWith(prefix));
+}
+
+function readIfExists(filePath: string): string {
+  if (!isAllowed(filePath)) {
+    return `// BLOCKED BY ALLOWLIST: ${filePath}\n`;
+  }
+
+  const abs = path.join(ROOT, filePath);
+
+  if (!fs.existsSync(abs)) {
+    return `// FILE NOT FOUND: ${filePath}\n`;
+  }
+
+  return fs.readFileSync(abs, "utf8");
+}
+🔐 2. SECRET SCRUBBER
+
+👉 Prevents leaking:
+
+API keys
+JWT secrets
+DB credentials
+📁 server/tools/secretScrubber.ts
+const SECRET_PATTERNS = [
+  /process\.env\.[A-Z0-9_]+/g,
+  /api[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi,
+  /secret\s*[:=]\s*['"][^'"]+['"]/gi,
+  /password\s*[:=]\s*['"][^'"]+['"]/gi,
+  /postgres:\/\/[^\\s]+/gi,
+];
+
+export function scrubSecrets(content: string): string {
+  let result = content;
+
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replace(pattern, "[REDACTED_SECRET]");
+  }
+
+  return result;
+}
+🔧 Apply in exporter
+import { scrubSecrets } from "./secretScrubber";
+
+const raw = fs.readFileSync(abs, "utf8");
+return scrubSecrets(raw);
+🧼 3. PHI SCRUBBER
+
+👉 Prevents leaking:
+
+names
+DOB
+MRN
+phone numbers
+📁 server/tools/phiScrubber.ts
+const PHI_PATTERNS = [
+  /\b\d{3}-\d{2}-\d{4}\b/g, // SSN
+  /\b\d{2}\/\d{2}\/\d{4}\b/g, // DOB
+  /\bMRN[:\s]*\d+\b/gi,
+  /\b\d{10}\b/g, // phone
+];
+
+export function scrubPHI(content: string): string {
+  let result = content;
+
+  for (const pattern of PHI_PATTERNS) {
+    result = result.replace(pattern, "[REDACTED_PHI]");
+  }
+
+  return result;
+}
+🔧 Combine scrubbers
+import { scrubPHI } from "./phiScrubber";
+
+const raw = fs.readFileSync(abs, "utf8");
+
+return scrubPHI(scrubSecrets(raw));
+🔁 4. DIFF-BASED EXPORT (MOST POWERFUL)
+
+👉 Only send Claude what changed
+👉 avoids re-reviewing 10,000 lines
+
+📁 server/tools/diffTracker.ts
+import fs from "fs";
+import crypto from "crypto";
+import path from "path";
+
+const HASH_FILE = path.join(process.cwd(), "exports/claude-review/fileHashes.json");
+
+type HashMap = Record<string, string>;
+
+function hash(content: string) {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+export function loadPreviousHashes(): HashMap {
+  if (!fs.existsSync(HASH_FILE)) return {};
+  return JSON.parse(fs.readFileSync(HASH_FILE, "utf8"));
+}
+
+export function saveHashes(map: HashMap) {
+  fs.mkdirSync(path.dirname(HASH_FILE), { recursive: true });
+  fs.writeFileSync(HASH_FILE, JSON.stringify(map, null, 2));
+}
+
+export function hasChanged(filePath: string, content: string, prev: HashMap) {
+  const h = hash(content);
+  return prev[filePath] !== h;
+}
+🔧 Modify exporter to use diff
+
+Inside slice builder:
+
+import { loadPreviousHashes, saveHashes, hasChanged } from "./diffTracker";
+
+const prevHashes = loadPreviousHashes();
+const newHashes: Record<string, string> = {};
+
+for (const file of slice.files) {
+  const content = readIfExists(file);
+  const changed = hasChanged(file, content, prevHashes);
+
+  newHashes[file] = crypto.createHash("sha256").update(content).digest("hex");
+
+  if (!changed) continue; // 🔥 SKIP unchanged
+
+  // include in slice
+}
+
+After export:
+
+saveHashes(newHashes);
+🧠 OPTIONAL: MARK DIFFS IN OUTPUT
+
+Add:
+
+parts.push(`// 🔥 CHANGED FILE`);
+🧪 5. FINAL SAFETY CHECK BEFORE EXPORT
+📁 preExportCheck.ts
+export function preExportCheck() {
+  const forbidden = [".env", "node_modules"];
+
+  for (const f of forbidden) {
+    if (fs.existsSync(f)) {
+      console.warn(`⚠ WARNING: ${f} exists — ensure not exported`);
+    }
+  }
+}
+🖥️ UI UPGRADE (TOGGLE OPTIONS)
+Add to button UI:
+<label>
+  <input type="checkbox" /> Diff-only export
+</label>
+
+<label>
+  <input type="checkbox" defaultChecked /> Scrub secrets
+</label>
+
+<label>
+  <input type="checkbox" defaultChecked /> Scrub PHI
+</label>
+🧠 FINAL RESULT
+
+Your exporter is now:
+
+🔒 SAFE
+no secrets
+no PHI
+no accidental files
+⚡ FAST
+diff-based slicing
+🧠 SMART
+Claude sees only what matters
+🔁 REPEATABLE
+consistent review pipeline

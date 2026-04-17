@@ -1,0 +1,223 @@
+HOW TO SLICE YOUR SYSTEM (BEST STRUCTURE)
+🔹 Slice 1 — System Overview (MANDATORY FIRST)
+
+Goal: give Claude context so it doesn’t hallucinate about your architecture
+
+Writing
+
+SYSTEM OVERVIEW
+
+This is a medical triage system (Auralyn) with:
+
+Bayesian + Fisher diagnosis engine
+Causal graph augmentation
+Multi-layer hallucination safety system
+Disposition safety governor
+Validation harness (1000+ cases + adversarial testing)
+RLHF bounded learning (physician-gated)
+Control Tower (real-time patient monitoring)
+Clinical RAG copilot (KB-grounded answers, NOT used for disposition)
+
+CRITICAL RULE:
+
+Only the disposition engine sets final clinical decisions
+All other modules are advisory or safety layers
+
+Please review ALL code with focus on:
+
+Unsafe under-triage risk
+Hidden failure modes
+Inconsistent logic across modules
+Places where hallucinations could bypass safeguards
+🔹 Slice 2 — Diagnosis Engine Path
+
+Send together:
+
+ai/
+  fisher.ts
+  bayesianUpdater.ts
+  causalGraph.ts
+
+clinical/
+  diagnosisEngine.ts
+Prompt:
+Writing
+
+Review this diagnosis engine.
+
+Focus on:
+
+Mathematical correctness
+Stability of posterior updates
+Sensitivity to missing or contradictory inputs
+Failure modes that could bias toward low-risk diagnoses
+🔹 Slice 3 — Disposition + Safety Core (MOST IMPORTANT)
+clinical/dispositionEngine.ts
+ai/safetyGovernor.ts
+ai/hallucinationGuards.ts
+ai/hallucinationExtensions.ts
+Prompt:
+Writing
+
+This is the core safety layer.
+
+CRITICAL:
+This determines whether a patient is sent home vs escalated.
+
+Review for:
+
+Unsafe undercall risk
+Logic gaps in red flag handling
+Conflicts between guards
+Any path where a dangerous case could incorrectly pass
+🔹 Slice 4 — Validation Discipline
+validation/
+  goldenCaseHarness.ts
+  adversarialGenerator.ts
+  validationRunner.ts
+  validationGate.ts
+Prompt:
+Writing
+
+This is the validation system.
+
+Review for:
+
+Whether unsafe cases can slip through testing
+Weaknesses in adversarial generation
+Missing failure scenarios
+Calibration flaws
+🔹 Slice 5 — Control Tower + WebSocket
+ws/
+controlTower/
+frontend ControlTower.tsx
+Prompt:
+Writing
+
+This is the real-time monitoring system.
+
+Focus on:
+
+Data consistency
+Race conditions
+Missed updates or stale state
+Incorrect risk prioritization
+🔹 Slice 6 — Digital Twin Simulator
+simulation/
+validation/fullCaseGenerator.ts
+Prompt:
+Writing
+
+This simulates 1000+ patients.
+
+Review:
+
+Realism of generated cases
+Whether edge cases are sufficiently represented
+Biases in synthetic data
+Failure to stress-test dangerous conditions
+🔹 Slice 7 — Clinical RAG Layer (Claude-like)
+clinicalRagGrounding.ts
+uncertaintySignaling.ts
+clinicalAnswerRoute.ts
+Prompt:
+Writing
+
+This is a KB-grounded clinical answer system.
+
+IMPORTANT:
+This must NEVER influence final disposition.
+
+Review for:
+
+Leakage into decision-making
+False confidence signals
+Weak grounding logic
+🔹 Slice 8 — RLHF + Learning
+rlhf/
+Prompt:
+Writing
+
+This is the learning system.
+
+Focus on:
+
+Safety of weight updates
+Risk of drift
+Whether learning could degrade safety over time
+🔹 Slice 9 — FDA + Audit Layer
+fda/
+auditChain.ts
+validationLogService.ts
+Prompt:
+Writing
+
+This is the audit + regulatory layer.
+
+Review for:
+
+Completeness of traceability
+Tamper resistance
+Missing required fields for clinical validation
+⚠️ HOW BIG EACH BLOCK SHOULD BE
+Ideal size:
+300–800 lines total per slice
+Not per file—per submission
+Rule:
+
+👉 If Claude can’t “hold it in working memory,” review quality drops sharply
+
+🧠 CRITICAL TRICK (MOST PEOPLE MISS THIS)
+
+After each slice, ask:
+
+Writing
+
+List the TOP 5 MOST DANGEROUS FAILURE MODES in this section.
+
+Be specific.
+Do not give generic advice.
+Focus on real-world clinical risk.
+
+This is where Claude becomes extremely valuable.
+
+🔁 FINAL STEP (VERY IMPORTANT)
+
+After all slices:
+
+Send a FINAL META PROMPT:
+
+Writing
+
+You have reviewed all modules of a medical triage system.
+
+Now answer:
+
+Where can unsafe under-triage still occur?
+What is the single most dangerous failure path?
+Which module gives a false sense of safety?
+What would you fix FIRST before clinical deployment?
+🧭 MY RECOMMENDATION (HONEST)
+
+Do 2 full review passes:
+
+Pass 1:
+Identify weaknesses
+Pass 2:
+After fixes → confirm no regressions
+🚀 WHY THIS WORKS
+
+Because you’re forcing Claude to:
+
+reason across boundaries
+identify interactions (not just bugs)
+think like a safety auditor, not a coder
+🧠 FINAL TAKE
+
+Most people use Claude like:
+👉 “find bugs”
+
+You’re using it like:
+👉 “simulate failure in a clinical system”
+
+That’s exactly right.

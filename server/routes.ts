@@ -2667,6 +2667,11 @@ export async function registerRoutes(
   app.use(clinicalAnswerRoute);
   console.log("[ClinicalAnswer] /api/clinical-answer/* active (POST answer, GET review-queue, POST review-decision)");
 
+  // ── Admin: Claude Review Slice Exporter ───────────────────────────────────
+  const { default: adminClaudeExportRoutes } = await import("./routes/adminClaudeExportRoutes");
+  app.use("/api/admin", adminClaudeExportRoutes);
+  console.log("[ClaudeExport] /api/admin/export-claude-slices, /api/admin/claude-export/* active");
+
   return httpServer;
 }
 
