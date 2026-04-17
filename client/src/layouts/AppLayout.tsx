@@ -31,6 +31,7 @@ import {
   Database,
   BarChart3,
   Landmark,
+  Package,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -82,6 +83,7 @@ const NAV_ITEMS = [
   { path: "/decision-tree", label: "Decision Tree", icon: GitBranch },
   { path: "/fda-dashboard", label: "FDA Dashboard", icon: ShieldCheck },
   { path: "/live-clinic", label: "Live Clinic", icon: Hospital },
+  { path: "/admin/claude-export", label: "Claude Review", icon: Package },
   { path: ROUTES.SETTINGS, label: "Settings", icon: Settings },
 ];
 
