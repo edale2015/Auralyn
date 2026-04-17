@@ -1,9 +1,20 @@
+/**
+ * server/automation/recorderRoutes.ts — Browser automation template recorder
+ *
+ * FIX (Code Review Security Gap):
+ *   POST /record and GET /templates were unauthenticated. /record opens a real
+ *   Chromium instance and navigates to caller-supplied URLs — a critical SSRF
+ *   vector. requirePhysician added to the entire router.
+ */
+
 import { Router } from "express";
+import { requirePhysician } from "../auth/requirePhysician";
 import { startAutomationSession, stopAutomationSession } from "./browser";
 import { recordTemplateFromPage } from "./templateRecorder";
 import { saveRecordedTemplate, listStoredTemplates } from "./templateStore";
 
 const router = Router();
+router.use(requirePhysician);
 
 router.post("/record", async (req, res) => {
   const { url, templateKey, name, description } = req.body || {};

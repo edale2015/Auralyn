@@ -2506,6 +2506,10 @@ export async function registerRoutes(
   app.use("/api/nyc-pilot", nycPilotRoutes);
   console.log("[NYCPilot] /api/nyc-pilot/* active (metrics·throughput·ems-activity·fda-readiness·deployments·compliance)");
 
+  const { default: fdaAuditRoutes } = await import("./routes/fdaAuditRoutes");
+  app.use("/api/fda-audit", fdaAuditRoutes);
+  console.log("[FDAAudit] /api/fda-audit/* active (summary·events·chain·part11·part820·iber·anomalies·export)");
+
   // ── Batch 40: AI Medical Orchestration Layer ─────────────────────────────────
   const { default: orchestrationRoutes } = await import("./ai-orchestration/orchestrationRoutes");
   app.use("/api/orchestration", orchestrationRoutes);
