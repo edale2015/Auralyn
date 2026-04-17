@@ -2,7 +2,70 @@
  * Deterioration Prediction Engine — early sepsis, shock, respiratory failure
  * Trend-aware: catches deterioration BEFORE crash via multi-point analysis.
  * Integrates with alert + escalation engines when thresholds are crossed.
+ *
+ * Also exports computeDeteriorationRisk() — lightweight streaming-vitals scorer
+ * used by ICU simulator and real-time WebSocket pipeline.
  */
+
+// ── Lightweight real-time scorer (ICU / IoT vitals stream) ───────────────────
+
+export type StreamVitals = {
+  hr:   number;
+  bp:   number;   // systolic
+  spo2: number;
+  temp: number;
+  rr?:  number;
+};
+
+export type StreamRisk = {
+  sepsisRisk:       number;
+  shockRisk:        number;
+  deteriorating:    boolean;
+  alert:            string | null;
+  contributingFactors: string[];
+  shockIndex:       number;
+};
+
+export function computeDeteriorationRisk(v: StreamVitals): StreamRisk {
+  const hr   = Math.max(0,  Math.min(300, v.hr));
+  const bp   = Math.max(0,  Math.min(300, v.bp));
+  const spo2 = Math.max(0,  Math.min(100, v.spo2));
+  const temp = Math.max(30, Math.min(45,  v.temp));
+  const rr   = v.rr != null ? Math.max(0, Math.min(60, v.rr)) : null;
+
+  let sepsis = 0; let shock = 0;
+  const factors: string[] = [];
+
+  if (temp > 38.3) { sepsis += 0.20; factors.push("Fever (>38.3°C)"); }
+  else if (temp < 36.0) { sepsis += 0.15; factors.push("Hypothermia (<36°C)"); }
+  if (hr > 100) { sepsis += 0.20; factors.push("Tachycardia (HR >100)"); }
+  if (bp < 90) { sepsis += 0.30; shock += 0.40; factors.push("Hypotension (SBP <90)"); }
+  else if (bp < 100) { sepsis += 0.10; shock += 0.15; factors.push("Low BP (<100)"); }
+  if (spo2 < 92) { shock += 0.30; sepsis += 0.10; factors.push("Hypoxia (SpO₂ <92%)"); }
+  else if (spo2 < 95) { shock += 0.10; factors.push("Low SpO₂ (<95%)"); }
+  if (rr !== null && rr > 22) { sepsis += 0.20; factors.push("Tachypnea (RR >22)"); }
+
+  const shockIndex = bp > 0 ? hr / bp : 0;
+  if (shockIndex > 1.0) { shock += 0.25; factors.push(`Shock index >1.0 (${shockIndex.toFixed(2)})`); }
+
+  const sepsisRisk = Math.min(sepsis, 1);
+  const shockRisk  = Math.min(shock,  1);
+  const deteriorating = sepsisRisk > 0.5 || shockRisk > 0.5;
+
+  let alert: string | null = null;
+  if (shockRisk > 0.7)        alert = "CRITICAL — Likely Shock";
+  else if (sepsisRisk > 0.7)  alert = "CRITICAL — Likely Sepsis";
+  else if (deteriorating)     alert = "WARNING — Deterioration Detected";
+
+  return { sepsisRisk, shockRisk, deteriorating, alert, contributingFactors: factors, shockIndex };
+}
+
+export function processStreamVitals(patient: { id: string; vitals: StreamVitals; [k: string]: any }) {
+  const risk = computeDeteriorationRisk(patient.vitals);
+  return { ...patient, risk, alert: risk.alert, timestamp: Date.now() };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 import { sendAlert }      from "../intervention/alertEngine";
 import { escalatePatient } from "../intervention/escalationEngine";
