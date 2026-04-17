@@ -1,0 +1,136 @@
+# Claude Review Prompts — Auralyn Medical Triage System
+
+> Send each slice file to Claude **separately** for best results.
+> After each slice, ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES."
+
+## System Overview — Clinical Pipeline & Orchestration
+
+Use file: `01_system_overview.md`
+
+Review the top-level clinical pipeline and orchestration.
+Focus on: architecture clarity, safety boundaries, module coupling,
+and any place where a hallucination or logic gap could bypass clinical safeguards.
+Critical rule: only the disposition/decision engine sets final clinical decisions.
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Diagnosis Engine — Bayesian + Fisher + Natural Gradient
+
+Use file: `02_diagnosis_engine.md`
+
+Review this diagnosis engine.
+Focus on: mathematical correctness of posterior updates,
+stability under missing or contradictory inputs,
+Fisher information scaling, natural gradient step safety,
+and failure modes that could bias toward low-risk diagnoses.
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Disposition & Safety Core (MOST CRITICAL)
+
+Use file: `03_disposition_safety.md`
+
+This is the core safety layer. It determines whether a patient is sent home vs escalated.
+CRITICAL — review for:
+  - Unsafe under-triage risk (patient sent home when they should be escalated)
+  - Logic gaps in red flag detection
+  - Conflicts between hallucination guards
+  - Any code path where a dangerous case could incorrectly pass all gates
+  - Race conditions between safety checks
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Validation Discipline — Golden Cases, Adversarial, Calibration
+
+Use file: `04_validation.md`
+
+Review this validation system.
+Focus on:
+  - Whether unsafe cases can slip through test coverage
+  - Weaknesses in adversarial case generation
+  - Missing failure scenarios (sepsis, PE, ACS, stroke edge cases)
+  - Calibration flaws that could mask confidence errors
+  - Whether the validation gate threshold is appropriately conservative
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Control Tower & Real-Time Streaming
+
+Use file: `05_control_tower.md`
+
+Review this real-time patient monitoring system.
+Focus on:
+  - Stale state and missed update scenarios
+  - Race conditions in concurrent patient streams
+  - Incorrect risk prioritization (low-risk patient getting ICU slot)
+  - WebSocket auth and tenant isolation gaps
+  - Dashboard data consistency under high load
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Digital Twin & Synthetic Case Generation
+
+Use file: `06_simulation.md`
+
+Review this simulation and case generation layer.
+Focus on:
+  - Realism of generated patient cases
+  - Adequate edge-case coverage (sepsis, shock, PE, ACS, stroke)
+  - Biases in synthetic data that could hide validation gaps
+  - Whether the digital twin accurately reflects real clinical deterioration
+  - Failure to stress-test dangerous corner cases
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## Clinical RAG Copilot — KB-Grounded Answers
+
+Use file: `07_clinical_rag.md`
+
+This KB-grounded clinical answer system must NEVER influence final disposition.
+Review for:
+  - Any pathway where RAG output could leak into disposition decisions
+  - False confidence signals from the uncertainty layer
+  - Weak grounding logic (hallucinated citations or unsupported claims)
+  - Missing physician review gate enforcement
+  - Audit trail completeness for regulatory purposes
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## RLHF & Safe Learning System
+
+Use file: `08_rlhf.md`
+
+Review this learning system.
+Focus on:
+  - Risk of unsafe drift in clinical weights over time
+  - Whether the maxDeltaPct bound is sufficient to prevent dangerous updates
+  - Evidence threshold adequacy (minEvidence = 5 — is this enough?)
+  - Physician gating effectiveness
+  - Whether rejected proposals correctly prevent future re-application
+  - Weight update persistence and DB durability
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+## FDA & Audit Layer — 21 CFR Part 11 / Part 820
+
+Use file: `09_fda_audit.md`
+
+Review this audit and regulatory compliance layer.
+Focus on:
+  - Completeness of audit traceability (every clinical decision traceable)
+  - SHA-256 chain tamper resistance
+  - Missing required fields for 21 CFR Part 11 / Part 820 compliance
+  - Whether the audit chain can be forged or gaps introduced
+  - FDA De Novo submission readiness gaps
+
+> Then ask: "List the TOP 5 MOST DANGEROUS FAILURE MODES in this section. Be specific. Do not give generic advice. Focus on real-world clinical risk."
+
+---
+
+## Final Meta Prompt (send after all slices)
+
+You have reviewed all modules of a medical triage system. Now answer:
+1. Where can unsafe **under-triage** still occur?
+2. What is the **single most dangerous failure path**?
+3. Which module gives a **false sense of safety**?
+4. What should be **fixed first** before clinical deployment?
