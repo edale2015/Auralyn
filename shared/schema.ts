@@ -1603,6 +1603,72 @@ export const clinicalAnswerAudit = pgTable("clinical_answer_audit", {
 });
 export type ClinicalAnswerAudit = typeof clinicalAnswerAudit.$inferSelect;
 
+// ─── Cross-Model Review Pipeline ──────────────────────────────────────────
+
+export const crossModelReviews = pgTable("cross_model_reviews", {
+  id:                   serial("id").primaryKey(),
+  articleId:            integer("article_id"),
+  claudeRecommendations: text("claude_recommendations").notNull(),
+  relevantCode:         jsonb("relevant_code").$type<Record<string, string>>().default({}),
+  articleSummary:       text("article_summary"),
+  openaiSummary:        text("openai_summary"),
+  openaiReview:         jsonb("openai_review").$type<any>(),
+  status:               text("status").notNull().default("pending"),
+  createdAt:            timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type CrossModelReview = typeof crossModelReviews.$inferSelect;
+
+export const reviewSlices = pgTable("review_slices", {
+  id:         serial("id").primaryKey(),
+  sliceId:    text("slice_id").notNull(),
+  title:      text("title").notNull(),
+  prompt:     text("prompt").notNull(),
+  files:      jsonb("files").$type<string[]>().notNull().default([]),
+  exportPath: text("export_path"),
+  createdAt:  timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ReviewSlice = typeof reviewSlices.$inferSelect;
+
+export const claudeSliceReviews = pgTable("claude_slice_reviews", {
+  id:             serial("id").primaryKey(),
+  reviewSliceId:  integer("review_slice_id").notNull(),
+  claudeFindings: text("claude_findings").notNull(),
+  status:         text("status").notNull().default("completed"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ClaudeSliceReview = typeof claudeSliceReviews.$inferSelect;
+
+export const openaiSliceReviews = pgTable("openai_slice_reviews", {
+  id:                  serial("id").primaryKey(),
+  reviewSliceId:       integer("review_slice_id").notNull(),
+  claudeSliceReviewId: integer("claude_slice_review_id").notNull(),
+  summaryForUser:      text("summary_for_user").notNull(),
+  reviewJson:          jsonb("review_json").$type<any>().notNull(),
+  overallVerdict:      text("overall_verdict").notNull(),
+  status:              text("status").notNull().default("completed"),
+  createdAt:           timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type OpenaiSliceReview = typeof openaiSliceReviews.$inferSelect;
+
+export const sliceProposals = pgTable("slice_proposals", {
+  id:                  serial("id").primaryKey(),
+  reviewSliceId:       integer("review_slice_id").notNull(),
+  openaiSliceReviewId: integer("openai_slice_review_id").notNull(),
+  title:               text("title").notNull(),
+  rationale:           text("rationale").notNull(),
+  affectedFiles:       jsonb("affected_files").$type<string[]>().default([]),
+  patchBundle:         jsonb("patch_bundle").$type<Record<string, string>>().default({}),
+  validationPlan:      jsonb("validation_plan").$type<string[]>().default([]),
+  validationStatus:    text("validation_status").notNull().default("pending"),
+  approved:            boolean("approved").notNull().default(false),
+  approvedBy:          text("approved_by"),
+  githubBranch:        text("github_branch"),
+  githubPrUrl:         text("github_pr_url"),
+  replitStatus:        text("replit_status").notNull().default("pending"),
+  createdAt:           timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type SliceProposal = typeof sliceProposals.$inferSelect;
+
 // ─── Research Pipeline ─────────────────────────────────────────────────────
 
 export const researchArticles = pgTable("research_articles", {

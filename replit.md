@@ -2239,3 +2239,65 @@ CI workflow: `.github/workflows/validate-research-upgrade.yml`
 ### Packages Installed
 - rss-parser (RSS feed parsing)
 - @octokit/rest (GitHub API client)
+
+## Slice-Native Research Pipeline (Cross-Model)
+
+### Overview
+Claude slice export → Claude findings per slice → OpenAI review per slice → proposals per slice → validate per slice → human approve per slice → GitHub PR per slice → Replit review/implement per slice.
+
+Second-pass model: OpenAI GPT-4o acts as conservative clinical safety reviewer for Claude's recommendations before any code change is made.
+
+### DB Tables (5 new tables, created via psql)
+- `cross_model_reviews` — Claude recommendations → OpenAI review results (full-article path)
+- `review_slices` — slice definitions (sliceId, title, prompt, files)
+- `claude_slice_reviews` — Claude findings submitted per slice
+- `openai_slice_reviews` — OpenAI per-slice review results (summaryForUser, reviewJson, overallVerdict)
+- `slice_proposals` — per-slice proposals (validation_status, approved, github_branch, github_pr_url, replit_status)
+
+### Backend Modules
+- `server/research/openaiReviewClient.ts` — GPT-4o chat completion with JSON mode; conservative clinical reviewer
+- `server/research/crossModelCoordinator.ts` — Claude → OpenAI handoff; persists to cross_model_reviews
+- `server/research/replitHandoffBuilder.ts` — builds REVIEW_PACKET.md, AGENT_SKILL.md, IMPLEMENTATION_TASK.md bundles
+- `server/research/exportToGitHubAndReplit.ts` — legacy full-article export (GitHub + Replit packet)
+- `server/research/openaiSliceReview.ts` — per-slice OpenAI review using claude_slice_reviews
+- `server/research/sliceProposalBuilder.ts` — converts OAI review upgrades → slice_proposals rows
+- `server/research/sliceValidation.ts` — lightweight safety checklist gate (5 checks, red-flag regex)
+- `server/research/sliceApproval.ts` — human approval gate (requires validationStatus=passed + approvedBy)
+- `server/research/sliceGitHubReplitExport.ts` — per-slice GitHub branch + PR + SLICE_REVIEW_PACKET.md
+
+### API Routes
+`/api/claude-slices/*` — slice definitions + Claude findings
+- GET  `/api/claude-slices/` — list all slices with review counts
+- GET  `/api/claude-slices/:sliceId` — slice + all reviews + proposals
+- POST `/api/claude-slices/create` — create new review slice
+- POST `/api/claude-slices/submit-findings` — store Claude findings for a slice
+
+`/api/slice-pipeline/*` — slice pipeline orchestration
+- POST `/api/slice-pipeline/openai-review/:sliceId` — run OpenAI second-pass review
+- POST `/api/slice-pipeline/build-proposals/:sliceId` — create proposals from OAI review
+- POST `/api/slice-pipeline/validate-proposal/:id` — run validation checklist
+- POST `/api/slice-pipeline/approve-proposal/:id` — human approval (requires approvedBy)
+- POST `/api/slice-pipeline/reject-proposal/:id` — reject proposal
+- POST `/api/slice-pipeline/export-proposal/:id` — export to GitHub + Replit packet
+- GET  `/api/slice-pipeline/proposals/:sliceId` — list proposals for slice
+- GET  `/api/slice-pipeline/proposal/:id` — get single proposal
+
+`/api/cross-model/*` — full-article cross-model review
+- POST `/api/cross-model/review` — trigger Claude findings → OpenAI review
+- GET  `/api/cross-model/reviews` — list all cross-model reviews
+- GET  `/api/cross-model/reviews/:id` — get one review
+- GET  `/api/cross-model/review/:id` — get one review (singular alias for UI)
+- POST `/api/cross-model/convert/:id` — convert OAI review → proposed_upgrades
+- POST `/api/cross-model/export-replit/:proposalId` — export proposal → GitHub + Replit
+
+### UI Pages
+- `client/src/pages/SlicePipelineAdmin.tsx` at `/slice-pipeline`
+  Two-panel: slice list + create (left) | step-by-step workflow per slice (right)
+  Steps: 1. Submit Claude findings → 2. Run OAI review → 3. Build proposals → 4. Validate/Approve/Export
+- `client/src/pages/CrossModelReviewInbox.tsx` at `/cross-model-review`
+  Load review by ID → see Claude + OpenAI findings → convert to proposals → validate/approve/export
+
+Sidebar: Self-Developing AI → Cross-Model Review Inbox + Slice Pipeline Admin
+
+### GitHub Setup (same as Medium Scout)
+GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BASE_BRANCH

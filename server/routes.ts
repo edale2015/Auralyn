@@ -2682,6 +2682,15 @@ export async function registerRoutes(
   app.use("/api/research", researchRoutes);
   console.log("[Research] Medium Scout pipeline at /api/research/* (scan|articles|triage|summary|propose|validate|approve|export-github|upgrades|exports|pipeline)");
 
+  // ── Slice Pipeline: Claude slice → OAI review → proposals → validate → approve → GitHub/Replit ──
+  const { default: claudeSliceRoutes }   = await import("./routes/claudeSliceRoutes");
+  const { default: slicePipelineRoutes } = await import("./routes/slicePipelineRoutes");
+  const { default: crossModelRoutes }    = await import("./routes/crossModelReviewRoutes");
+  app.use("/api/claude-slices",   claudeSliceRoutes);
+  app.use("/api/slice-pipeline",  slicePipelineRoutes);
+  app.use("/api/cross-model",     crossModelRoutes);
+  console.log("[SlicePipeline] /api/claude-slices /api/slice-pipeline /api/cross-model active");
+
   return httpServer;
 }
 
