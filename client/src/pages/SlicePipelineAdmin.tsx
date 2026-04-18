@@ -455,13 +455,9 @@ export default function SlicePipelineAdmin() {
                             />
                             <span className="font-medium text-sm">{p.title}</span>
                           </div>
-                          <div className="text-xs text-neutral-400 mt-1 ml-4">{p.rationale}</div>
-                          {p.affectedFiles.length > 0 && (
-                            <div className="text-xs text-neutral-500 mt-1 ml-4">
-                              Files: {p.affectedFiles.join(", ")}
-                            </div>
-                          )}
-                          <div className="text-xs text-neutral-500 mt-1 ml-4 flex gap-3">
+                          <div className="text-sm text-neutral-300 mt-1 ml-4">{p.rationale}</div>
+
+                          <div className="mt-3 text-xs text-neutral-400 ml-4 flex gap-3 flex-wrap">
                             <span>
                               Validation:{" "}
                               <span className={
@@ -481,42 +477,68 @@ export default function SlicePipelineAdmin() {
                               <span className="text-blue-400">{p.replitStatus}</span>
                             )}
                           </div>
+
+                          {p.affectedFiles.length > 0 && (
+                            <div className="mt-3 ml-4">
+                              <div className="text-xs font-medium text-neutral-400 mb-1">Affected Files</div>
+                              <ul className="list-disc pl-4 space-y-0.5">
+                                {p.affectedFiles.map(f => (
+                                  <li key={f} className="text-xs text-neutral-300">{f}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {p.validationPlan.length > 0 && (
+                            <div className="mt-3 ml-4">
+                              <div className="text-xs font-medium text-neutral-400 mb-1">Validation Plan</div>
+                              <ul className="list-disc pl-4 space-y-0.5">
+                                {p.validationPlan.map((v, idx) => (
+                                  <li key={idx} className="text-xs text-neutral-300">{v}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
                           {p.githubPrUrl && (
-                            <a
-                              href={p.githubPrUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-blue-400 hover:underline ml-4 mt-1 block"
-                              data-testid={`link-pr-${p.id}`}
-                            >
-                              View PR →
-                            </a>
+                            <div className="mt-3 ml-4 text-sm">
+                              <span className="text-neutral-400">GitHub PR: </span>
+                              <a
+                                href={p.githubPrUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-blue-400 hover:underline"
+                                data-testid={`link-pr-${p.id}`}
+                              >
+                                {p.githubPrUrl}
+                              </a>
+                            </div>
                           )}
                         </div>
-                        <div className="flex flex-col gap-2 min-w-[9rem]">
+                        <div className="flex flex-col gap-2 min-w-[220px]">
                           <button
                             data-testid={`button-validate-${p.id}`}
                             onClick={() => validateProposal(p.id)}
                             disabled={busy(`validate-${p.id}`)}
-                            className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs hover:bg-amber-500 disabled:opacity-50"
+                            className="rounded-xl bg-amber-600 px-4 py-2 text-xs hover:bg-amber-500 disabled:opacity-50"
                           >
-                            {busy(`validate-${p.id}`) ? "…" : "Validate"}
+                            {busy(`validate-${p.id}`) ? "Validating..." : "5. Validate"}
                           </button>
                           <button
                             data-testid={`button-approve-${p.id}`}
                             onClick={() => approveProposal(p.id)}
                             disabled={p.approved || p.validationStatus !== "passed" || busy(`approve-${p.id}`)}
-                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs hover:bg-emerald-500 disabled:opacity-50"
+                            className="rounded-xl bg-emerald-600 px-4 py-2 text-xs hover:bg-emerald-500 disabled:opacity-50"
                           >
-                            {busy(`approve-${p.id}`) ? "…" : "Approve"}
+                            {busy(`approve-${p.id}`) ? "Approving..." : "6. Human Approve"}
                           </button>
                           <button
                             data-testid={`button-export-${p.id}`}
                             onClick={() => exportProposal(p.id)}
                             disabled={!p.approved || busy(`export-${p.id}`)}
-                            className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs hover:bg-violet-500 disabled:opacity-50"
+                            className="rounded-xl bg-violet-600 px-4 py-2 text-xs hover:bg-violet-500 disabled:opacity-50"
                           >
-                            {busy(`export-${p.id}`) ? "…" : "→ GitHub"}
+                            {busy(`export-${p.id}`) ? "Exporting..." : "7. Export to GitHub + Replit"}
                           </button>
                         </div>
                       </div>

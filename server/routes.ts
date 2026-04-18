@@ -2211,6 +2211,11 @@ export async function registerRoutes(
   app.use("/api/control-tower", controlTowerRoutes);
   console.log("[ControlTower] Consensus engine | disposition guardrail | next-best-question | interrupt | MCP | parallel dispatch wired at /api/control-tower/*");
 
+  // ── Control Tower Validation Dashboard + Gold Case Generators ────────────
+  const { default: controlTowerValidationRoutes } = await import("./routes/controlTowerValidationRoutes");
+  app.use("/api/control-tower-validation", controlTowerValidationRoutes);
+  console.log("[CTValidation] /api/control-tower-validation/validation-dashboard|calibration|generate-cases/:type active");
+
   console.log("[LearningEngine] Patient memory | population learning | personalization wired at /api/learning-engine/*");
   console.log("[Simulation] 10k patient synthetic cohort engine wired at /api/sim-cohort/*");
   console.log("[Monitoring] Drift detection | risk governance wired at /api/monitoring/*");

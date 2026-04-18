@@ -2301,3 +2301,24 @@ Sidebar: Self-Developing AI → Cross-Model Review Inbox + Slice Pipeline Admin
 
 ### GitHub Setup (same as Medium Scout)
 GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BASE_BRANCH
+
+## Control Tower Validation Dashboard + Gold Case Generators
+
+### New Files
+- `server/controlTower/validationDashboard.ts` — fixed to use real `validation_runs` schema (total_cases, accuracy, sensitivity, specificity, f1, brier, notes); computes unsafeUndercallRate = 1 - sensitivity
+- `server/validation/generators/peGenerator.ts` — 100+ synthetic PE cases (SOB + tachycardia + pleuritic pain + hemoptysis + O2 sat), all expectedDisposition=ed
+- `server/validation/generators/acsGenerator.ts` — 100+ synthetic ACS cases (chest pain + radiation + diaphoresis + syncope), all expectedDisposition=ed
+- `server/validation/generators/sepsisGenerator.ts` — 100+ synthetic sepsis cases (fever + tachy + hypotension + AMS), all expectedDisposition=ed
+- `server/routes/controlTowerValidationRoutes.ts` — wired at `/api/control-tower-validation/*`
+
+### API Routes
+- GET  `/api/control-tower-validation/validation-dashboard` — live trend data (passRates, unsafeTrend, brierTrend, timestamps)
+- POST `/api/control-tower-validation/calibration` — per-complaint calibration (avgConfidence, accuracy, gap)
+- POST `/api/control-tower-validation/generate-cases/:type` — generate n synthetic gold-standard cases; type=pe|acs|sepsis
+
+### SlicePipelineAdmin Enhancement
+Proposal cards in Step 4 now show:
+- Affected files as a bulleted list
+- Validation plan as a bulleted list
+- GitHub PR as a full URL link
+- Step-numbered action buttons: "5. Validate", "6. Human Approve", "7. Export to GitHub + Replit"

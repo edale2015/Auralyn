@@ -1,0 +1,124 @@
+frontend/src/pages/SlicePipelineAdmin.tsx
+import { useMemo, useState } from 'react';
+                  {proposals.map((proposal) => (
+                    <div key={proposal.id} className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="font-semibold">{proposal.title}</div>
+                          <div className="text-sm text-neutral-300 mt-1">{proposal.rationale}</div>
+
+
+                          <div className="mt-3 text-xs text-neutral-400">
+                            Validation: {proposal.validationStatus} | Approved: {String(proposal.approved)}
+                          </div>
+
+
+                          <div className="mt-3">
+                            <div className="text-sm font-medium mb-1">Affected Files</div>
+                            <ul className="list-disc pl-5 text-sm text-neutral-300 space-y-1">
+                              {proposal.affectedFiles.map((f) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+
+
+                          <div className="mt-3">
+                            <div className="text-sm font-medium mb-1">Validation Plan</div>
+                            <ul className="list-disc pl-5 text-sm text-neutral-300 space-y-1">
+                              {proposal.validationPlan.map((v, idx) => (
+                                <li key={idx}>{v}</li>
+                              ))}
+                            </ul>
+                          </div>
+
+
+                          {proposal.githubPrUrl && (
+                            <div className="mt-3 text-sm">
+                              <span className="text-neutral-400">GitHub PR:</span>{' '}
+                              <a className="text-blue-400 hover:underline" href={proposal.githubPrUrl} target="_blank" rel="noreferrer">
+                                {proposal.githubPrUrl}
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+
+                        <div className="flex flex-col gap-2 min-w-[220px]">
+                          <button
+                            onClick={() => validateProposal(proposal.id)}
+                            className="rounded-xl bg-amber-600 px-4 py-2 hover:bg-amber-500 disabled:opacity-50"
+                            disabled={loading === `validate-${proposal.id}`}
+                          >
+                            {loading === `validate-${proposal.id}` ? 'Validating...' : '5. Validate'}
+                          </button>
+                          <button
+                            onClick={() => approveProposal(proposal.id)}
+                            className="rounded-xl bg-emerald-600 px-4 py-2 hover:bg-emerald-500 disabled:opacity-50"
+                            disabled={loading === `approve-${proposal.id}`}
+                          >
+                            {loading === `approve-${proposal.id}` ? 'Approving...' : '6. Human Approve'}
+                          </button>
+                          <button
+                            onClick={() => exportProposal(proposal.id)}
+                            className="rounded-xl bg-violet-600 px-4 py-2 hover:bg-violet-500 disabled:opacity-50"
+                            disabled={loading === `export-${proposal.id}`}
+                          >
+                            {loading === `export-${proposal.id}` ? 'Exporting...' : '7. Export to GitHub + Replit'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+
+        {message && (
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4 text-sm text-neutral-200">
+            {message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+frontend/src/App.tsx
+
+Add the route:
+
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import SlicePipelineAdmin from './pages/SlicePipelineAdmin';
+
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/admin/slice-pipeline" element={<SlicePipelineAdmin />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+server/routes/adminClaudeExportRoutes.ts
+
+Make sure the export response includes ok: true and the slices array so the UI can render properly:
+
+router.post('/export-claude-slices', async (_req, res) => {
+  try {
+    const result = await exportClaudeSlices();
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      error: error?.message ?? 'Unknown export error',
+    });
+  }
+});
+Suggested workflo
