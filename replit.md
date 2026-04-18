@@ -2322,3 +2322,33 @@ Proposal cards in Step 4 now show:
 - Validation plan as a bulleted list
 - GitHub PR as a full URL link
 - Step-numbered action buttons: "5. Validate", "6. Human Approve", "7. Export to GitHub + Replit"
+
+## Session — Code Review Fixes + Command Center v2/v3/v4 + NYC Pilot + FDA Audit
+
+### Code Review Fixes (T001–T007) — Confirmed Applied (Prior Sessions)
+All 7 critical/high findings from the code review were resolved before this session:
+- T001: `ehrOrchestrator.ts` stub theater removed → delegates to `ehrWriter.ts`; `runEHRAction()` deleted
+- T002: `fhirAuth.ts` per-tenant `Map<cacheKey, TokenCache>` replacing single global token; `smartAuth.ts` deleted
+- T003: `fhirRoutes.ts` — `requirePhysician` applied to entire router; clinicId forced from JWT (never body)
+- T004: `visionAgent.ts` — `fallbackChain()` deleted; EHR writes must go through `executeWithScope()`
+- T005: `credentialVault.ts` — AES-256-GCM at-rest encryption; `secretJson` never stored plaintext
+- T006: `approvalGate.ts` — blocking 15-minute poll replaced with `checkApprovalStatus()` + suspend/resume
+- T007: `policyEngine.ts` — drug/chart/order keyword payload scanner + URL allowlist + risk score matrix
+
+### New Backend Routes (T008–T011) — Already Built + Registered
+- `/api/cc-v2/*` — EHR write, write audit log, FHIR sync, audit replay, EHR adapter status
+- `/api/cc-v3/*` — Deterioration predictions, ICU bed network, transfer queue/approve, surge alerts
+- `/api/cc-v4/*` — Digital twin, EMS dispatch, RLHF feedback, outcome predictions, "what-if" simulation
+- `/api/nyc-pilot/*` — NYC pilot metrics, hourly throughput, FDNY EMS feed, FDA readiness checklist, env deployments, HIPAA/FDA compliance
+- `/api/fda-audit/*` — 21 CFR Part 11/820 checklists, SHA-256 audit chain, IBER/De Novo status, anomaly detector, admin export
+
+### Frontend Pages — All Implemented
+- `CommandCenterV2Page.tsx` (312 lines) — EHR write form + live write audit table + audit replay
+- `CommandCenterV3Page.tsx` (302 lines) — Deterioration risk cards + ICU bed network + transfer approval
+- `CommandCenterV4Page.tsx` (419 lines) — Digital twin vitals + EMS unit map + RLHF feedback + outcome grid
+- `NYCPilotPage.tsx` (454 lines) — Pilot KPIs + throughput chart + EMS feed + FDA readiness + env status
+- `FDAAuditPage.tsx` (532 lines) — Part 11/820 grids + audit event log + chain integrity + IBER status + export
+
+### Sidebar Entries Added (AdminLayout.tsx)
+- **Command Centers** pinned group: + CC v2, CC v3, CC v4
+- **Administration** section: + NYC Pilot Dashboard, FDA Audit (21 CFR)

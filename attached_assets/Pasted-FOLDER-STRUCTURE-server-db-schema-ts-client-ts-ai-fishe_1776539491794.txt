@@ -1,0 +1,275 @@
+FOLDER STRUCTURE
+server/
+  db/
+    schema.ts
+    client.ts
+  ai/
+    fisher.ts
+    bayesianUpdater.ts
+    causalGraph.ts
+    activeInference.ts
+    hallucinationGuards.ts
+    safetyGovernor.ts
+  clinical/
+    diagnosisEngine.ts
+    dispositionEngine.ts
+  services/
+    kbService.ts
+    auditService.ts
+  routes/
+    diagnosisRoutes.ts
+    controlTowerRoutes.ts
+  app.ts
+🗄️ POSTGRES SCHEMA (DRIZZLE)
+// server/db/schema.ts
+
+
+import { pgTable, text, jsonb, numeric } from 'drizzle-orm/pg-core';
+
+
+export const diagnoses = pgTable('diagnoses', {
+  id: text('id').primaryKey(),
+  name: text('name'),
+  prior: numeric('prior'),
+});
+
+
+export const featureLikelihoods = pgTable('feature_likelihoods', {
+  id: text('id').primaryKey(),
+  diagnosisId: text('diagnosis_id'),
+  feature: text('feature'),
+  presentProb: numeric('present_prob'),
+  absentProb: numeric('absent_prob'),
+});
+
+
+export const evidenceMap = pgTable('evidence_map', {
+  diagnosisId: text('diagnosis_id'),
+  features: jsonb('features'),
+});
+
+
+export const contradictionMap = pgTable('contradiction_map', {
+  diagnosisId: text('diagnosis_id'),
+  features: jsonb('features'),
+});
+
+
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey(),
+  payload: jsonb('payload'),
+});
+🔌 DB CLIENT
+// server/db/client.ts
+
+
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+
+export const db = drizzle(pool);
+📚 KB SERVICE
+// server/services/kbService.ts
+
+
+import { db } from '../db/client';
+import { diagnoses, featureLikelihoods, evidenceMap, contradictionMap } from '../db/schema';
+
+
+export async function loadKB() {
+  const dx = await db.select().from(diagnoses);
+  const likelihoods = await db.select().from(featureLikelihoods);
+  const evidence = await db.select().from(evidenceMap);
+  const contradictions = await db.select().from(contradictionMap);
+
+
+  return {
+    diagnoses: dx,
+    likelihoods,
+    evidence,
+    contradictions,
+  };
+}
+🧠 DIAGNOSIS ENGINE (WIRED)
+// server/clinical/diagnosisEngine.ts
+
+
+import { updateBeliefsWithFisher } from '../ai/bayesianUpdater';
+import { runHallucinationGuards } from '../ai/hallucinationGuards';
+
+
+export async function runDiagnosis(input: any, kb: any) {
+  const prior: any = {};
+
+
+  kb.diagnoses.forEach((d: any) => {
+    prior[d.id] = Number(d.prior);
+  });
+
+
+  const likelihoodTable: any = {};
+
+
+  kb.likelihoods.forEach((l: any) => {
+    if (!likelihoodTable[l.diagnosisId]) {
+      likelihoodTable[l.diagnosisId] = {};
+    }
+
+
+    likelihoodTable[l.diagnosisId][l.feature] = {
+      present: { [l.diagnosisId]: Number(l.presentProb) },
+      absent: { [l.diagnosisId]: Number(l.absentProb) },
+    };
+  });
+
+
+  const result = updateBeliefsWithFisher(
+    prior,
+    likelihoodTable,
+    input.observations,
+  );
+
+
+  const evidenceMap: any = {};
+  kb.evidence.forEach((e: any) => {
+    evidenceMap[e.diagnosisId] = e.features;
+  });
+
+
+  const contradictionMap: any = {};
+  kb.contradictions.forEach((c: any) => {
+    contradictionMap[c.diagnosisId] = c.features;
+  });
+
+
+  const guard = runHallucinationGuards({
+    posterior: result.posterior,
+    observations: input.observations,
+    evidenceMap,
+    contradictionMap,
+    presentationProfile: input.presentationProfile,
+  });
+
+
+  return {
+    ...result,
+    guard,
+  };
+}
+🛑 DISPOSITION ENGINE
+// server/clinical/dispositionEngine.ts
+
+
+import { governDisposition } from '../ai/safetyGovernor';
+
+
+export function runDisposition(input: any) {
+  return governDisposition(
+    input.posterior,
+    input.proposedDisposition,
+    input.guard,
+    input.redFlagCount,
+  );
+}
+📜 AUDIT SERVICE
+// server/services/auditService.ts
+
+
+import { db } from '../db/client';
+import { auditLog } from '../db/schema';
+import crypto from 'crypto';
+
+
+export async function logAudit(payload: any) {
+  const hash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(payload))
+    .digest('hex');
+
+
+  await db.insert(auditLog).values({
+    id: hash,
+    payload,
+  });
+
+
+  return hash;
+}
+🌐 ROUTES
+// server/routes/diagnosisRoutes.ts
+
+
+import express from 'express';
+import { loadKB } from '../services/kbService';
+import { runDiagnosis } from '../clinical/diagnosisEngine';
+import { logAudit } from '../services/auditService';
+
+
+const router = express.Router();
+
+
+router.post('/diagnose', async (req, res) => {
+  const kb = await loadKB();
+
+
+  const result = await runDiagnosis(req.body, kb);
+
+
+  await logAudit(result);
+
+
+  res.json(result);
+});
+
+
+export default router;
+// server/routes/controlTowerRoutes.ts
+
+
+import express from 'express';
+import { rankPatientsByRisk } from '../ai/riskRanking';
+
+
+const router = express.Router();
+
+
+router.post('/rank', (req, res) => {
+  const ranked = rankPatientsByRisk(req.body);
+  res.json(ranked);
+});
+
+
+export default router;
+🚀 APP ENTRY
+// server/app.ts
+
+
+import express from 'express';
+import diagnosisRoutes from './routes/diagnosisRoutes';
+import controlTowerRoutes from './routes/controlTowerRoutes';
+
+
+const app = express();
+app.use(express.json());
+
+
+app.use('/api/diagnosis', diagnosisRoutes);
+app.use('/api/control-tower', controlTowerRoutes);
+
+
+app.listen(3000, () => {
+  console.log('Auralyn system running on port 3000');
+});
+🔐 ENV
+DATABASE_URL=postgres://user:password@localhost:5432/auralyn
+🧪 WHAT YOU SHOULD TEST FIRST
+Sparse symptom input → ensure escalation
+Contradictory input → ensure guard triggers
+High-risk red flag → ensure override
+Multi-patient ranking consistency
+Audit logs being written every time

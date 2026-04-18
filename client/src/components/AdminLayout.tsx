@@ -214,6 +214,8 @@ const NAV_SECTIONS = [
       { path: "/engines", label: "Engine Control Center", icon: Settings },
       { path: "/patient-queue", label: "Live Patient Queue", icon: Activity },
       { path: "/stress-test", label: "Stress Test & Metrics", icon: Zap },
+      { path: "/nyc-pilot", label: "NYC Pilot Dashboard", icon: MapPin },
+      { path: "/fda-audit", label: "FDA Audit (21 CFR)", icon: ShieldCheck },
     ],
   },
 ];
@@ -245,6 +247,27 @@ const PINNED_COMMAND_CENTERS = [
     label: "Autonomous Learning",
     icon: Sparkles,
     testId: "nav-autonomous-learning",
+    className: "",
+  },
+  {
+    path: "/command-center-v2",
+    label: "CC v2 — EHR Writes + Audit",
+    icon: HeartPulse,
+    testId: "nav-command-center-v2",
+    className: "",
+  },
+  {
+    path: "/command-center-v3",
+    label: "CC v3 — Predictive / ICU",
+    icon: LineChart,
+    testId: "nav-command-center-v3",
+    className: "",
+  },
+  {
+    path: "/command-center-v4",
+    label: "CC v4 — Digital Twin + EMS",
+    icon: Radar,
+    testId: "nav-command-center-v4",
     className: "",
   },
 ];
