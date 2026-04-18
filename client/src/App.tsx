@@ -111,6 +111,7 @@ import CommandCenterV3Page from "@/pages/CommandCenterV3Page";
 import CommandCenterV4Page from "@/pages/CommandCenterV4Page";
 import NYCPilotPage        from "@/pages/NYCPilotPage";
 import HospitalWallPage    from "@/pages/HospitalWallPage";
+import ResearchInboxPage   from "@/pages/ResearchInboxPage";
 import FDAAuditPage        from "@/pages/FDAAuditPage";
 import AdminClaudeExportPage from "@/pages/AdminClaudeExportPage";
 import IntegrationHealthPage from "@/pages/IntegrationHealthPage";
@@ -234,6 +235,7 @@ function WorkbenchRouter() {
         <Route path="/command-center-v4">{() => <RoleGuard allowedRoles={["admin", "physician", "clinician"]}><CommandCenterV4Page /></RoleGuard>}</Route>
         <Route path="/nyc-pilot">{() => <RoleGuard allowedRoles={["admin", "physician"]}><NYCPilotPage /></RoleGuard>}</Route>
         <Route path="/hospital-wall">{() => <HospitalWallPage />}</Route>
+        <Route path="/research-inbox">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ResearchInboxPage /></RoleGuard>}</Route>
         <Route path="/fda-audit">{() => <RoleGuard allowedRoles={["admin", "physician"]}><FDAAuditPage /></RoleGuard>}</Route>
         <Route path="/admin/claude-export">{() => <RoleGuard allowedRoles={["admin"]}><AdminClaudeExportPage /></RoleGuard>}</Route>
         <Route path={ROUTES.INTEGRATION_HEALTH}>{() => <RoleGuard allowedRoles={["admin"]}><IntegrationHealthPage /></RoleGuard>}</Route>

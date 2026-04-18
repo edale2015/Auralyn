@@ -2183,3 +2183,59 @@ Admin-only tool at `/admin/claude-export` that packages the Auralyn codebase int
 - `manifest.json`
 - `REVIEW_PROMPTS.md` (copy-paste prompts for each slice)
 - `claude-review-slices.zip`
+
+## Medium Scout Research Pipeline (9 Modules)
+
+### Overview
+Auto-research → auto-propose → auto-validate → human-approve → GitHub PR
+Scans Medium/PubMed RSS feeds for medical AI articles, triages them, generates summaries,
+proposes code upgrades, validates against golden cases, and exports approved changes as GitHub PRs.
+
+### DB Tables (5 new tables, created via psql)
+- `research_articles` — ingested RSS articles (title, url UNIQUE, author, excerpt, tags, raw)
+- `research_reviews` — triage scores (relevance, trust, novelty, actionability, verdict)
+- `research_summaries` — AI or local summaries with 5 takeaways
+- `proposed_upgrades` — heuristic patch bundles awaiting validation + human approval
+- `github_exports` — branch names, commit SHAs, PR numbers after GitHub export
+
+### Backend Modules
+- `server/research/mediumScout.ts` — RSS scanner (Medium + PubMed feeds)
+- `server/research/articleTriage.ts` — keyword-based scoring, adopt/test_only/ignore verdicts
+- `server/research/articleSummarizer.ts` — local + GPT-4o-mini summary with 5 takeaways
+- `server/research/upgradePlanner.ts` — 6 clinical topic → code patch bundle mappings
+- `server/research/autoValidate.ts` — golden case harness gate (0 unsafe undercalls required)
+- `server/research/humanApproval.ts` — approval gate (requires validationStatus=passed)
+- `server/integrations/githubExporter.ts` — @octokit/rest branch + PR creation
+
+### API Route
+`/api/research/*` registered in server/routes.ts
+- GET  `/api/research/config` — GitHub + OpenAI config check (public)
+- GET  `/api/research/articles` — list all articles
+- GET  `/api/research/articles/:id` — article + review + summary + upgrades
+- POST `/api/research/scan` — trigger RSS feed scan (admin only)
+- POST `/api/research/triage/:articleId` — run triage scoring
+- POST `/api/research/summary/:articleId` — generate summary
+- POST `/api/research/propose/:articleId` — create upgrade proposal
+- POST `/api/research/validate/:upgradeId` — run validation harness
+- POST `/api/research/approve/:upgradeId` — human approval gate
+- POST `/api/research/reject/:upgradeId` — reject upgrade
+- POST `/api/research/export-github/:upgradeId` — create branch + PR (admin only)
+- POST `/api/research/pipeline/:articleId` — one-shot triage+summary+propose
+- GET  `/api/research/upgrades` — list all proposed upgrades
+- GET  `/api/research/exports` — list GitHub exports
+
+### UI
+`client/src/pages/ResearchInboxPage.tsx` at `/research-inbox`
+Sidebar: Self-Developing AI → Research Inbox (Medium Scout)
+
+### GitHub Setup (required for export)
+Set these environment secrets:
+- GITHUB_TOKEN — fine-grained PAT with Contents + Pull Requests write
+- GITHUB_OWNER — GitHub org or username
+- GITHUB_REPO — repository name
+- GITHUB_BASE_BRANCH — base branch (default: main)
+CI workflow: `.github/workflows/validate-research-upgrade.yml`
+
+### Packages Installed
+- rss-parser (RSS feed parsing)
+- @octokit/rest (GitHub API client)

@@ -1,0 +1,539 @@
+Cross-Model Review Inbox UI
+frontend/src/pages/CrossModelReviewInbox.tsx
+import { useEffect, useState } from "react";
+
+type CrossModelReview = {
+  id: number;
+  articleId?: number | null;
+  claudeRecommendations: string;
+  articleSummary?: string | null;
+  openaiSummary?: string | null;
+  openaiReview?: {
+    overallVerdict: "adopt" | "test_only" | "ignore";
+    recommendedUpgrades: Array<{
+      title: string;
+      rationale: string;
+      affectedFiles: string[];
+      codeRecommendations: string[];
+      safetyConcerns: string[];
+      validationPlan: string[];
+      verdict: "adopt" | "test_only" | "ignore";
+    }>;
+  } | null;
+  status: string;
+  createdAt?: string;
+};
+
+type ProposedUpgrade = {
+  id: number;
+  title: string;
+  rationale: string;
+  affectedFiles: string[];
+  validationStatus: string;
+  approved: boolean;
+  approvedBy?: string | null;
+};
+
+export default function CrossModelReviewInbox() {
+  const [reviewId, setReviewId] = useState("");
+  const [review, setReview] = useState<CrossModelReview | null>(null);
+  const [proposals, setProposals] = useState<ProposedUpgrade[]>([]);
+  const [approvedBy, setApprovedBy] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function loadReview() {
+    setMessage("");
+    const res = await fetch(`/api/cross-model/review/${reviewId}`);
+    const data = await res.json();
+    if (!data.ok) {
+      setMessage(data.error || "Failed to load review");
+      return;
+    }
+    setReview(data.review);
+  }
+
+  async function convertToProposals() {
+    if (!review) return;
+    setMessage("");
+    const res = await fetch(`/api/cross-model/convert/${review.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      setMessage(data.error || "Failed to convert");
+      return;
+    }
+    setProposals(data.proposals);
+  }
+
+  async function validateProposal(id: number) {
+    setMessage("");
+    const res = await fetch(`/api/research/validate/${id}`, { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      setMessage(data.error || "Validation failed");
+      return;
+    }
+    setMessage(`Validation complete for proposal ${id}: ${data.result.status}`);
+  }
+
+  async function approveProposal(id: number) {
+    setMessage("");
+    const res = await fetch(`/api/research/approve/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approvedBy }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      setMessage(data.error || "Approval failed");
+      return;
+    }
+    setMessage(`Approved proposal ${id}`);
+  }
+
+  async function exportToGitHubAndReplit(id: number) {
+    setMessage("");
+    const res = await fetch(`/api/cross-model/export-replit/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      setMessage(data.error || "Export failed");
+      return;
+    }
+    setMessage(
+      `Exported. Branch: ${data.export.branchName} | PR: ${data.export.prUrl}`
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral-950 text-white p-6">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Cross-Model Review Inbox</h1>
+          <p className="text-neutral-400 mt-2">
+            Claude findings → OpenAI review → proposals → validation → approval → GitHub/Replit handoff
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <div className="flex gap-3 items-end">
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">Review ID</label>
+              <input
+                value={reviewId}
+                onChange={(e) => setReviewId(e.target.value)}
+                className="rounded-xl bg-neutral-950 border border-neutral-700 px-3 py-2 w-48"
+              />
+            </div>
+            <button
+              onClick={loadReview}
+              className="rounded-xl bg-blue-600 px-4 py-2 hover:bg-blue-500"
+            >
+              Load Review
+            </button>
+            <button
+              onClick={convertToProposals}
+              disabled={!review}
+              className="rounded-xl bg-emerald-600 px-4 py-2 hover:bg-emerald-500 disabled:opacity-50"
+            >
+              Convert to Proposals
+            </button>
+          </div>
+        </div>
+
+        {review && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+              <h2 className="text-xl font-semibold mb-3">Claude Findings</h2>
+              <pre className="whitespace-pre-wrap text-sm text-neutral-200">
+                {review.claudeRecommendations}
+              </pre>
+            </div>
+
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+              <h2 className="text-xl font-semibold mb-3">OpenAI Summary</h2>
+              <p className="text-neutral-200 whitespace-pre-wrap">
+                {review.openaiSummary || "No summary available"}
+              </p>
+
+              {review.openaiReview && (
+                <div className="mt-4">
+                  <div className="text-sm text-neutral-400 mb-2">
+                    Overall verdict: <span className="text-white">{review.openaiReview.overallVerdict}</span>
+                  </div>
+                  <div className="space-y-3">
+                    {review.openaiReview.recommendedUpgrades.map((u, i) => (
+                      <div key={i} className="rounded-xl bg-neutral-950 border border-neutral-800 p-3">
+                        <div className="font-medium">{u.title}</div>
+                        <div className="text-sm text-neutral-300 mt-1">{u.rationale}</div>
+                        <div className="text-xs text-neutral-400 mt-2">
+                          Files: {u.affectedFiles.join(", ")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {proposals.length > 0 && (
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
+            <div className="flex gap-3 items-end mb-4">
+              <div>
+                <label className="block text-sm text-neutral-400 mb-1">Approved By</label>
+                <input
+                  value={approvedBy}
+                  onChange={(e) => setApprovedBy(e.target.value)}
+                  className="rounded-xl bg-neutral-950 border border-neutral-700 px-3 py-2 w-64"
+                />
+              </div>
+            </div>
+
+            <h2 className="text-xl font-semibold mb-4">Proposed Upgrades</h2>
+            <div className="space-y-4">
+              {proposals.map((p) => (
+                <div key={p.id} className="rounded-xl bg-neutral-950 border border-neutral-800 p-4">
+                  <div className="flex justify-between gap-4">
+                    <div>
+                      <div className="font-semibold">{p.title}</div>
+                      <div className="text-sm text-neutral-300 mt-1">{p.rationale}</div>
+                      <div className="text-xs text-neutral-400 mt-2">
+                        Files: {p.affectedFiles.join(", ")}
+                      </div>
+                      <div className="text-xs text-neutral-400 mt-1">
+                        Validation: {p.validationStatus} | Approved: {String(p.approved)}
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 min-w-48">
+                      <button
+                        onClick={() => validateProposal(p.id)}
+                        className="rounded-xl bg-amber-600 px-4 py-2 hover:bg-amber-500"
+                      >
+                        Auto-Validate
+                      </button>
+                      <button
+                        onClick={() => approveProposal(p.id)}
+                        className="rounded-xl bg-emerald-600 px-4 py-2 hover:bg-emerald-500"
+                      >
+                        Human Approve
+                      </button>
+                      <button
+                        onClick={() => exportToGitHubAndReplit(p.id)}
+                        className="rounded-xl bg-violet-600 px-4 py-2 hover:bg-violet-500"
+                      >
+                        Export to GitHub + Replit
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {message && (
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4 text-sm">
+            {message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+2) API route to fetch a single cross-model review
+server/routes/crossModelReviewRoutes.ts
+
+Add this:
+
+import { db } from '../db/client';
+
+router.get('/review/:crossModelReviewId', async (req, res) => {
+  try {
+    const id = Number(req.params.crossModelReviewId);
+    const rows = await db.execute(
+      `SELECT * FROM cross_model_reviews WHERE id = $1`,
+      [id],
+    );
+
+    const review = rows.rows[0];
+    if (!review) {
+      return res.status(404).json({ ok: false, error: 'Review not found' });
+    }
+
+    res.json({ ok: true, review });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+3) Replit handoff package builder
+
+This is the safest way to get “Replit reviews independently” without depending on an undocumented direct Replit Agent job API. Replit supports GitHub import, Git integration in-workspace, Agent review/autonomy settings, and Agent Skills. So we commit a review packet into the branch, then Replit imports/syncs that branch and Agent reviews/implements from the packet.
+
+server/research/replitHandoffBuilder.ts
+type ReplitHandoffInput = {
+  proposalId: number;
+  title: string;
+  rationale: string;
+  claudeRecommendations?: string;
+  openaiSummary?: string;
+  affectedFiles: string[];
+  codeRecommendations: string[];
+  validationPlan: string[];
+};
+
+export type ReplitHandoffBundle = Record<string, string>;
+
+export function buildReplitHandoffBundle(input: ReplitHandoffInput): ReplitHandoffBundle {
+  const reviewMd = `# Replit Review Packet
+
+Proposal ID: ${input.proposalId}
+
+## Title
+${input.title}
+
+## Rationale
+${input.rationale}
+
+## Claude Recommendations
+${input.claudeRecommendations ?? 'N/A'}
+
+## OpenAI Summary
+${input.openaiSummary ?? 'N/A'}
+
+## Affected Files
+${input.affectedFiles.map(f => `- ${f}`).join('\n')}
+
+## Code Recommendations
+${input.codeRecommendations.map(x => `- ${x}`).join('\n')}
+
+## Validation Requirements
+${input.validationPlan.map(x => `- ${x}`).join('\n')}
+
+## Constraints
+- Do not weaken hallucination safeguards
+- Do not bypass physician review
+- Do not let RAG outputs set final disposition
+- Preserve audit logging and validation gates
+- Prefer additive changes and small diffs
+`;
+
+  const skillMd = `# Auralyn Medical Safety Skill
+
+When reviewing or modifying this codebase:
+- Optimize for conservative clinical safety
+- Treat unsafe under-triage as the highest-risk failure
+- Never bypass validation gates
+- Never let source-grounded Q&A directly set disposition
+- Preserve auditability and review queues
+- Keep diffs small and explicit
+- Add tests where changes alter logic
+`;
+
+  const taskMd = `# Replit Agent Task
+
+Please independently review the proposed change, then implement only if the change:
+1. preserves all existing safety barriers
+2. does not introduce a path to unsafe home disposition
+3. keeps validation discipline intact
+4. improves maintainability or safety
+
+Then:
+- write code changes
+- explain what changed
+- list risks
+- list what should be re-validated
+`;
+
+  return {
+    'research/replit/REVIEW_PACKET.md': reviewMd,
+    'research/replit/AGENT_SKILL.md': skillMd,
+    'research/replit/IMPLEMENTATION_TASK.md': taskMd,
+  };
+}
+4) Export to GitHub branch with Replit packet included
+server/research/exportToGitHubAndReplit.ts
+import { db } from '../db/client';
+import { proposedUpgrades, crossModelReviews } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { exportUpgradeToGitHub } from '../integrations/githubExporter';
+import { buildReplitHandoffBundle } from './replitHandoffBuilder';
+import { Octokit } from '@octokit/rest';
+
+function getOctokit() {
+  return new Octokit({ auth: process.env.GITHUB_TOKEN! });
+}
+
+async function appendFilesToBranch(branchName: string, files: Record<string, string>, upgradeId: number) {
+  const octokit = getOctokit();
+  const owner = process.env.GITHUB_OWNER!;
+  const repo = process.env.GITHUB_REPO!;
+
+  for (const [filePath, content] of Object.entries(files)) {
+    try {
+      const existing = await octokit.repos.getContent({
+        owner,
+        repo,
+        path: filePath,
+        ref: branchName,
+      });
+
+      if (!Array.isArray(existing.data) && 'sha' in existing.data) {
+        await octokit.repos.createOrUpdateFileContents({
+          owner,
+          repo,
+          path: filePath,
+          message: `Research upgrade ${upgradeId}: update ${filePath}`,
+          content: Buffer.from(content, 'utf8').toString('base64'),
+          branch: branchName,
+          sha: existing.data.sha,
+        });
+      }
+    } catch {
+      await octokit.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path: filePath,
+        message: `Research upgrade ${upgradeId}: add ${filePath}`,
+        content: Buffer.from(content, 'utf8').toString('base64'),
+        branch: branchName,
+      });
+    }
+  }
+}
+
+export async function exportProposalForGitHubThenReplit(proposalId: number) {
+  const proposalRows = await db.select().from(proposedUpgrades).where(eq(proposedUpgrades.id, proposalId));
+  const proposal = proposalRows[0];
+  if (!proposal) throw new Error('Proposal not found');
+  if (!proposal.approved) throw new Error('Proposal must be approved first');
+
+  const ghExport = await exportUpgradeToGitHub(proposalId);
+
+  const reviewRows = await db.execute(
+    `SELECT * FROM cross_model_reviews WHERE article_id = $1 ORDER BY id DESC LIMIT 1`,
+    [proposal.articleId],
+  );
+  const review = reviewRows.rows[0] as any;
+
+  const openaiReview = review?.openai_review;
+  const matchingUpgrade =
+    openaiReview?.recommendedUpgrades?.find((u: any) => u.title === proposal.title) ??
+    null;
+
+  const replitBundle = buildReplitHandoffBundle({
+    proposalId: proposal.id,
+    title: proposal.title,
+    rationale: proposal.rationale,
+    claudeRecommendations: review?.claude_recommendations ?? '',
+    openaiSummary: review?.openai_summary ?? '',
+    affectedFiles: (proposal.affectedFiles as string[]) ?? [],
+    codeRecommendations: matchingUpgrade?.codeRecommendations ?? [],
+    validationPlan: (proposal.validationPlan as string[]) ?? [],
+  });
+
+  await appendFilesToBranch(ghExport.branchName, replitBundle, proposal.id);
+
+  return {
+    ...ghExport,
+    replitHandoffFiles: Object.keys(replitBundle),
+    replitInstructions:
+      `In Replit, import/sync branch ${ghExport.branchName}, open research/replit/REVIEW_PACKET.md and IMPLEMENTATION_TASK.md, ` +
+      `then use Agent with Medium/High code review settings and the provided AGENT_SKILL.md.`,
+  };
+}
+5) Route for GitHub-first, then Replit
+server/routes/crossModelReviewRoutes.ts
+
+Add:
+
+import { exportProposalForGitHubThenReplit } from '../research/exportToGitHubAndReplit';
+
+router.post('/export-replit/:proposalId', async (req, res) => {
+  try {
+    const result = await exportProposalForGitHubThenReplit(
+      Number(req.params.proposalId),
+    );
+    res.json({ ok: true, export: result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+6) Replit setup, step by step
+
+Since Replit supports importing from GitHub and connecting Git inside the workspace, this is the setup I recommend. Replit’s docs describe both rapid GitHub import and Git-pane connection/branch management, and Replit changelog/docs show Agent review/autonomy settings and Agent Skills support.
+
+In GitHub, keep your protected main branch and let this pipeline create feature branches/PRs.
+In Replit, import your repo from GitHub using the repo import flow, or connect the repo in the Git pane. Replit documents both patterns.
+When a proposal is approved and exported, the backend creates a GitHub branch and writes:
+code patch files
+research/replit/REVIEW_PACKET.md
+research/replit/AGENT_SKILL.md
+research/replit/IMPLEMENTATION_TASK.md
+In Replit, switch to that branch in the Git pane. Replit documents branch management in the Git tool.
+Set Replit Agent to a review-oriented mode. Replit’s changelog describes autonomy/code review settings, including modes that add code review or full app review.
+Add the AGENT_SKILL.md contents as an Agent Skill or keep it in-repo so Agent can use your preferred safety patterns. Replit documents Agent Skills as Markdown files that teach Agent project-specific behavior.
+Prompt Replit Agent with the contents of IMPLEMENTATION_TASK.md.
+Let Replit Agent independently review and propose changes.
+Run your validation harness.
+Only merge after human approval and passing checks.
+7) What I think of this workflow
+
+This is good.
+
+It gives you:
+
+Claude as first-pass critic
+OpenAI as second-pass conservative planner
+GitHub as change-control spine
+Replit as an implementation/review workspace
+validation as the steel gate
+human approval as the last lock
+
+The only thing I would not claim is that Replit can currently be used here as a documented, server-to-server “independent review API.” I did not find that in the docs I checked. What the docs do clearly support is GitHub import/sync, Git branches, Agent review settings, and Agent Skills. So the design above is the reliable one.
+
+The strongest next addition would be a small Research Ops Dashboard with three columns:
+
+Claude findings
+OpenAI recommendations
+Replit/GitHub implementation status
+
+That would give you a clean conveyor belt instead of a maze.
+
+this button SLICES the code to send to CLAUDE right?  then Claude's recommendations are made in slices and send to you.  please have these changes done in slices so the submission and review to replit is done in slices.
+
+Yes. That button should do exactly that.
+
+The full pipeline should be slice-native all the way through:
+
+Repo → sliced export to Claude → Claude recommendations stored per slice → send each slice’s findings to me/OpenAI per slice → create per-slice proposals → validate per slice → approve per slice → export to GitHub per slice → Replit reviews and implements per slice
+
+That is much better than one giant blob. It keeps:
+
+context tighter
+diffs smaller
+validation targeted
+rollback easier
+Replit less likely to wander into unrelated files
+
+Below is the code to make the whole thing run in slices.
+
+1) What changes conceptually
+
+Each slice becomes its own tracked object with:
+
+sliceId
+title
+files
+claudeFindings
+openaiReview
+proposal
+validation
+approval
+githubExport
+replitHandoff

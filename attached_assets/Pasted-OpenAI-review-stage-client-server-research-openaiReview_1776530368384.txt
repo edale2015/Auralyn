@@ -1,0 +1,333 @@
+OpenAI review stage client
+server/research/openaiReviewClient.ts
+type OpenAIReviewRequest = {
+  claudeRecommendations: string;
+  relevantCode: Record<string, string>;
+  articleSummary?: string;
+  systemContext?: string;
+};
+
+export type OpenAIReviewResponse = {
+  summaryForUser: string;
+  recommendedUpgrades: Array<{
+    title: string;
+    rationale: string;
+    affectedFiles: string[];
+    codeRecommendations: string[];
+    safetyConcerns: string[];
+    validationPlan: string[];
+    verdict: 'adopt' | 'test_only' | 'ignore';
+  }>;
+  overallVerdict: 'adopt' | 'test_only' | 'ignore';
+};
+
+export async function runOpenAIReviewStage(
+  payload: OpenAIReviewRequest,
+): Promise<OpenAIReviewResponse> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY missing');
+  }
+
+  const input = `
+You are reviewing recommendations for a medical triage platform called Auralyn.
+
+Your job:
+1. Summarize the recommendations for the user in 2-4 short paragraphs.
+2. Recommend code upgrades only if they are clinically and architecturally sensible.
+3. Be conservative about anything that could affect triage, safety, or disposition.
+4. Return structured JSON.
+
+Context:
+${payload.systemContext ?? 'Medical triage platform with validation gates, hallucination controls, physician review, and audit logging.'}
+
+Article summary:
+${payload.articleSummary ?? 'N/A'}
+
+Claude recommendations:
+${payload.claudeRecommendations}
+
+Relevant code:
+${Object.entries(payload.relevantCode)
+  .map(([file, code]) => `FILE: ${file}\n${code}`)
+  .join('\n\n')}
+`.trim();
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-5.4',
+      input,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'auralyn_review',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              summaryForUser: { type: 'string' },
+              recommendedUpgrades: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    title: { type: 'string' },
+                    rationale: { type: 'string' },
+                    affectedFiles: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    codeRecommendations: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    safetyConcerns: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    validationPlan: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    verdict: {
+                      type: 'string',
+                      enum: ['adopt', 'test_only', 'ignore'],
+                    },
+                  },
+                  required: [
+                    'title',
+                    'rationale',
+                    'affectedFiles',
+                    'codeRecommendations',
+                    'safetyConcerns',
+                    'validationPlan',
+                    'verdict',
+                  ],
+                },
+              },
+              overallVerdict: {
+                type: 'string',
+                enum: ['adopt', 'test_only', 'ignore'],
+              },
+            },
+            required: ['summaryForUser', 'recommendedUpgrades', 'overallVerdict'],
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OpenAI review failed: ${response.status} ${text}`);
+  }
+
+  const json = await response.json();
+  const raw = json.output?.[0]?.content?.[0]?.text ?? json.output_text;
+  if (!raw) {
+    throw new Error('OpenAI review returned no JSON output');
+  }
+
+  return JSON.parse(raw) as OpenAIReviewResponse;
+}
+
+The key idea here is that your app calls the Responses API and asks for structured JSON, which the OpenAI API supports.
+
+2) Review handoff table
+server/db/schema.ts
+
+Add this table:
+
+import { pgTable, serial, text, jsonb, timestamp, integer } from 'drizzle-orm/pg-core';
+
+export const crossModelReviews = pgTable('cross_model_reviews', {
+  id: serial('id').primaryKey(),
+  articleId: integer('article_id'),
+  claudeRecommendations: text('claude_recommendations').notNull(),
+  relevantCode: jsonb('relevant_code').$type<Record<string, string>>().default({}),
+  articleSummary: text('article_summary'),
+  openaiSummary: text('openai_summary'),
+  openaiReview: jsonb('openai_review').$type<any>(),
+  status: text('status').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+3) Coordinator that sends Claude’s findings to OpenAI review
+server/research/crossModelCoordinator.ts
+import { db } from '../db/client';
+import { crossModelReviews, proposedUpgrades } from '../db/schema';
+import { runOpenAIReviewStage } from './openaiReviewClient';
+
+export async function sendClaudeFindingsToOpenAI(args: {
+  articleId?: number;
+  claudeRecommendations: string;
+  relevantCode: Record<string, string>;
+  articleSummary?: string;
+}) {
+  const review = await runOpenAIReviewStage({
+    claudeRecommendations: args.claudeRecommendations,
+    relevantCode: args.relevantCode,
+    articleSummary: args.articleSummary,
+    systemContext:
+      'Auralyn is a medical triage system. Final disposition must remain safety-gated and physician-review capable.',
+  });
+
+  const inserted = await db.insert(crossModelReviews).values({
+    articleId: args.articleId ?? null,
+    claudeRecommendations: args.claudeRecommendations,
+    relevantCode: args.relevantCode,
+    articleSummary: args.articleSummary ?? null,
+    openaiSummary: review.summaryForUser,
+    openaiReview: review,
+    status: 'reviewed',
+  }).returning();
+
+  return inserted[0];
+}
+
+export async function convertOpenAIReviewToProposals(crossModelReviewId: number) {
+  const rows = await db.execute(
+    `SELECT * FROM cross_model_reviews WHERE id = $1`,
+    [crossModelReviewId],
+  );
+
+  const record = rows.rows[0];
+  if (!record) throw new Error('crossModelReview not found');
+
+  const review = record.openai_review as any;
+  const created: any[] = [];
+
+  for (const item of review.recommendedUpgrades ?? []) {
+    const inserted = await db.insert(proposedUpgrades).values({
+      articleId: record.article_id ?? null,
+      title: item.title,
+      rationale: item.rationale,
+      affectedFiles: item.affectedFiles,
+      patchBundle: {},
+      validationPlan: item.validationPlan,
+      validationStatus: 'pending',
+      requiresHumanApproval: true,
+      approved: false,
+    }).returning();
+
+    created.push(inserted[0]);
+  }
+
+  return created;
+}
+4) Route for the handoff stage
+server/routes/crossModelReviewRoutes.ts
+import express from 'express';
+import {
+  sendClaudeFindingsToOpenAI,
+  convertOpenAIReviewToProposals,
+} from '../research/crossModelCoordinator';
+
+const router = express.Router();
+
+router.post('/openai-review', async (req, res) => {
+  try {
+    const result = await sendClaudeFindingsToOpenAI({
+      articleId: req.body.articleId,
+      claudeRecommendations: req.body.claudeRecommendations,
+      relevantCode: req.body.relevantCode ?? {},
+      articleSummary: req.body.articleSummary,
+    });
+
+    res.json({ ok: true, review: result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+router.post('/convert/:crossModelReviewId', async (req, res) => {
+  try {
+    const proposals = await convertOpenAIReviewToProposals(
+      Number(req.params.crossModelReviewId),
+    );
+
+    res.json({ ok: true, proposals });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+export default router;
+
+Wire it in:
+
+server/app.ts
+import crossModelReviewRoutes from './routes/crossModelReviewRoutes';
+
+app.use('/api/cross-model', crossModelReviewRoutes);
+5) Replit/GitHub implementation request builder
+
+This stage takes the OpenAI-reviewed recommendations and packages them for your implementation agent or branch exporter.
+
+server/research/replitImplementationBuilder.ts
+type ImplementationRequest = {
+  upgradeTitle: string;
+  rationale: string;
+  affectedFiles: string[];
+  codeRecommendations: string[];
+  validationPlan: string[];
+};
+
+export function buildImplementationPrompt(input: ImplementationRequest) {
+  return `
+Implement the following upgrade for Auralyn.
+
+Title:
+${input.upgradeTitle}
+
+Rationale:
+${input.rationale}
+
+Affected files:
+${input.affectedFiles.map(f => `- ${f}`).join('\n')}
+
+Code recommendations:
+${input.codeRecommendations.map(x => `- ${x}`).join('\n')}
+
+Validation requirements:
+${input.validationPlan.map(x => `- ${x}`).join('\n')}
+
+Constraints:
+- Do not weaken hallucination safeguards.
+- Do not bypass physician review.
+- Do not let RAG outputs directly set final disposition.
+- Preserve audit logging.
+- Prefer additive changes and small diffs.
+`.trim();
+}
+
+This is the thing you send to:
+
+your Replit coding agent
+your GitHub PR generator
+or your “proposed patch” workflow
+6) Full pipeline order
+
+This is the sequence I recommend:
+
+Claude reviews article/code slice
+Store Claude recommendations
+Send those recommendations plus relevant code to the OpenAI review stage
+OpenAI review returns:
+short summary for you
+recommended upgrades
+safety concerns
+validation plan
+Convert to proposed upgrades
+Run auto-validation
+Require human approval
+Export to GitHub branch/PR
+Replit syncs from GitHub or implementation agent works from the generated prompt
+
+That gives you exactly what you asked for:
+Claude → me/OpenAI review stage → Replit/GitHub implementation

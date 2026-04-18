@@ -2677,6 +2677,11 @@ export async function registerRoutes(
   app.use("/api/admin", adminClaudeExportRoutes);
   console.log("[ClaudeExport] /api/admin/export-claude-slices, /api/admin/claude-export/* active");
 
+  // ── Research Pipeline: Medium Scout → Triage → Summary → Upgrade → Validate → Approve → GitHub ──
+  const { default: researchRoutes } = await import("./routes/researchRoutes");
+  app.use("/api/research", researchRoutes);
+  console.log("[Research] Medium Scout pipeline at /api/research/* (scan|articles|triage|summary|propose|validate|approve|export-github|upgrades|exports|pipeline)");
+
   return httpServer;
 }
 

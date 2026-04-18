@@ -1,0 +1,63 @@
+name: Validate Research Upgrade
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'shared/**'
+      - 'client/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests (if available)
+        run: npm test --if-present
+
+      # Auralyn-specific: verify no unsafe undercalls introduced
+      - name: Clinical safety smoke test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -f "scripts/validateSafety.ts" ]; then
+            npx tsx scripts/validateSafety.ts
+          else
+            echo "No safety validation script found — skipping (add scripts/validateSafety.ts to enable)"
+          fi
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan for secrets
+        run: |
+          if git log --all --format="%H" | head -1 | xargs git show --stat | grep -i "\.env\|secret\|password\|api.key" > /dev/null 2>&1; then
+            echo "WARNING: Potential secret in commit — review before merge"
+          else
+            echo "No obvious secret patterns detected"
+          fi

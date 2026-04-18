@@ -1602,3 +1602,71 @@ export const clinicalAnswerAudit = pgTable("clinical_answer_audit", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 export type ClinicalAnswerAudit = typeof clinicalAnswerAudit.$inferSelect;
+
+// ─── Research Pipeline ─────────────────────────────────────────────────────
+
+export const researchArticles = pgTable("research_articles", {
+  id:          serial("id").primaryKey(),
+  source:      text("source").notNull().default("medium"),
+  title:       text("title").notNull(),
+  url:         text("url").notNull().unique(),
+  author:      text("author"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  excerpt:     text("excerpt"),
+  tags:        jsonb("tags").$type<string[]>().default([]),
+  raw:         jsonb("raw"),
+  createdAt:   timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export const insertResearchArticleSchema = createInsertSchema(researchArticles).omit({ id: true, createdAt: true });
+export type InsertResearchArticle = z.infer<typeof insertResearchArticleSchema>;
+export type ResearchArticle = typeof researchArticles.$inferSelect;
+
+export const researchReviews = pgTable("research_reviews", {
+  id:                  serial("id").primaryKey(),
+  articleId:           integer("article_id").notNull(),
+  relevanceScore:      integer("relevance_score").notNull(),
+  trustScore:          integer("trust_score").notNull(),
+  noveltyScore:        integer("novelty_score").notNull(),
+  actionabilityScore:  integer("actionability_score").notNull(),
+  verdict:             text("verdict").notNull(),
+  reasons:             jsonb("reasons").$type<string[]>().default([]),
+  createdAt:           timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ResearchReview = typeof researchReviews.$inferSelect;
+
+export const researchSummaries = pgTable("research_summaries", {
+  id:         serial("id").primaryKey(),
+  articleId:  integer("article_id").notNull(),
+  summary:    text("summary").notNull(),
+  takeaways:  jsonb("takeaways").$type<string[]>().default([]),
+  createdAt:  timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ResearchSummary = typeof researchSummaries.$inferSelect;
+
+export const proposedUpgrades = pgTable("proposed_upgrades", {
+  id:                    serial("id").primaryKey(),
+  articleId:             integer("article_id").notNull(),
+  title:                 text("title").notNull(),
+  rationale:             text("rationale").notNull(),
+  affectedFiles:         jsonb("affected_files").$type<string[]>().default([]),
+  patchBundle:           jsonb("patch_bundle").$type<Record<string, string>>().default({}),
+  validationPlan:        jsonb("validation_plan").$type<string[]>().default([]),
+  validationStatus:      text("validation_status").notNull().default("pending"),
+  requiresHumanApproval: boolean("requires_human_approval").notNull().default(true),
+  approved:              boolean("approved").notNull().default(false),
+  approvedBy:            text("approved_by"),
+  createdAt:             timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type ProposedUpgrade = typeof proposedUpgrades.$inferSelect;
+
+export const githubExports = pgTable("github_exports", {
+  id:                 serial("id").primaryKey(),
+  proposedUpgradeId:  integer("proposed_upgrade_id").notNull(),
+  branchName:         text("branch_name").notNull(),
+  commitSha:          text("commit_sha"),
+  prNumber:           integer("pr_number"),
+  prUrl:              text("pr_url"),
+  status:             text("status").notNull().default("pending"),
+  createdAt:          timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type GithubExport = typeof githubExports.$inferSelect;

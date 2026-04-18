@@ -157,6 +157,7 @@ const NAV_SECTIONS = [
     items: [
       { path: "/meta-clinical", label: "Meta-Clinical Console", icon: Sparkles },
       { path: "/research-intelligence", label: "Research Intelligence", icon: Microscope },
+      { path: "/research-inbox", label: "Research Inbox (Medium Scout)", icon: BookOpen },
       { path: "/clinical-visualization", label: "Clinical Visualization", icon: Network },
       { path: "/simulation-lab", label: "Simulation Laboratory", icon: FlaskConical },
       { path: "/complaint-lab", label: "Complaint Lab", icon: FlaskConical },

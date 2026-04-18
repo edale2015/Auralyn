@@ -1,0 +1,642 @@
+Add slice-aware DB tables
+server/db/schema.ts
+
+Add these:
+
+import {
+  pgTable,
+  serial,
+  text,
+  jsonb,
+  timestamp,
+  boolean,
+  integer,
+} from 'drizzle-orm/pg-core';
+
+export const reviewSlices = pgTable('review_slices', {
+  id: serial('id').primaryKey(),
+  sliceId: text('slice_id').notNull(),
+  title: text('title').notNull(),
+  prompt: text('prompt').notNull(),
+  files: jsonb('files').$type<string[]>().notNull().default([]),
+  exportPath: text('export_path'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+export const claudeSliceReviews = pgTable('claude_slice_reviews', {
+  id: serial('id').primaryKey(),
+  reviewSliceId: integer('review_slice_id').notNull(),
+  claudeFindings: text('claude_findings').notNull(),
+  status: text('status').notNull().default('completed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+export const openaiSliceReviews = pgTable('openai_slice_reviews', {
+  id: serial('id').primaryKey(),
+  reviewSliceId: integer('review_slice_id').notNull(),
+  claudeSliceReviewId: integer('claude_slice_review_id').notNull(),
+  summaryForUser: text('summary_for_user').notNull(),
+  reviewJson: jsonb('review_json').$type<any>().notNull(),
+  overallVerdict: text('overall_verdict').notNull(),
+  status: text('status').notNull().default('completed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+export const sliceProposals = pgTable('slice_proposals', {
+  id: serial('id').primaryKey(),
+  reviewSliceId: integer('review_slice_id').notNull(),
+  openaiSliceReviewId: integer('openai_slice_review_id').notNull(),
+  title: text('title').notNull(),
+  rationale: text('rationale').notNull(),
+  affectedFiles: jsonb('affected_files').$type<string[]>().default([]),
+  patchBundle: jsonb('patch_bundle').$type<Record<string, string>>().default({}),
+  validationPlan: jsonb('validation_plan').$type<string[]>().default([]),
+  validationStatus: text('validation_status').notNull().default('pending'),
+  approved: boolean('approved').notNull().default(false),
+  approvedBy: text('approved_by'),
+  githubBranch: text('github_branch'),
+  githubPrUrl: text('github_pr_url'),
+  replitStatus: text('replit_status').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+3) Export slices and register them in DB
+server/tools/exportClaudeSlices.ts
+
+Update the exporter so it stores each exported slice in DB and returns structured slice metadata.
+
+import fs from 'fs';
+import path from 'path';
+import archiver from 'archiver';
+import { db } from '../db/client';
+import { reviewSlices } from '../db/schema';
+
+type SliceDef = {
+  id: string;
+  title: string;
+  prompt: string;
+  files: string[];
+};
+
+type ExportedSlice = {
+  sliceId: string;
+  title: string;
+  prompt: string;
+  files: string[];
+  outputFile: string;
+};
+
+const ROOT = process.cwd();
+const EXPORT_ROOT = path.join(ROOT, 'exports', 'claude-review');
+
+export const SLICE_DEFS: SliceDef[] = [
+  {
+    id: '01_system_overview',
+    title: 'System Overview',
+    prompt:
+      `Review this medical triage system overview.\n` +
+      `Focus on architecture, safety boundaries, and where hallucinations could bypass safeguards.\n` +
+      `Only the disposition engine sets final clinical decisions.`,
+    files: ['server/app.ts', 'server/db/schema.ts'],
+  },
+  {
+    id: '02_diagnosis_engine',
+    title: 'Diagnosis Engine',
+    prompt:
+      `Review this diagnosis engine.\n` +
+      `Focus on mathematical correctness, contradictory inputs, and low-risk bias.`,
+    files: [
+      'server/ai/fisher.ts',
+      'server/ai/bayesianUpdater.ts',
+      'server/ai/causalGraph.ts',
+      'server/clinical/diagnosisEngine.ts',
+    ],
+  },
+  {
+    id: '03_disposition_safety',
+    title: 'Disposition and Safety Core',
+    prompt:
+      `This is the core safety layer.\n` +
+      `Focus on unsafe undercall risk, red flags, and any dangerous bypass path.`,
+    files: [
+      'server/clinical/dispositionEngine.ts',
+      'server/ai/safetyGovernor.ts',
+      'server/ai/hallucinationGuards.ts',
+      'server/ai/hallucinationExtensions.ts',
+    ],
+  },
+];
+
+function ensureDir(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function readIfExists(filePath: string): string {
+  const abs = path.join(ROOT, filePath);
+  if (!fs.existsSync(abs)) return `// FILE NOT FOUND: ${filePath}\n`;
+  return fs.readFileSync(abs, 'utf8');
+}
+
+function writeSliceFile(exportDir: string, slice: SliceDef): string {
+  const outPath = path.join(exportDir, `${slice.id}.md`);
+  const parts: string[] = [];
+
+  parts.push(`# ${slice.title}`);
+  parts.push('');
+  parts.push('## Review Prompt');
+  parts.push('');
+  parts.push(slice.prompt);
+  parts.push('');
+  parts.push('## Files');
+  parts.push('');
+
+  for (const file of slice.files) {
+    const ext = path.extname(file).replace('.', '') || 'txt';
+    const content = readIfExists(file);
+    parts.push(`### ${file}`);
+    parts.push('');
+    parts.push('```' + ext);
+    parts.push(content);
+    parts.push('```');
+    parts.push('');
+  }
+
+  fs.writeFileSync(outPath, parts.join('\n'));
+  return outPath;
+}
+
+async function zipDirectory(sourceDir: string, zipPath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    output.on('close', () => resolve());
+    archive.on('error', reject);
+    archive.pipe(output);
+    archive.directory(sourceDir, false);
+    archive.finalize();
+  });
+}
+
+export async function exportClaudeSlices() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const exportDir = path.join(EXPORT_ROOT, timestamp);
+  ensureDir(exportDir);
+
+  const exportedSlices: ExportedSlice[] = [];
+
+  for (const slice of SLICE_DEFS) {
+    const outputFile = writeSliceFile(exportDir, slice);
+
+    await db.insert(reviewSlices).values({
+      sliceId: slice.id,
+      title: slice.title,
+      prompt: slice.prompt,
+      files: slice.files,
+      exportPath: outputFile,
+    });
+
+    exportedSlices.push({
+      sliceId: slice.id,
+      title: slice.title,
+      prompt: slice.prompt,
+      files: slice.files,
+      outputFile,
+    });
+  }
+
+  const zipPath = path.join(exportDir, 'claude-review-slices.zip');
+  await zipDirectory(exportDir, zipPath);
+
+  return {
+    exportDir,
+    zipPath,
+    slices: exportedSlices,
+  };
+}
+4) Store Claude findings per slice
+server/routes/claudeSliceRoutes.ts
+
+This lets you upload Claude’s result for one slice at a time.
+
+import express from 'express';
+import { db } from '../db/client';
+import { reviewSlices, claudeSliceReviews } from '../db/schema';
+import { eq } from 'drizzle-orm';
+
+const router = express.Router();
+
+router.post('/submit-findings', async (req, res) => {
+  try {
+    const { sliceId, claudeFindings } = req.body;
+
+    if (!sliceId || !claudeFindings) {
+      return res.status(400).json({ ok: false, error: 'sliceId and claudeFindings are required' });
+    }
+
+    const rows = await db.select().from(reviewSlices).where(eq(reviewSlices.sliceId, sliceId));
+    const slice = rows[0];
+
+    if (!slice) {
+      return res.status(404).json({ ok: false, error: 'Slice not found' });
+    }
+
+    const inserted = await db.insert(claudeSliceReviews).values({
+      reviewSliceId: slice.id,
+      claudeFindings,
+      status: 'completed',
+    }).returning();
+
+    res.json({ ok: true, review: inserted[0] });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+export default router;
+
+Wire it in:
+
+import claudeSliceRoutes from './routes/claudeSliceRoutes';
+app.use('/api/claude-slices', claudeSliceRoutes);
+5) Send each slice to OpenAI separately
+server/research/openaiSliceReview.ts
+import fs from 'fs';
+import { db } from '../db/client';
+import { reviewSlices, claudeSliceReviews, openaiSliceReviews } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { runOpenAIReviewStage } from './openaiReviewClient';
+
+export async function reviewClaudeSliceWithOpenAI(sliceId: string) {
+  const sliceRows = await db.select().from(reviewSlices).where(eq(reviewSlices.sliceId, sliceId));
+  const slice = sliceRows[0];
+  if (!slice) throw new Error('Slice not found');
+
+  const claudeRows = await db.select().from(claudeSliceReviews).where(eq(claudeSliceReviews.reviewSliceId, slice.id));
+  const latestClaude = claudeRows.at(-1);
+  if (!latestClaude) throw new Error('No Claude review found for this slice');
+
+  const relevantCode: Record<string, string> = {};
+  for (const file of (slice.files as string[])) {
+    try {
+      relevantCode[file] = fs.readFileSync(file, 'utf8');
+    } catch {
+      relevantCode[file] = `// FILE NOT FOUND: ${file}`;
+    }
+  }
+
+  const review = await runOpenAIReviewStage({
+    claudeRecommendations: latestClaude.claudeFindings,
+    relevantCode,
+    articleSummary: `Slice review for ${slice.title}`,
+    systemContext:
+      `You are reviewing the Auralyn slice "${slice.title}". Stay within this slice unless a cross-slice dependency is clearly required.`,
+  });
+
+  const inserted = await db.insert(openaiSliceReviews).values({
+    reviewSliceId: slice.id,
+    claudeSliceReviewId: latestClaude.id,
+    summaryForUser: review.summaryForUser,
+    reviewJson: review,
+    overallVerdict: review.overallVerdict,
+    status: 'completed',
+  }).returning();
+
+  return inserted[0];
+}
+6) Convert OpenAI slice review into slice proposals
+server/research/sliceProposalBuilder.ts
+import { db } from '../db/client';
+import { reviewSlices, openaiSliceReviews, sliceProposals } from '../db/schema';
+import { eq } from 'drizzle-orm';
+
+export async function buildSliceProposals(sliceId: string) {
+  const sliceRows = await db.select().from(reviewSlices).where(eq(reviewSlices.sliceId, sliceId));
+  const slice = sliceRows[0];
+  if (!slice) throw new Error('Slice not found');
+
+  const reviewRows = await db.select().from(openaiSliceReviews).where(eq(openaiSliceReviews.reviewSliceId, slice.id));
+  const latestReview = reviewRows.at(-1);
+  if (!latestReview) throw new Error('No OpenAI slice review found');
+
+  const review = latestReview.reviewJson as any;
+  const created = [];
+
+  for (const item of review.recommendedUpgrades ?? []) {
+    const inserted = await db.insert(sliceProposals).values({
+      reviewSliceId: slice.id,
+      openaiSliceReviewId: latestReview.id,
+      title: item.title,
+      rationale: item.rationale,
+      affectedFiles: item.affectedFiles,
+      patchBundle: {},
+      validationPlan: item.validationPlan,
+      validationStatus: 'pending',
+      approved: false,
+      replitStatus: 'pending',
+    }).returning();
+
+    created.push(inserted[0]);
+  }
+
+  return created;
+}
+7) Validate one slice at a time
+server/research/sliceValidation.ts
+
+This is important: validation should be slice-targeted too.
+
+import { db } from '../db/client';
+import { sliceProposals } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { runFullValidation } from '../validation/validationRunner';
+import { generateFullCaseSet } from '../validation/fullCaseGenerator';
+
+function filterCasesForSlice(title: string, allCases: any[]) {
+  const t = title.toLowerCase();
+
+  if (t.includes('diagnosis')) {
+    return allCases.filter(c =>
+      ['pe', 'acs', 'sepsis', 'stroke'].some(x => (c.id || '').includes(x))
+    );
+  }
+
+  if (t.includes('disposition') || t.includes('safety')) {
+    return allCases.filter(c => c.minimumSafeDisposition);
+  }
+
+  return allCases.slice(0, 200);
+}
+
+export async function validateSliceProposal(proposalId: number) {
+  const rows = await db.select().from(sliceProposals).where(eq(sliceProposals.id, proposalId));
+  const proposal = rows[0];
+  if (!proposal) throw new Error('Slice proposal not found');
+
+  const allCases = generateFullCaseSet();
+  const cases = filterCasesForSlice(proposal.title, allCases);
+
+  const result = await runFullValidation(cases);
+
+  const status =
+    result.unsafeUndercalls > 0 ? 'failed' :
+    result.passRate < 0.85 ? 'failed' :
+    'passed';
+
+  await db.update(sliceProposals)
+    .set({ validationStatus: status })
+    .where(eq(sliceProposals.id, proposalId));
+
+  return { proposalId, status, result };
+}
+8) Human approval per slice
+server/research/sliceApproval.ts
+import { db } from '../db/client';
+import { sliceProposals } from '../db/schema';
+import { eq } from 'drizzle-orm';
+
+export async function approveSliceProposal(proposalId: number, approvedBy: string) {
+  const rows = await db.select().from(sliceProposals).where(eq(sliceProposals.id, proposalId));
+  const proposal = rows[0];
+  if (!proposal) throw new Error('Slice proposal not found');
+
+  if (proposal.validationStatus !== 'passed') {
+    throw new Error('Cannot approve until slice validation passes');
+  }
+
+  await db.update(sliceProposals)
+    .set({
+      approved: true,
+      approvedBy,
+    })
+    .where(eq(sliceProposals.id, proposalId));
+
+  return { ok: true };
+}
+9) Export one slice to GitHub, then Replit
+server/research/sliceGitHubReplitExport.ts
+import { db } from '../db/client';
+import { sliceProposals } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { Octokit } from '@octokit/rest';
+
+function getOctokit() {
+  return new Octokit({ auth: process.env.GITHUB_TOKEN! });
+}
+
+function buildReplitSlicePacket(proposal: any) {
+  return {
+    'research/replit/SLICE_REVIEW_PACKET.md': `# Slice Review Packet
+
+Proposal ID: ${proposal.id}
+Title: ${proposal.title}
+
+Rationale:
+${proposal.rationale}
+
+Affected Files:
+${(proposal.affectedFiles as string[]).map((f: string) => `- ${f}`).join('\n')}
+
+Validation Plan:
+${(proposal.validationPlan as string[]).map((x: string) => `- ${x}`).join('\n')}
+
+Constraints:
+- Stay within this slice unless a dependency is truly required
+- Do not bypass physician review
+- Do not weaken hallucination controls
+- Keep diff small and testable
+`,
+    'research/replit/SLICE_IMPLEMENTATION_TASK.md': `Implement this slice only.
+
+1. Independently review the slice
+2. Suggest any safer changes
+3. Write code only for this slice
+4. List risks introduced
+5. List what to re-validate
+`,
+  };
+}
+
+export async function exportSliceProposalToGitHubAndReplit(proposalId: number) {
+  const rows = await db.select().from(sliceProposals).where(eq(sliceProposals.id, proposalId));
+  const proposal = rows[0];
+  if (!proposal) throw new Error('Slice proposal not found');
+  if (!proposal.approved) throw new Error('Slice proposal must be approved first');
+
+  const octokit = getOctokit();
+  const owner = process.env.GITHUB_OWNER!;
+  const repo = process.env.GITHUB_REPO!;
+  const base = process.env.GITHUB_BASE_BRANCH || 'main';
+  const branchName = `slice/${proposal.id}-${Date.now()}`;
+
+  const baseRef = await octokit.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${base}`,
+  });
+
+  await octokit.git.createRef({
+    owner,
+    repo,
+    ref: `refs/heads/${branchName}`,
+    sha: baseRef.data.object.sha,
+  });
+
+  const packet = buildReplitSlicePacket(proposal);
+
+  for (const [filePath, content] of Object.entries(packet)) {
+    await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path: filePath,
+      message: `Slice ${proposal.id}: add ${filePath}`,
+      content: Buffer.from(content, 'utf8').toString('base64'),
+      branch: branchName,
+    });
+  }
+
+  const pr = await octokit.pulls.create({
+    owner,
+    repo,
+    title: `[Slice Upgrade] ${proposal.title}`,
+    head: branchName,
+    base,
+    body: `Slice-based proposal export for proposal ${proposal.id}. Review and implement only this slice.`,
+  });
+
+  await db.update(sliceProposals)
+    .set({
+      githubBranch: branchName,
+      githubPrUrl: pr.data.html_url,
+      replitStatus: 'ready_for_review',
+    })
+    .where(eq(sliceProposals.id, proposalId));
+
+  return {
+    proposalId,
+    branchName,
+    prUrl: pr.data.html_url,
+    replitInstructions:
+      `Open branch ${branchName} in Replit, review research/replit/SLICE_REVIEW_PACKET.md, then ask Replit Agent to independently review and implement only this slice.`,
+  };
+}
+10) Slice orchestration routes
+server/routes/slicePipelineRoutes.ts
+import express from 'express';
+import { reviewClaudeSliceWithOpenAI } from '../research/openaiSliceReview';
+import { buildSliceProposals } from '../research/sliceProposalBuilder';
+import { validateSliceProposal } from '../research/sliceValidation';
+import { approveSliceProposal } from '../research/sliceApproval';
+import { exportSliceProposalToGitHubAndReplit } from '../research/sliceGitHubReplitExport';
+
+const router = express.Router();
+
+router.post('/openai-review/:sliceId', async (req, res) => {
+  try {
+    const result = await reviewClaudeSliceWithOpenAI(req.params.sliceId);
+    res.json({ ok: true, review: result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+router.post('/build-proposals/:sliceId', async (req, res) => {
+  try {
+    const proposals = await buildSliceProposals(req.params.sliceId);
+    res.json({ ok: true, proposals });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+router.post('/validate-proposal/:proposalId', async (req, res) => {
+  try {
+    const result = await validateSliceProposal(Number(req.params.proposalId));
+    res.json({ ok: true, result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+router.post('/approve-proposal/:proposalId', async (req, res) => {
+  try {
+    const result = await approveSliceProposal(
+      Number(req.params.proposalId),
+      String(req.body.approvedBy || ''),
+    );
+    res.json({ ok: true, result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+router.post('/export-proposal/:proposalId', async (req, res) => {
+  try {
+    const result = await exportSliceProposalToGitHubAndReplit(
+      Number(req.params.proposalId),
+    );
+    res.json({ ok: true, export: result });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Unknown error' });
+  }
+});
+
+export default router;
+
+Wire it in:
+
+import slicePipelineRoutes from './routes/slicePipelineRoutes';
+app.use('/api/slice-pipeline', slicePipelineRoutes);
+11) Yes, the button slices code for Claude
+
+And now it should also do this downstream:
+
+export slice files
+let you submit Claude findings per slice
+send each slice to OpenAI per slice
+build proposals per slice
+validate per slice
+approve per slice
+export to GitHub per slice
+send to Replit per slice
+
+That is exactly what you asked for.
+
+12) Replit review should also stay slice-based
+
+Yes, absolutely.
+
+The Replit handoff should say:
+
+“Review and implement only this slice. Do not roam into unrelated files unless clearly required.”
+
+That keeps Replit from turning one surgical change into a repo-wide renovation parade.
+
+13) Best workflow
+
+Use this order:
+
+Click Export Claude Review Slices
+Upload one slice to Claude
+Paste Claude findings back into /api/claude-slices/submit-findings
+Run /api/slice-pipeline/openai-review/:sliceId
+Run /api/slice-pipeline/build-proposals/:sliceId
+Run /api/slice-pipeline/validate-proposal/:proposalId
+Human approve
+Export to GitHub + Replit for that slice
+Replit independently reviews and implements that slice
+Re-run validation for that slice and then system-wide
+
+That’s tidy, safe, and much easier to audit.
+
+14) My recommendation
+
+Yes, do it in slices all the way through.
+
+That is the best way to handle:
+
+Claude context limits
+OpenAI review quality
+Replit implementation quality
+validation targeting
+rollback safety
+
+If you want, I can write the matching slice-based frontend page next so you can do this entire pipeline from one admin screen.
