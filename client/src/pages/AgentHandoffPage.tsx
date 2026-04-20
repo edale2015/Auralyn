@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle, XCircle, Clock, AlertTriangle, FileCode2,
-  ExternalLink, ChevronDown, ChevronUp, Bot, ShieldAlert, Wrench, BookOpen,
+  ExternalLink, ChevronDown, ChevronUp, Bot, ShieldAlert, Wrench,
+  BookOpen, GitBranch, Gauge, HelpCircle, Zap,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -26,6 +27,17 @@ type HandoffSummary = {
 
 type CodeFile = { path: string; content: string; explanation: string };
 
+type SliceReview = {
+  architectureNotes: string[];
+  couplingRisks: string[];
+  interfaceRisks: string[];
+  specificRecommendations: string[];
+  openQuestions: string[];
+  blastRadius: string[];
+  confidenceScore: number;
+  verdict: "proceed" | "caution" | "hold";
+};
+
 type HandoffDetail = HandoffSummary & {
   articleSummary: string | null;
   openaiCodeProposal: {
@@ -41,6 +53,7 @@ type HandoffDetail = HandoffSummary & {
     hipaaRisks: string[];
     fdaRisks: string[];
   } | null;
+  claudeSliceReview: SliceReview | null;
   openaiRefinedCode: {
     files: CodeFile[];
     changesSummary: string;
@@ -54,18 +67,18 @@ type HandoffDetail = HandoffSummary & {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { color: string; icon: React.ReactNode }> = {
-    running:           { color: "bg-blue-100 text-blue-700",   icon: <Clock className="w-3 h-3" /> },
+    running:           { color: "bg-blue-100 text-blue-700",     icon: <Clock className="w-3 h-3" /> },
     awaiting_approval: { color: "bg-yellow-100 text-yellow-700", icon: <AlertTriangle className="w-3 h-3" /> },
-    approved:          { color: "bg-green-100 text-green-700", icon: <CheckCircle className="w-3 h-3" /> },
+    approved:          { color: "bg-green-100 text-green-700",   icon: <CheckCircle className="w-3 h-3" /> },
     implementing:      { color: "bg-purple-100 text-purple-700", icon: <Bot className="w-3 h-3" /> },
     implemented:       { color: "bg-emerald-100 text-emerald-700", icon: <CheckCircle className="w-3 h-3" /> },
-    rejected:          { color: "bg-red-100 text-red-700",     icon: <XCircle className="w-3 h-3" /> },
-    failed:            { color: "bg-gray-100 text-gray-600",   icon: <XCircle className="w-3 h-3" /> },
+    rejected:          { color: "bg-red-100 text-red-700",       icon: <XCircle className="w-3 h-3" /> },
+    failed:            { color: "bg-gray-100 text-gray-600",     icon: <XCircle className="w-3 h-3" /> },
   };
   const { color, icon } = map[status] ?? { color: "bg-gray-100 text-gray-600", icon: null };
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {icon}{status.replace("_", " ")}
+      {icon}{status.replace(/_/g, " ")}
     </span>
   );
 }
@@ -99,7 +112,7 @@ function CodeFileCard({ file }: { file: CodeFile }) {
   );
 }
 
-// ── Review verdict badge ───────────────────────────────────────────────────
+// ── Review verdict badge ────────────────────────────────────────────────────
 
 function VerdictBadge({ verdict }: { verdict: "approve" | "revise" | "reject" }) {
   const map = {
@@ -111,6 +124,37 @@ function VerdictBadge({ verdict }: { verdict: "approve" | "revise" | "reject" })
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold uppercase ${map[verdict]}`}>
       {verdict}
     </span>
+  );
+}
+
+function SliceVerdictBadge({ verdict }: { verdict: "proceed" | "caution" | "hold" }) {
+  const map = {
+    proceed: "bg-green-100 text-green-700",
+    caution: "bg-yellow-100 text-yellow-700",
+    hold:    "bg-red-100 text-red-700",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold uppercase ${map[verdict]}`}>
+      {verdict}
+    </span>
+  );
+}
+
+// ── Confidence meter ────────────────────────────────────────────────────────
+
+function ConfidenceMeter({ score }: { score: number }) {
+  const color = score >= 75 ? "bg-green-500" : score >= 50 ? "bg-yellow-500" : "bg-red-500";
+  const label = score >= 75 ? "High confidence" : score >= 50 ? "Caution" : "Low — hold for review";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-gray-500 flex items-center gap-1"><Gauge className="w-3 h-3" /> Architecture confidence</span>
+        <span className="font-semibold text-gray-800">{score}/100 — {label}</span>
+      </div>
+      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${score}%` }} />
+      </div>
+    </div>
   );
 }
 
@@ -142,14 +186,24 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
   const rejected = handoff.pipelineStatus === "rejected";
   const awaiting = handoff.pipelineStatus === "awaiting_approval";
 
+  const hasSliceReview = !!handoff.claudeSliceReview;
+  const confidenceScore = handoff.claudeSliceReview?.confidenceScore ?? null;
+  const isLowConfidence = confidenceScore !== null && confidenceScore < 60;
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <StatusBadge status={handoff.pipelineStatus} />
             {handoff.claudeCodeReview && <VerdictBadge verdict={handoff.claudeCodeReview.overallVerdict} />}
+            {handoff.claudeSliceReview && <SliceVerdictBadge verdict={handoff.claudeSliceReview.verdict} />}
+            {isLowConfidence && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
+                <AlertTriangle className="w-3 h-3" /> Low confidence — mandatory human review
+              </span>
+            )}
           </div>
           <h2 className="text-lg font-semibold text-gray-900">{handoff.articleTitle}</h2>
           <a href={handoff.articleUrl} target="_blank" rel="noreferrer"
@@ -166,25 +220,46 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
           <div>
             <p className="font-semibold text-green-800 text-sm">Approved — ready for agent implementation</p>
             <p className="text-xs text-green-700 mt-0.5">
-              This package has been approved by {handoff.humanApprovedBy}.
-              Tell the agent: "implement agent handoff #{handoff.id}" to have me execute the code changes.
+              Approved by {handoff.humanApprovedBy}.
+              Tell the agent: "implement agent handoff #{handoff.id}" to execute these code changes.
             </p>
           </div>
         </div>
       )}
 
+      {rejected && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-3">
+          <XCircle className="w-5 h-5 text-red-500" />
+          <p className="text-sm text-red-800">This handoff was rejected. {handoff.agentNotes}</p>
+        </div>
+      )}
+
+      {/* Confidence summary bar (always visible if slice review ran) */}
+      {handoff.claudeSliceReview && (
+        <div className="border rounded-lg p-3 bg-gray-50">
+          <ConfidenceMeter score={handoff.claudeSliceReview.confidenceScore} />
+        </div>
+      )}
+
       <Tabs defaultValue="article">
-        <TabsList className="grid grid-cols-4 w-full">
-          <TabsTrigger value="article" data-testid="tab-article">
+        <TabsList className="grid grid-cols-5 w-full">
+          <TabsTrigger value="article" data-testid="tab-article" className="text-xs">
             <BookOpen className="w-3.5 h-3.5 mr-1" />Article
           </TabsTrigger>
-          <TabsTrigger value="proposal" data-testid="tab-proposal">
+          <TabsTrigger value="proposal" data-testid="tab-proposal" className="text-xs">
             <FileCode2 className="w-3.5 h-3.5 mr-1" />Code v1
           </TabsTrigger>
-          <TabsTrigger value="review" data-testid="tab-review">
-            <ShieldAlert className="w-3.5 h-3.5 mr-1" />Review
+          <TabsTrigger value="safety" data-testid="tab-safety" className="text-xs">
+            <ShieldAlert className="w-3.5 h-3.5 mr-1" />Safety
           </TabsTrigger>
-          <TabsTrigger value="refined" data-testid="tab-refined">
+          <TabsTrigger value="arch" data-testid="tab-arch" className="text-xs">
+            <GitBranch className="w-3.5 h-3.5 mr-1" />
+            Arch
+            {hasSliceReview && handoff.claudeSliceReview!.verdict !== "proceed" && (
+              <span className="ml-1 w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" />
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="refined" data-testid="tab-refined" className="text-xs">
             <Wrench className="w-3.5 h-3.5 mr-1" />Code v2
           </TabsTrigger>
         </TabsList>
@@ -201,14 +276,14 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
           </Card>
         </TabsContent>
 
-        {/* Tab 2: OpenAI Code Proposal (v1) */}
+        {/* Tab 2: GPT-4o Code Proposal (v1) */}
         <TabsContent value="proposal" className="space-y-3 pt-3">
           {!handoff.openaiCodeProposal ? (
             <p className="text-gray-500 text-sm">No proposal generated yet.</p>
           ) : (
             <>
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">GPT-4o Architect Summary</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">GPT-4o Architect — First Pass</CardTitle></CardHeader>
                 <CardContent>
                   <p className="text-sm text-gray-700 whitespace-pre-line">{handoff.openaiCodeProposal.summary}</p>
                   {handoff.openaiCodeProposal.concerns.length > 0 && (
@@ -235,25 +310,25 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
           )}
         </TabsContent>
 
-        {/* Tab 3: Safety Review ("Claude Review") */}
-        <TabsContent value="review" className="space-y-3 pt-3">
+        {/* Tab 3: Claude Safety Review */}
+        <TabsContent value="safety" className="space-y-3 pt-3">
           {!handoff.claudeCodeReview ? (
-            <p className="text-gray-500 text-sm">Review not yet complete.</p>
+            <p className="text-gray-500 text-sm">Safety review not yet complete.</p>
           ) : (
             <>
               <div className="flex items-center gap-2 mb-1">
                 <ShieldAlert className="w-4 h-4 text-gray-500" />
-                <span className="text-sm font-semibold">AI Safety Review</span>
+                <span className="text-sm font-semibold">Claude Safety Review</span>
                 <VerdictBadge verdict={handoff.claudeCodeReview.overallVerdict} />
-                <span className="text-xs text-gray-400 ml-auto">(adversarial safety reviewer pass)</span>
+                <span className="text-xs text-gray-400 ml-auto">adversarial HIPAA / FDA / clinical pass</span>
               </div>
 
               {[
-                { label: "Concerns",    items: handoff.claudeCodeReview.concerns,    color: "text-amber-800 bg-amber-50 border-amber-200" },
-                { label: "Suggestions", items: handoff.claudeCodeReview.suggestions,  color: "text-blue-800 bg-blue-50 border-blue-200" },
-                { label: "Safety Flags", items: handoff.claudeCodeReview.safetyFlags, color: "text-red-800 bg-red-50 border-red-200" },
-                { label: "HIPAA Risks", items: handoff.claudeCodeReview.hipaaRisks,   color: "text-orange-800 bg-orange-50 border-orange-200" },
-                { label: "FDA Risks",   items: handoff.claudeCodeReview.fdaRisks,     color: "text-purple-800 bg-purple-50 border-purple-200" },
+                { label: "Concerns",     items: handoff.claudeCodeReview.concerns,    color: "text-amber-800 bg-amber-50 border-amber-200" },
+                { label: "Suggestions",  items: handoff.claudeCodeReview.suggestions,  color: "text-blue-800 bg-blue-50 border-blue-200" },
+                { label: "Safety Flags", items: handoff.claudeCodeReview.safetyFlags,  color: "text-red-800 bg-red-50 border-red-200" },
+                { label: "HIPAA Risks",  items: handoff.claudeCodeReview.hipaaRisks,   color: "text-orange-800 bg-orange-50 border-orange-200" },
+                { label: "FDA Risks",    items: handoff.claudeCodeReview.fdaRisks,     color: "text-purple-800 bg-purple-50 border-purple-200" },
               ].map(({ label, items, color }) =>
                 items.length > 0 ? (
                   <div key={label} className={`rounded-lg border p-3 ${color}`}>
@@ -268,14 +343,99 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
           )}
         </TabsContent>
 
-        {/* Tab 4: Refined Code (v2) */}
+        {/* Tab 4: Claude Slice / Architecture Review (NEW) */}
+        <TabsContent value="arch" className="space-y-3 pt-3">
+          {!handoff.claudeSliceReview ? (
+            <div className="text-center py-6 text-gray-400">
+              <GitBranch className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">Architecture review not yet run.</p>
+              <p className="text-xs mt-1">This pass only runs on handoffs created after the pipeline upgrade.</p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <GitBranch className="w-4 h-4 text-indigo-500" />
+                <span className="text-sm font-semibold">Claude Architecture & Coupling Review</span>
+                <SliceVerdictBadge verdict={handoff.claudeSliceReview.verdict} />
+                <span className="text-xs text-gray-400 ml-auto">import-aware slice analysis pass</span>
+              </div>
+
+              <ConfidenceMeter score={handoff.claudeSliceReview.confidenceScore} />
+
+              {[
+                {
+                  label: "Architecture Notes",
+                  items: handoff.claudeSliceReview.architectureNotes,
+                  icon: <GitBranch className="w-3 h-3" />,
+                  color: "text-indigo-800 bg-indigo-50 border-indigo-200",
+                },
+                {
+                  label: "Coupling Risks",
+                  items: handoff.claudeSliceReview.couplingRisks,
+                  icon: <Zap className="w-3 h-3" />,
+                  color: "text-orange-800 bg-orange-50 border-orange-200",
+                },
+                {
+                  label: "Interface / Contract Risks",
+                  items: handoff.claudeSliceReview.interfaceRisks,
+                  icon: <AlertTriangle className="w-3 h-3" />,
+                  color: "text-red-800 bg-red-50 border-red-200",
+                },
+                {
+                  label: "Specific Recommendations",
+                  items: handoff.claudeSliceReview.specificRecommendations,
+                  icon: <Wrench className="w-3 h-3" />,
+                  color: "text-blue-800 bg-blue-50 border-blue-200",
+                },
+                {
+                  label: "Blast Radius — Other Files Likely Needing Updates",
+                  items: handoff.claudeSliceReview.blastRadius,
+                  icon: <FileCode2 className="w-3 h-3" />,
+                  color: "text-amber-800 bg-amber-50 border-amber-200",
+                },
+              ].map(({ label, items, icon, color }) =>
+                items.length > 0 ? (
+                  <div key={label} className={`rounded-lg border p-3 ${color}`}>
+                    <p className="text-xs font-semibold mb-1 flex items-center gap-1">{icon}{label}</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {items.map((item, i) => <li key={i} className="text-xs">{item}</li>)}
+                    </ul>
+                  </div>
+                ) : null
+              )}
+
+              {/* Open questions — must be answered before approval */}
+              {handoff.claudeSliceReview.openQuestions.length > 0 && (
+                <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3">
+                  <p className="text-xs font-semibold text-yellow-800 mb-2 flex items-center gap-1">
+                    <HelpCircle className="w-3 h-3" />
+                    Open Questions — Claude cannot answer these from code context alone
+                  </p>
+                  <p className="text-xs text-yellow-700 mb-2">
+                    These must be manually verified by you or your engineering team before approving.
+                  </p>
+                  <ul className="space-y-1">
+                    {handoff.claudeSliceReview.openQuestions.map((q, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-yellow-900">
+                        <span className="font-mono bg-yellow-200 px-1 rounded shrink-0">Q{i + 1}</span>
+                        {q}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        {/* Tab 5: Refined Code (v2) */}
         <TabsContent value="refined" className="space-y-3 pt-3">
           {!handoff.openaiRefinedCode ? (
             <p className="text-gray-500 text-sm">Refinement not yet complete.</p>
           ) : (
             <>
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">What Changed (v1 → v2)</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">GPT-4o Refiner — v1 → v2 (both Claude reviews applied)</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-gray-700 whitespace-pre-line">{handoff.openaiRefinedCode.changesSummary}</p>
                   {handoff.openaiRefinedCode.resolvedConcerns.length > 0 && (
@@ -290,7 +450,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   )}
                   {handoff.openaiRefinedCode.remainingRisks.length > 0 && (
                     <div>
-                      <p className="text-xs font-semibold text-red-700 mb-1">Remaining risks (physician review required):</p>
+                      <p className="text-xs font-semibold text-red-700 mb-1">Remaining risks — physician/FDA review required before deployment:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.remainingRisks.map((r, i) => (
                           <li key={i} className="text-xs text-red-800">{r}</li>
@@ -305,7 +465,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   <CodeFileCard key={i} file={f} />
                 ))}
                 {handoff.openaiRefinedCode.files.length === 0 && (
-                  <p className="text-gray-500 text-sm italic">Reviewer recommended not implementing this change.</p>
+                  <p className="text-gray-500 text-sm italic">Claude recommended not implementing this change.</p>
                 )}
               </div>
             </>
@@ -317,9 +477,14 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
       {awaiting && (
         <div className="border-t pt-4 space-y-3">
           <p className="text-sm font-semibold text-gray-800">Your decision</p>
+          {isLowConfidence && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-800">
+              <strong>Low confidence score ({confidenceScore}/100).</strong> Review the Architecture tab carefully — especially the open questions — before approving.
+            </div>
+          )}
           <p className="text-xs text-gray-500">
-            Review all four tabs above. If satisfied, approve to send this package to the agent for implementation.
-            The agent will see: the original article, both code versions, and the full safety review.
+            Review all five tabs. The Architecture tab shows coupling blast-radius and open questions Claude flagged.
+            Approve to send this package to the agent for implementation.
           </p>
           <div className="flex gap-3">
             <Button
@@ -356,7 +521,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
         </div>
       )}
 
-      {handoff.agentNotes && (
+      {handoff.agentNotes && !rejected && (
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
           <p className="text-xs font-semibold text-purple-700 mb-1">Agent implementation notes:</p>
           <p className="text-xs text-purple-800 whitespace-pre-line">{handoff.agentNotes}</p>
@@ -386,7 +551,7 @@ export default function AgentHandoffPage() {
         key={h.id}
         data-testid={`handoff-row-${h.id}`}
         onClick={() => setSelectedId(h.id)}
-        className="w-full text-left border rounded-lg p-3 hover:bg-gray-50 transition space-y-1"
+        className={`w-full text-left border rounded-lg p-3 hover:bg-gray-50 transition space-y-1 ${selectedId === h.id ? "ring-2 ring-indigo-300 border-indigo-300" : ""}`}
       >
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-gray-800 line-clamp-1 flex-1">{h.articleTitle}</span>
@@ -407,8 +572,14 @@ export default function AgentHandoffPage() {
             Agent Handoff Queue
           </h1>
           <p className="text-xs text-gray-500 mt-1">
-            Automated pipeline results awaiting your approval
+            5-stage AI pipeline → your approval → implementation
           </p>
+          <div className="mt-2 text-xs text-gray-400 space-y-0.5">
+            <div className="flex items-center gap-1.5"><FileCode2 className="w-3 h-3 text-blue-400" /> GPT-4o Architect (v1)</div>
+            <div className="flex items-center gap-1.5"><ShieldAlert className="w-3 h-3 text-red-400" /> Claude Safety Review</div>
+            <div className="flex items-center gap-1.5"><GitBranch className="w-3 h-3 text-indigo-400" /> Claude Arch Review</div>
+            <div className="flex items-center gap-1.5"><Wrench className="w-3 h-3 text-green-400" /> GPT-4o Refiner (v2)</div>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-4">
@@ -458,7 +629,7 @@ export default function AgentHandoffPage() {
             <Bot className="w-12 h-12 mb-3 opacity-20" />
             <p className="text-sm font-medium">Select a handoff to review</p>
             <p className="text-xs mt-1 max-w-xs text-center">
-              Each entry contains the original article, GPT-4o code proposal, AI safety review, and refined code ready for your approval.
+              Each entry contains 5 passes: original article, GPT-4o code v1, Claude safety review, Claude architecture review (with confidence score and open questions), and GPT-4o refined code v2.
             </p>
           </div>
         )}

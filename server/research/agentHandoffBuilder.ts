@@ -1,34 +1,31 @@
 /**
  * server/research/agentHandoffBuilder.ts
- * Step D: Agent Handoff Package Assembler
+ * Orchestrates the full automated research → code pipeline for a single article:
  *
- * Orchestrates the full automated pipeline for a single article:
  *   A. generateCodeProposal   — GPT-4o Code Architect
- *   B. runClaudeReview        — AI Safety Reviewer ("Claude Review")
- *   C. refineCodeProposal     — GPT-4o Code Refiner
+ *   B. runClaudeReview        — Claude Safety Review (HIPAA/FDA/clinical adversarial pass)
+ *   B2. runClaudeSliceReview  — Claude Slice Review (import-aware architecture & coupling)
+ *   C. refineCodeProposal     — GPT-4o Refiner (sees both Claude reviews)
  *   D. Save to agent_handoffs with status = "awaiting_approval"
  *
- * Called automatically for every `adopt`-rated article after scan.
- * The assembled package waits for human approval before reaching the agent.
+ * Nothing touches the live codebase until human approval + agent sign-off.
  */
 
-import { db }                     from "../db";
+import { db }                      from "../db";
 import { agentHandoffs, researchArticles, researchSummaries } from "../../shared/schema";
-import { eq }                     from "drizzle-orm";
-import { generateCodeProposal }   from "./autoCodeProposalEngine";
-import { runClaudeReview }        from "./claudeReviewAgent";
-import { refineCodeProposal }     from "./openaiCodeRefiner";
+import { eq }                      from "drizzle-orm";
+import { generateCodeProposal }    from "./autoCodeProposalEngine";
+import { runClaudeReview }         from "./claudeReviewAgent";
+import { runClaudeSliceReview }    from "./claudeCodeSliceReview";
+import { refineCodeProposal }      from "./openaiCodeRefiner";
 
 export async function buildAgentHandoff(articleId: number): Promise<{ handoffId: number; status: string }> {
-  // 1. Load the article
   const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
   if (!article) throw new Error(`Article ${articleId} not found`);
 
-  // 2. Load the summary (may not exist yet — that's fine)
   const [summaryRow] = await db.select().from(researchSummaries).where(eq(researchSummaries.articleId, articleId));
   const articleSummary = summaryRow?.summary ?? null;
 
-  // 3. Create the handoff record immediately so we can track progress
   const [handoff] = await db
     .insert(agentHandoffs)
     .values({
@@ -58,8 +55,8 @@ export async function buildAgentHandoff(articleId: number): Promise<{ handoffId:
       .set({ openaiCodeProposal: proposal as any })
       .where(eq(agentHandoffs.id, handoffId));
 
-    // ── Step B: AI Safety Review ("Claude Review") ───────────────────────────
-    console.log(`[agentHandoff #${handoffId}] Step B: running safety review`);
+    // ── Step B: Claude Safety Review ─────────────────────────────────────────
+    console.log(`[agentHandoff #${handoffId}] Step B: running Claude safety review`);
     const review = await runClaudeReview({
       codeProposal:   proposal,
       articleTitle:   article.title,
@@ -70,11 +67,26 @@ export async function buildAgentHandoff(articleId: number): Promise<{ handoffId:
       .set({ claudeCodeReview: review as any })
       .where(eq(agentHandoffs.id, handoffId));
 
-    // ── Step C: GPT-4o Code Refiner ──────────────────────────────────────────
-    console.log(`[agentHandoff #${handoffId}] Step C: refining code based on review`);
+    // ── Step B2: Claude Slice Review (architecture + coupling) ───────────────
+    console.log(`[agentHandoff #${handoffId}] Step B2: running Claude slice/architecture review`);
+    const sliceReview = await runClaudeSliceReview({
+      proposal,
+      articleTitle: article.title,
+    });
+
+    await db.update(agentHandoffs)
+      .set({ claudeSliceReview: sliceReview as any })
+      .where(eq(agentHandoffs.id, handoffId));
+
+    // Log confidence score so it's visible in server logs
+    console.log(`[agentHandoff #${handoffId}] Step B2 complete — verdict: ${sliceReview.verdict}, confidence: ${sliceReview.confidenceScore}/100`);
+
+    // ── Step C: GPT-4o Refiner (sees both Claude reviews) ────────────────────
+    console.log(`[agentHandoff #${handoffId}] Step C: refining code with both review inputs`);
     const refined = await refineCodeProposal({
       original:     proposal,
       review,
+      sliceReview,
       articleTitle: article.title,
     });
 
@@ -122,7 +134,7 @@ export async function rejectHandoff(handoffId: number, reason: string) {
   return updated;
 }
 
-/** Mark a handoff as implemented (agent writes this after finishing the code changes) */
+/** Mark a handoff as implemented */
 export async function markHandoffImplemented(handoffId: number, agentNotes: string) {
   const [updated] = await db.update(agentHandoffs)
     .set({

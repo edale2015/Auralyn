@@ -1755,7 +1755,7 @@ export const agentHandoffs = pgTable("agent_handoffs", {
     concerns: string[];
   } | null>().default(null),
 
-  // Step B: AI Safety Review ("Claude Review" pass — GPT-4o critical reviewer persona)
+  // Step B: Claude Safety Review — adversarial HIPAA/FDA/clinical safety check
   claudeCodeReview:     jsonb("claude_code_review").$type<{
     overallVerdict: "approve" | "revise" | "reject";
     concerns: string[];
@@ -1765,7 +1765,19 @@ export const agentHandoffs = pgTable("agent_handoffs", {
     fdaRisks: string[];
   } | null>().default(null),
 
-  // Step C: GPT-4o Refiner — improved code addressing the review
+  // Step B2: Claude Slice Review — import-aware architecture & coupling analysis
+  claudeSliceReview:    jsonb("claude_slice_review").$type<{
+    architectureNotes: string[];
+    couplingRisks: string[];
+    interfaceRisks: string[];
+    specificRecommendations: string[];
+    openQuestions: string[];
+    blastRadius: string[];
+    confidenceScore: number;
+    verdict: "proceed" | "caution" | "hold";
+  } | null>().default(null),
+
+  // Step C: GPT-4o Refiner — improved code addressing both Claude reviews
   openaiRefinedCode:    jsonb("openai_refined_code").$type<{
     files: { path: string; content: string; explanation: string }[];
     changesSummary: string;
