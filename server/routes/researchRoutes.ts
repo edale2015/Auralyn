@@ -24,6 +24,7 @@ import { proposeUpgrade }           from "../research/upgradePlanner";
 import { autoValidateUpgrade }      from "../research/autoValidate";
 import { approveUpgrade, rejectUpgrade } from "../research/humanApproval";
 import { exportUpgradeToGitHub, isGitHubConfigured } from "../integrations/githubExporter";
+import { buildAgentHandoff }        from "../research/agentHandoffBuilder";
 
 const router = express.Router();
 
@@ -77,6 +78,35 @@ router.get("/articles/:id", async (req, res) => {
 router.post("/scan", requireRole(["admin"]), async (_req, res) => {
   try {
     const result = await scanMediumFeeds();
+
+    // Auto-pipeline: triage + summarize + agent handoff for every new article
+    // Fire-and-forget so the scan response returns immediately
+    if (result.inserted.length > 0) {
+      (async () => {
+        for (const articleId of result.inserted) {
+          try {
+            // Triage
+            const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
+            if (!article) continue;
+            const triageResult = triageArticle({ title: article.title, excerpt: article.excerpt, tags: (article.tags as string[]) ?? [] });
+            await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
+
+            // Summarize
+            await buildArticleSummary(articleId).catch(() => {});
+
+            // Agent handoff pipeline — only for adopt-rated articles
+            if (triageResult.verdict === "adopt") {
+              await buildAgentHandoff(articleId).catch((e: any) =>
+                console.error(`[scan auto-pipeline] handoff failed for article ${articleId}:`, e?.message)
+              );
+            }
+          } catch (e: any) {
+            console.error(`[scan auto-pipeline] error for article ${articleId}:`, e?.message);
+          }
+        }
+      })();
+    }
+
     res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });

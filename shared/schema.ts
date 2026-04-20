@@ -1736,3 +1736,50 @@ export const githubExports = pgTable("github_exports", {
   createdAt:          timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 export type GithubExport = typeof githubExports.$inferSelect;
+
+// ─── Agent Handoff Pipeline ────────────────────────────────────────────────
+// Full automated pipeline: Medium scan → OpenAI code proposal → AI safety review
+// → OpenAI refinement → human approval → Replit agent implementation.
+
+export const agentHandoffs = pgTable("agent_handoffs", {
+  id:                   serial("id").primaryKey(),
+  articleId:            integer("article_id").notNull(),
+  articleTitle:         text("article_title").notNull(),
+  articleUrl:           text("article_url").notNull(),
+  articleSummary:       text("article_summary"),
+
+  // Step A: GPT-4o Code Architect — first concrete implementation pass
+  openaiCodeProposal:   jsonb("openai_code_proposal").$type<{
+    files: { path: string; content: string; explanation: string }[];
+    summary: string;
+    concerns: string[];
+  } | null>().default(null),
+
+  // Step B: AI Safety Review ("Claude Review" pass — GPT-4o critical reviewer persona)
+  claudeCodeReview:     jsonb("claude_code_review").$type<{
+    overallVerdict: "approve" | "revise" | "reject";
+    concerns: string[];
+    suggestions: string[];
+    safetyFlags: string[];
+    hipaaRisks: string[];
+    fdaRisks: string[];
+  } | null>().default(null),
+
+  // Step C: GPT-4o Refiner — improved code addressing the review
+  openaiRefinedCode:    jsonb("openai_refined_code").$type<{
+    files: { path: string; content: string; explanation: string }[];
+    changesSummary: string;
+    resolvedConcerns: string[];
+    remainingRisks: string[];
+  } | null>().default(null),
+
+  // Pipeline status
+  pipelineStatus:       text("pipeline_status").notNull().default("running"),
+  // running | awaiting_approval | approved | implementing | implemented | rejected | failed
+
+  humanApprovedBy:      text("human_approved_by"),
+  humanApprovedAt:      timestamp("human_approved_at", { withTimezone: true }),
+  agentNotes:           text("agent_notes"),
+  createdAt:            timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+export type AgentHandoff = typeof agentHandoffs.$inferSelect;

@@ -2696,6 +2696,11 @@ export async function registerRoutes(
   app.use("/api/cross-model",     crossModelRoutes);
   console.log("[SlicePipeline] /api/claude-slices /api/slice-pipeline /api/cross-model active");
 
+  // ── Agent Handoff Pipeline: automated Medium→OpenAI→AI Review→Refine→HumanApproval→Agent ──
+  const { default: agentHandoffRoutes } = await import("./routes/agentHandoffRoutes");
+  app.use("/api/agent-handoffs", agentHandoffRoutes);
+  console.log("[AgentHandoff] Automated research pipeline queue at /api/agent-handoffs/* (list|pending-count|approve|reject|implemented)");
+
   return httpServer;
 }
 
