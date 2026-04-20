@@ -9,7 +9,12 @@ import {
   BookOpen, Search, CheckCircle, XCircle, GitBranch, RefreshCw,
   ChevronDown, ChevronUp, AlertTriangle, Sparkles, ShieldCheck,
   ExternalLink, Play, ThumbsUp, ThumbsDown, List, Plus, Library,
+  Code2, Zap,
 } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -355,6 +360,38 @@ export default function ResearchInboxPage() {
     onError: (e: any) => toast({ title: "Add list failed", description: e.message, variant: "destructive" }),
   });
 
+  const codeReview = useMutation({
+    mutationFn: (groupName?: string) =>
+      apiRequest("POST", "/api/research/app-code-review", { groupName })
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: () => {
+      toast({
+        title: "App code review started",
+        description: "Claude is reviewing your codebase. Results appear in the Agent Handoff Queue in ~60 seconds.",
+      });
+    },
+    onError: (e: any) => toast({ title: "Code review failed", description: e.message, variant: "destructive" }),
+  });
+
+  const fullRun = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/research/full-run")
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      toast({
+        title: "Full pipeline started",
+        description: "Feed scan + list scan + app code review all running in parallel. Check Agent Handoff Queue in ~60 seconds.",
+      });
+    },
+    onError: (e: any) => toast({ title: "Full run failed", description: e.message, variant: "destructive" }),
+  });
+
+  const reviewGroups: Array<{ groupName: string; files: string[]; filesFound: number; filesTotal: number }> =
+    config.data?.reviewGroups ?? [];
+
   const allArticles: any[] = articles.data?.articles ?? [];
   const filtered = filterVerdict === "all"
     ? allArticles
@@ -378,32 +415,96 @@ export default function ResearchInboxPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Status indicators */}
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <div className={`w-1.5 h-1.5 rounded-full ${config.data?.githubConfigured ? "bg-emerald-500" : "bg-slate-400"}`} />
             GitHub {config.data?.githubConfigured ? "connected" : "not configured"}
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <div className={`w-1.5 h-1.5 rounded-full ${config.data?.anthropicConfigured ? "bg-emerald-500" : "bg-slate-400"}`} />
-            Claude {config.data?.anthropicConfigured ? "connected" : "using GPT-4o fallback"}
+            Claude {config.data?.anthropicConfigured ? "connected" : "GPT-4o fallback"}
           </div>
+
+          {/* Individual triggers */}
           <Button
             variant="outline"
-            onClick={() => scanLists.mutate()}
-            disabled={scanLists.isPending}
-            data-testid="button-scan-lists"
-          >
-            {scanLists.isPending
-              ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Scanning lists…</>
-              : <><Library className="w-4 h-4 mr-2" />Scan My Lists</>}
-          </Button>
-          <Button
+            size="sm"
             onClick={() => scan.mutate()}
             disabled={scan.isPending}
             data-testid="button-scan-feeds"
           >
             {scan.isPending
-              ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Scanning…</>
-              : <><Search className="w-4 h-4 mr-2" />Scan Feeds</>}
+              ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Scanning…</>
+              : <><Search className="w-3.5 h-3.5 mr-1.5" />Scan Feeds</>}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => scanLists.mutate()}
+            disabled={scanLists.isPending}
+            data-testid="button-scan-lists"
+          >
+            {scanLists.isPending
+              ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Scanning…</>
+              : <><Library className="w-3.5 h-3.5 mr-1.5" />Scan My Lists</>}
+          </Button>
+
+          {/* App Code Review with group selector */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={codeReview.isPending}
+                data-testid="button-code-review"
+              >
+                {codeReview.isPending
+                  ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Reviewing…</>
+                  : <><Code2 className="w-3.5 h-3.5 mr-1.5" />Review App Code</>}
+                <ChevronDown className="w-3 h-3 ml-1 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel className="text-xs text-gray-500">Select files to review</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => codeReview.mutate(undefined)}
+                data-testid="code-review-auto"
+              >
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium">Auto (today's rotation)</span>
+                  <span className="text-xs text-gray-400">Rotates daily across all file groups</span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {reviewGroups.map(g => (
+                <DropdownMenuItem
+                  key={g.groupName}
+                  onClick={() => codeReview.mutate(g.groupName)}
+                  data-testid={`code-review-${g.groupName.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  <div className="flex flex-col flex-1">
+                    <span className="text-sm font-medium">{g.groupName}</span>
+                    <span className="text-xs text-gray-400">
+                      {g.filesFound}/{g.filesTotal} files available
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* FULL RUN — the big one */}
+          <Button
+            onClick={() => fullRun.mutate()}
+            disabled={fullRun.isPending || scan.isPending || scanLists.isPending || codeReview.isPending}
+            data-testid="button-full-run"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+          >
+            {fullRun.isPending
+              ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Running…</>
+              : <><Zap className="w-4 h-4 mr-2" />Full Run</>}
           </Button>
         </div>
       </div>

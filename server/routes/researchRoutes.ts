@@ -26,6 +26,7 @@ import { approveUpgrade, rejectUpgrade } from "../research/humanApproval";
 import { exportUpgradeToGitHub, isGitHubConfigured } from "../integrations/githubExporter";
 import { buildAgentHandoff }        from "../research/agentHandoffBuilder";
 import { scanSavedLists, SAVED_LISTS, addSavedList } from "../research/mediumListScraper";
+import { runStandaloneCodeReview, getReviewGroups } from "../research/standaloneCodeReview";
 
 const router = express.Router();
 
@@ -36,7 +37,9 @@ router.get("/config", (_req, res) => {
     ok:               true,
     githubConfigured: isGitHubConfigured(),
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
-    anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    // Check both spellings — Replit secret stored as Anthropic_API_Key
+    anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key),
+    reviewGroups: getReviewGroups(),
   });
 });
 
@@ -85,6 +88,63 @@ router.post("/scan-lists", requireRole(["admin"]), async (_req, res) => {
     res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+// ── Standalone app code review (no article required) ──────────────────────────
+
+router.post("/app-code-review", requireRole(["admin"]), async (req, res) => {
+  try {
+    const { groupName } = req.body ?? {};
+    // Fire and forget — pipeline can take 30-60 seconds
+    runStandaloneCodeReview({ groupName }).catch((e: any) =>
+      console.error("[app-code-review] standalone review failed:", e?.message)
+    );
+    res.json({ ok: true, message: "Standalone code review started — results will appear in Agent Handoff Queue" });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+// ── Full pipeline trigger: scan feeds + scan lists + app code review in parallel ─
+
+router.post("/full-run", requireRole(["admin"]), async (_req, res) => {
+  try {
+    // Respond immediately — everything runs in background
+    res.json({ ok: true, message: "Full pipeline started: feed scan + list scan + app code review running in parallel" });
+
+    // Run all three in parallel, non-blocking
+    const scanFeeds    = import("../research/mediumScout").then(m => m.scanMediumFeeds());
+    const scanLists    = scanSavedLists();
+    const codeReview   = runStandaloneCodeReview();
+
+    const [feedResult, listResult] = await Promise.allSettled([scanFeeds, scanLists, codeReview]);
+
+    // Auto-pipeline for any new articles from feed scan
+    const { scanMediumFeeds: _ } = await import("../research/mediumScout");
+    const feedInserted: number[] = (feedResult.status === "fulfilled" ? (feedResult.value as any)?.inserted : []) ?? [];
+    const listInserted: number[] = (listResult.status === "fulfilled" ? (listResult.value as any)?.inserted : []) ?? [];
+
+    for (const articleId of [...feedInserted, ...listInserted]) {
+      try {
+        const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
+        if (!article) continue;
+        const triageResult = triageArticle({ title: article.title, excerpt: article.excerpt, tags: (article.tags as string[]) ?? [] });
+        await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
+        await buildArticleSummary(articleId).catch(() => {});
+        if (triageResult.verdict === "adopt") {
+          await buildAgentHandoff(articleId).catch((e: any) =>
+            console.error(`[full-run] handoff failed for article ${articleId}:`, e?.message)
+          );
+        }
+      } catch (e: any) {
+        console.error(`[full-run] article pipeline error for ${articleId}:`, e?.message);
+      }
+    }
+
+    console.log(`[full-run] Complete — feeds: ${feedInserted.length} new, lists: ${listInserted.length} new`);
+  } catch (e: any) {
+    console.error("[full-run] error:", e?.message);
   }
 });
 
