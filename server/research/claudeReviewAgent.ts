@@ -57,7 +57,8 @@ export async function runClaudeReview(args: {
 }): Promise<ClaudeReview> {
 
   // ── Option 1: Real Claude via Anthropic API (if key is present) ──────────
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  // Accept both ANTHROPIC_API_KEY and Anthropic_API_Key (Replit secret name variations)
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
   if (anthropicKey) {
     try {
       const Anthropic = require("@anthropic-ai/sdk").default ?? require("@anthropic-ai/sdk");

@@ -235,7 +235,8 @@ export async function runClaudeSliceReview(args: {
   const prompt = buildSlicePrompt(ctx, args.articleTitle, args.proposal.summary);
 
   // ── Path 1: Real Claude (Anthropic API) ────────────────────────────────
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  // Accept both ANTHROPIC_API_KEY and Anthropic_API_Key (Replit secret name variations)
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
   if (anthropicKey) {
     try {
       const Anthropic = require("@anthropic-ai/sdk").default ?? require("@anthropic-ai/sdk");
