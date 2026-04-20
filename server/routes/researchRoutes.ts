@@ -25,6 +25,7 @@ import { autoValidateUpgrade }      from "../research/autoValidate";
 import { approveUpgrade, rejectUpgrade } from "../research/humanApproval";
 import { exportUpgradeToGitHub, isGitHubConfigured } from "../integrations/githubExporter";
 import { buildAgentHandoff }        from "../research/agentHandoffBuilder";
+import { scanSavedLists, SAVED_LISTS, addSavedList } from "../research/mediumListScraper";
 
 const router = express.Router();
 
@@ -35,7 +36,56 @@ router.get("/config", (_req, res) => {
     ok:               true,
     githubConfigured: isGitHubConfigured(),
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
   });
+});
+
+// ── Saved list management ─────────────────────────────────────────────────────
+
+router.get("/saved-lists", requirePhysician, (_req, res) => {
+  res.json({ ok: true, lists: SAVED_LISTS });
+});
+
+router.post("/saved-lists", requirePhysician, (req, res) => {
+  const { label, url } = req.body ?? {};
+  if (!label || !url) return res.status(400).json({ ok: false, error: "label and url required" });
+  if (!url.startsWith("https://medium.com/")) return res.status(400).json({ ok: false, error: "Only Medium list URLs are supported" });
+  const lists = addSavedList(String(label), String(url));
+  res.json({ ok: true, lists });
+});
+
+// ── Scan saved lists (Medium saved list scraper) ──────────────────────────────
+
+router.post("/scan-lists", requireRole(["admin"]), async (_req, res) => {
+  try {
+    const result = await scanSavedLists();
+
+    // Auto-pipeline same as tag scan: triage + summarize + handoff for new adopt articles
+    if (result.inserted.length > 0) {
+      (async () => {
+        for (const articleId of result.inserted) {
+          try {
+            const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
+            if (!article) continue;
+            const triageResult = triageArticle({ title: article.title, excerpt: article.excerpt, tags: (article.tags as string[]) ?? [] });
+            await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
+            await buildArticleSummary(articleId).catch(() => {});
+            if (triageResult.verdict === "adopt") {
+              await buildAgentHandoff(articleId).catch((e: any) =>
+                console.error(`[scan-lists auto-pipeline] handoff failed for article ${articleId}:`, e?.message)
+              );
+            }
+          } catch (e: any) {
+            console.error(`[scan-lists auto-pipeline] error for article ${articleId}:`, e?.message);
+          }
+        }
+      })();
+    }
+
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
 });
 
 // ── All other routes require auth ─────────────────────────────────────────────

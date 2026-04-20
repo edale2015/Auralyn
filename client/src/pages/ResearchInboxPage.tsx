@@ -4,10 +4,11 @@ import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   BookOpen, Search, CheckCircle, XCircle, GitBranch, RefreshCw,
   ChevronDown, ChevronUp, AlertTriangle, Sparkles, ShieldCheck,
-  ExternalLink, Play, ThumbsUp, ThumbsDown,
+  ExternalLink, Play, ThumbsUp, ThumbsDown, List, Plus, Library,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -303,6 +304,15 @@ export default function ResearchInboxPage() {
     queryFn:  () => apiRequest("/api/research/config").then(r => r.json()),
   });
 
+  const [newListLabel, setNewListLabel] = useState("");
+  const [newListUrl,   setNewListUrl]   = useState("");
+  const [showAddList,  setShowAddList]  = useState(false);
+
+  const savedLists = useQuery({
+    queryKey: ["/api/research/saved-lists"],
+    queryFn:  () => fetch("/api/research/saved-lists").then(r => r.json()),
+  });
+
   const scan = useMutation({
     mutationFn: () =>
       apiRequest("/api/research/scan", { method: "POST" })
@@ -310,9 +320,39 @@ export default function ResearchInboxPage() {
         .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
-      toast({ title: "Scan complete", description: `${d.inserted?.length ?? 0} new articles found` });
+      toast({ title: "Feed scan complete", description: `${d.inserted?.length ?? 0} new articles found` });
     },
     onError: (e: any) => toast({ title: "Scan failed", description: e.message, variant: "destructive" }),
+  });
+
+  const scanLists = useMutation({
+    mutationFn: () =>
+      apiRequest("/api/research/scan-lists", { method: "POST" })
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      toast({
+        title: "Saved lists scanned",
+        description: `${d.scraped ?? 0} articles found, ${d.inserted?.length ?? 0} new`,
+      });
+    },
+    onError: (e: any) => toast({ title: "List scan failed", description: e.message, variant: "destructive" }),
+  });
+
+  const addList = useMutation({
+    mutationFn: () =>
+      fetch("/api/research/saved-lists", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ label: newListLabel, url: newListUrl }),
+      }).then(r => r.json()).then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/research/saved-lists"] });
+      setNewListLabel(""); setNewListUrl(""); setShowAddList(false);
+      toast({ title: "List added", description: "Will be included in next scan" });
+    },
+    onError: (e: any) => toast({ title: "Add list failed", description: e.message, variant: "destructive" }),
   });
 
   const allArticles: any[] = articles.data?.articles ?? [];
@@ -327,7 +367,7 @@ export default function ResearchInboxPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-6">
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-violet-500" />
@@ -337,11 +377,25 @@ export default function ResearchInboxPage() {
             Auto-research → auto-propose → auto-validate → human-approve → GitHub PR
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <div className={`w-1.5 h-1.5 rounded-full ${config.data?.githubConfigured ? "bg-emerald-500" : "bg-slate-400"}`} />
             GitHub {config.data?.githubConfigured ? "connected" : "not configured"}
           </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <div className={`w-1.5 h-1.5 rounded-full ${config.data?.anthropicConfigured ? "bg-emerald-500" : "bg-slate-400"}`} />
+            Claude {config.data?.anthropicConfigured ? "connected" : "using GPT-4o fallback"}
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => scanLists.mutate()}
+            disabled={scanLists.isPending}
+            data-testid="button-scan-lists"
+          >
+            {scanLists.isPending
+              ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Scanning lists…</>
+              : <><Library className="w-4 h-4 mr-2" />Scan My Lists</>}
+          </Button>
           <Button
             onClick={() => scan.mutate()}
             disabled={scan.isPending}
@@ -352,6 +406,85 @@ export default function ResearchInboxPage() {
               : <><Search className="w-4 h-4 mr-2" />Scan Feeds</>}
           </Button>
         </div>
+      </div>
+
+      {/* Saved Lists Panel */}
+      <div className="border rounded-lg bg-violet-50/40 border-violet-100 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <List className="w-4 h-4 text-violet-600" />
+            <span className="text-sm font-semibold text-violet-800">Medium Saved Lists</span>
+            <Badge variant="outline" className="text-xs">
+              {savedLists.data?.lists?.length ?? 0} lists
+            </Badge>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAddList(!showAddList)}
+            data-testid="button-add-list"
+            className="text-violet-700 hover:text-violet-900 hover:bg-violet-100"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />Add list
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {(savedLists.data?.lists ?? []).map((list: { label: string; url: string }, i: number) => (
+            <a
+              key={i}
+              href={list.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs bg-white border border-violet-200 text-violet-700 hover:bg-violet-50 transition"
+              data-testid={`saved-list-${i}`}
+            >
+              <Library className="w-3 h-3" />
+              {list.label}
+              <ExternalLink className="w-3 h-3 opacity-50" />
+            </a>
+          ))}
+          {(savedLists.data?.lists ?? []).length === 0 && (
+            <p className="text-xs text-violet-500">No saved lists yet — click "Add list" to add one</p>
+          )}
+        </div>
+
+        {showAddList && (
+          <div className="flex gap-2 items-end pt-1 border-t border-violet-100 flex-wrap">
+            <div className="flex-1 min-w-48">
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Label</label>
+              <Input
+                placeholder='e.g. "ChatGPT Articles"'
+                value={newListLabel}
+                onChange={e => setNewListLabel(e.target.value)}
+                className="h-8 text-sm"
+                data-testid="input-list-label"
+              />
+            </div>
+            <div className="flex-[2] min-w-64">
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Medium list URL</label>
+              <Input
+                placeholder="https://medium.com/@username/list/name-xxxxxxxx"
+                value={newListUrl}
+                onChange={e => setNewListUrl(e.target.value)}
+                className="h-8 text-sm"
+                data-testid="input-list-url"
+              />
+            </div>
+            <Button
+              size="sm"
+              onClick={() => addList.mutate()}
+              disabled={addList.isPending || !newListLabel || !newListUrl}
+              data-testid="button-save-list"
+            >
+              {addList.isPending ? "Saving…" : "Save"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowAddList(false)}>Cancel</Button>
+          </div>
+        )}
+        <p className="text-xs text-violet-500">
+          Click "Scan My Lists" to pull all articles from your saved Medium lists through the full pipeline (triage → AI code proposal → safety review → agent handoff).
+        </p>
       </div>
 
       {/* Stats bar */}
