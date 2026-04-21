@@ -427,10 +427,10 @@ export default function ResearchInboxPage() {
       apiRequest("POST", "/api/research/app-code-review", { groupName })
         .then(r => r.json())
         .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
-    onSuccess: () => {
+    onSuccess: (d) => {
       toast({
-        title: "App code review started",
-        description: "Claude is reviewing your codebase. Results appear in the Agent Handoff Queue in ~60 seconds.",
+        title: "Code review queued",
+        description: d.message ?? "GPT-4o will review the selected file group (architecture + individual code slices). Check Agent Handoff Queue in ~2 minutes.",
       });
     },
     onError: (e: any) => toast({ title: "Code review failed", description: e.message, variant: "destructive" }),
@@ -546,48 +546,58 @@ export default function ResearchInboxPage() {
               : <><Library className="w-3.5 h-3.5 mr-1.5" />Scan My Lists</>}
           </Button>
 
-          {/* App Code Review with group selector */}
+          {/* App Code Review — no articles needed, reviews architecture + code slices */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
-                variant="outline"
                 size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
                 disabled={codeReview.isPending}
                 data-testid="button-code-review"
               >
                 {codeReview.isPending
                   ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Reviewing…</>
                   : <><Code2 className="w-3.5 h-3.5 mr-1.5" />Review App Code</>}
-                <ChevronDown className="w-3 h-3 ml-1 opacity-60" />
+                <ChevronDown className="w-3 h-3 ml-1 opacity-70" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="text-xs text-gray-500">Select files to review</DropdownMenuLabel>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel className="text-xs text-gray-500 leading-snug py-2">
+                Reviews architecture + individual code slices via GPT-4o.<br />
+                No articles needed — results land in Agent Handoff Queue.
+              </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => codeReview.mutate(undefined)}
                 data-testid="code-review-auto"
+                className="cursor-pointer"
               >
-                <div className="flex flex-col">
-                  <span className="text-sm font-medium">Auto (today's rotation)</span>
-                  <span className="text-xs text-gray-400">Rotates daily across all file groups</span>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-semibold">Auto — today's rotation</span>
+                  <span className="text-xs text-gray-400">Cycles through all file groups daily</span>
                 </div>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {reviewGroups.map(g => (
-                <DropdownMenuItem
-                  key={g.groupName}
-                  onClick={() => codeReview.mutate(g.groupName)}
-                  data-testid={`code-review-${g.groupName.toLowerCase().replace(/\s+/g, "-")}`}
-                >
-                  <div className="flex flex-col flex-1">
-                    <span className="text-sm font-medium">{g.groupName}</span>
-                    <span className="text-xs text-gray-400">
-                      {g.filesFound}/{g.filesTotal} files available
-                    </span>
-                  </div>
-                </DropdownMenuItem>
-              ))}
+              {reviewGroups.length > 0
+                ? reviewGroups.map(g => (
+                    <DropdownMenuItem
+                      key={g.groupName}
+                      onClick={() => codeReview.mutate(g.groupName)}
+                      data-testid={`code-review-${g.groupName.toLowerCase().replace(/\s+/g, "-")}`}
+                      className="cursor-pointer"
+                    >
+                      <div className="flex flex-col flex-1 gap-0.5">
+                        <span className="text-sm font-medium">{g.groupName}</span>
+                        <span className="text-xs text-gray-400">
+                          {g.filesFound}/{g.filesTotal} files · architecture + slice review
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                : <DropdownMenuItem disabled className="text-xs text-gray-400 italic">
+                    No file groups configured in /api/research/config
+                  </DropdownMenuItem>
+              }
             </DropdownMenuContent>
           </DropdownMenu>
 

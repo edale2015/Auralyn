@@ -36,7 +36,7 @@ router.get("/config", (_req, res) => {
   res.json({
     ok:               true,
     githubConfigured: isGitHubConfigured(),
-    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    openaiConfigured: Boolean(process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
     // Check both spellings — Replit secret stored as Anthropic_API_Key
     anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key),
     reviewGroups: getReviewGroups(),
