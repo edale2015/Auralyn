@@ -184,11 +184,9 @@ export default function OperationsCockpit() {
           { href: "/simulation-lab", label: "Simulation Lab", desc: "Bulk case runs and failure analysis", color: "border-amber-200 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-900/20" },
           { href: "/knowledge-hub", label: "Knowledge Hub", desc: "Browse and manage the clinical KB", color: "border-green-200 dark:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/20" },
         ].map(({ href, label, desc, color }) => (
-          <Link key={href} href={href}>
-            <a className={`block rounded-xl border p-4 cursor-pointer transition-colors ${color}`} data-testid={`quick-link-${label.toLowerCase().replace(/\s+/g, "-")}`}>
-              <div className="font-semibold text-sm text-gray-800 dark:text-gray-100 mb-1">{label}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">{desc}</div>
-            </a>
+          <Link key={href} href={href} className={`block rounded-xl border p-4 cursor-pointer transition-colors ${color}`} data-testid={`quick-link-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+            <div className="font-semibold text-sm text-gray-800 dark:text-gray-100 mb-1">{label}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400">{desc}</div>
           </Link>
         ))}
       </div>

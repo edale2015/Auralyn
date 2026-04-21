@@ -1,9 +1,11 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import type { AuthUser, AuthSessionPayload, LoginRequest, LoginResponse, UserRole } from "../types/auth";
+import { JWT_ISSUER, JWT_AUDIENCE } from "../auth/authTypes";
 
 const JWT_SECRET = process.env.APP_JWT_SECRET ?? "";
-const JWT_EXPIRES_IN = "15m";
+const JWT_EXPIRES_IN = "12h";
 const REFRESH_EXPIRES_IN = "7d";
 
 if (!JWT_SECRET) {
@@ -75,13 +77,27 @@ export class AuthService {
       organizationId: user.organizationId,
     };
 
-    const token = jwt.sign(payload, EFFECTIVE_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-      algorithm: "HS256",
-    });
+    const token = jwt.sign(
+      {
+        id:       user.userId,
+        sub:      user.userId,
+        email:    user.email,
+        role:     user.role,
+        clinicId: user.organizationId,
+        jti:      crypto.randomUUID(),
+        ...payload,
+      },
+      EFFECTIVE_SECRET,
+      {
+        expiresIn: JWT_EXPIRES_IN,
+        algorithm: "HS256",
+        issuer:    JWT_ISSUER,
+        audience:  JWT_AUDIENCE,
+      }
+    );
 
     const refreshToken = jwt.sign(
-      { userId: user.userId, type: "refresh" },
+      { userId: user.userId, type: "refresh", jti: crypto.randomUUID() },
       EFFECTIVE_SECRET,
       { expiresIn: REFRESH_EXPIRES_IN, algorithm: "HS256" }
     );
@@ -116,9 +132,18 @@ export class AuthService {
     if (!user) throw new Error("User not found or inactive");
 
     const newAccessToken = jwt.sign(
-      { userId: user.userId, role: user.role, organizationId: user.organizationId } as AuthSessionPayload,
+      {
+        id:       user.userId,
+        sub:      user.userId,
+        email:    user.email,
+        role:     user.role,
+        clinicId: user.organizationId,
+        userId:   user.userId,
+        organizationId: user.organizationId,
+        jti:      crypto.randomUUID(),
+      },
       EFFECTIVE_SECRET,
-      { expiresIn: JWT_EXPIRES_IN, algorithm: "HS256" }
+      { expiresIn: JWT_EXPIRES_IN, algorithm: "HS256", issuer: JWT_ISSUER, audience: JWT_AUDIENCE }
     );
 
     return { token: newAccessToken, expiresIn: 15 * 60 };
