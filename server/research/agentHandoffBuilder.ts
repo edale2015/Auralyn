@@ -101,9 +101,10 @@ export async function buildAgentHandoff(articleId: number): Promise<{ handoffId:
     return { handoffId, status: "awaiting_approval" };
 
   } catch (err: any) {
-    console.error(`[agentHandoff #${handoffId}] Pipeline failed:`, err?.message);
+    const errMsg = err?.message ?? String(err);
+    console.error(`[agentHandoff #${handoffId}] Pipeline failed:`, errMsg);
     await db.update(agentHandoffs)
-      .set({ pipelineStatus: "failed" })
+      .set({ pipelineStatus: "failed", agentNotes: `Pipeline error: ${errMsg}` })
       .where(eq(agentHandoffs.id, handoffId));
     throw err;
   }

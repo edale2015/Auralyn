@@ -14,7 +14,7 @@ import { db }               from "../db";
 import { eq, desc, sql }    from "drizzle-orm";
 import {
   researchArticles, researchReviews, researchSummaries,
-  proposedUpgrades, githubExports,
+  proposedUpgrades, githubExports, agentHandoffs,
 } from "../../shared/schema";
 
 import { scanMediumFeeds }          from "../research/mediumScout";
@@ -362,6 +362,29 @@ router.post("/triage/:articleId", async (req, res) => {
 });
 
 // ── Manual promotion: override verdict → adopt, push to Agent Handoff Queue ──
+
+// ── Retry a failed handoff — deletes old record, re-runs full pipeline ─────────
+
+router.post("/handoffs/:handoffId/retry", requireRole(["admin"]), async (req, res) => {
+  try {
+    const handoffId = Number(req.params.handoffId);
+    const [handoff] = await db.select().from(agentHandoffs).where(eq(agentHandoffs.id, handoffId));
+    if (!handoff) return res.status(404).json({ ok: false, error: "Handoff not found" });
+
+    // Remove the failed record then re-run (fire-and-forget so the route returns fast)
+    await db.delete(agentHandoffs).where(eq(agentHandoffs.id, handoffId));
+
+    setImmediate(() => {
+      buildAgentHandoff(handoff.articleId).catch((e: any) =>
+        console.error(`[retry handoff ${handoffId}] pipeline failed:`, e?.message)
+      );
+    });
+
+    res.json({ ok: true, message: "Retry started — pipeline takes ~60 seconds, then check the queue" });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
 
 router.post("/promote/:articleId", requirePhysician, async (req, res) => {
   try {

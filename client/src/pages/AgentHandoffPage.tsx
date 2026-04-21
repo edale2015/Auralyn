@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge }    from "@/components/ui/badge";
 import { Button }   from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle, XCircle, Clock, AlertTriangle, FileCode2,
   ExternalLink, ChevronDown, ChevronUp, Bot, ShieldAlert, Wrench,
-  BookOpen, GitBranch, Gauge, HelpCircle, Zap,
+  BookOpen, GitBranch, Gauge, HelpCircle, Zap, RefreshCw,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -169,6 +170,8 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
     queryFn: () => fetch(`/api/agent-handoffs/${id}`).then(r => r.json()),
   });
 
+  const { toast } = useToast();
+
   const approveMut = useMutation({
     mutationFn: () => apiRequest("POST", `/api/agent-handoffs/${id}/approve`, { approvedBy: "admin" }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/agent-handoffs"] }); },
@@ -177,6 +180,19 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
   const rejectMut = useMutation({
     mutationFn: () => apiRequest("POST", `/api/agent-handoffs/${id}/reject`, { reason: rejectReason || "Rejected" }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/agent-handoffs"] }); onClose(); },
+  });
+
+  const retryMut = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", `/api/research/handoffs/${id}/retry`)
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error ?? "Retry failed"); return d; }),
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["/api/agent-handoffs"] });
+      toast({ title: "Retry started", description: d.message });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Retry failed", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) return <div className="p-8 text-center text-gray-500">Loading full context…</div>;
@@ -231,6 +247,35 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-3">
           <XCircle className="w-5 h-5 text-red-500" />
           <p className="text-sm text-red-800">This handoff was rejected. {handoff.agentNotes}</p>
+        </div>
+      )}
+
+      {handoff.pipelineStatus === "failed" && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <XCircle className="w-5 h-5 text-red-500 shrink-0" />
+            <p className="text-sm font-semibold text-red-800">Pipeline failed</p>
+          </div>
+          {handoff.agentNotes && (
+            <p className="text-xs text-red-700 bg-red-100 rounded p-2 font-mono whitespace-pre-wrap">
+              {handoff.agentNotes}
+            </p>
+          )}
+          <p className="text-xs text-red-600">
+            This usually means an OpenAI or Anthropic API call timed out or returned an error.
+            Retrying deletes this entry and starts a fresh pipeline run.
+          </p>
+          <Button
+            size="sm"
+            className="bg-red-600 hover:bg-red-700 text-white"
+            onClick={() => retryMut.mutate()}
+            disabled={retryMut.isPending}
+            data-testid={`retry-handoff-${id}`}
+          >
+            {retryMut.isPending
+              ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Retrying…</>
+              : <><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry Pipeline</>}
+          </Button>
         </div>
       )}
 

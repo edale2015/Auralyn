@@ -77,13 +77,13 @@ function ArticleDetail({ article, onClose }: { article: Article; onClose: () => 
 
   const detail = useQuery({
     queryKey: ["/api/research/articles", article.id],
-    queryFn:  () => apiRequest(`/api/research/articles/${article.id}`).then(r => r.json()),
+    queryFn:  () => apiRequest("GET", `/api/research/articles/${article.id}`).then(r => r.json()),
   });
 
   const d: { article: Article; review?: Review; summary?: Summary; upgrades?: Upgrade[] } = detail.data ?? { article };
 
-  const mutate = (path: string, body?: any, key?: string) =>
-    apiRequest(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined })
+  const mutate = (endpoint: string, body?: any, key?: string) =>
+    apiRequest("POST", endpoint, body ?? undefined)
       .then(r => r.json())
       .then(data => {
         if (!data.ok) throw new Error(data.error ?? "Request failed");
@@ -343,8 +343,9 @@ function ArticleCard({ article, onClick, onPromote }: { article: any; onClick: (
 export default function ResearchInboxPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [selected, setSelected] = useState<Article | null>(null);
+  const [selected,      setSelected]      = useState<Article | null>(null);
   const [filterVerdict, setFilterVerdict] = useState<string>("all");
+  const [userSelected,  setUserSelected]  = useState<Set<number>>(new Set());
 
   const articles = useQuery({
     queryKey: ["/api/research/articles"],
@@ -780,12 +781,28 @@ export default function ResearchInboxPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Article grid */}
-        <div className="lg:col-span-2 space-y-3">
+        <div className="lg:col-span-2 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               Articles ({filtered.length})
+              {userSelected.size > 0 && (
+                <span className="ml-2 text-blue-600 normal-case font-medium">
+                  · {userSelected.size} manually selected
+                </span>
+              )}
             </h2>
-            <span className="text-xs text-muted-foreground">Click any row to open details</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" />adopt at top
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-400 mx-1 ml-2" />your picks
+              </span>
+              {userSelected.size > 0 && (
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                  onClick={() => setUserSelected(new Set())}
+                >clear picks</button>
+              )}
+            </div>
           </div>
           {articles.isLoading && (
             <div className="text-sm text-muted-foreground py-8 text-center">Loading articles…</div>
@@ -798,43 +815,92 @@ export default function ResearchInboxPage() {
             </div>
           )}
           <div className="border rounded-lg divide-y overflow-hidden bg-card">
-            {filtered.map((a: any) => {
-              const verdict = a.verdict as string | undefined;
-              const pubDate = a.published_at ?? a.publishedAt;
-              return (
-                <div
-                  key={a.id}
-                  className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors ${selected?.id === a.id ? "bg-muted" : ""}`}
-                  onClick={() => setSelected(a)}
-                  data-testid={`row-article-${a.id}`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium leading-snug truncate">{a.title}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {a.source && <span className="capitalize">{a.source.replace(/_/g, " ")}</span>}
-                      {pubDate && <span> · {new Date(pubDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>}
-                      {a.author && <span> · {a.author}</span>}
-                    </p>
+            {[...filtered]
+              .sort((a: any, b: any) => {
+                const aAdopt = a.verdict === "adopt";
+                const bAdopt = b.verdict === "adopt";
+                const aPicked = userSelected.has(a.id);
+                const bPicked = userSelected.has(b.id);
+                if (aAdopt && !bAdopt) return -1;
+                if (!aAdopt && bAdopt) return 1;
+                if (aPicked && !bPicked) return -1;
+                if (!aPicked && bPicked) return 1;
+                return 0;
+              })
+              .map((a: any) => {
+                const verdict  = a.verdict as string | undefined;
+                const pubDate  = a.published_at ?? a.publishedAt;
+                const isAdopt  = verdict === "adopt";
+                const isPicked = userSelected.has(a.id);
+                const isChecked = isAdopt || isPicked;
+                const rowBg = isAdopt
+                  ? "bg-emerald-50 dark:bg-emerald-950/30 border-l-2 border-l-emerald-400"
+                  : isPicked
+                    ? "bg-blue-50 dark:bg-blue-950/30 border-l-2 border-l-blue-400"
+                    : selected?.id === a.id ? "bg-muted" : "";
+
+                const dateStr = pubDate
+                  ? new Date(pubDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                  : null;
+
+                return (
+                  <div
+                    key={a.id}
+                    className={`flex items-start gap-3 px-3 py-3 hover:bg-muted/40 transition-colors ${rowBg}`}
+                    data-testid={`row-article-${a.id}`}
+                  >
+                    {/* Checkbox — toggles user pick, doesn't open detail */}
+                    <div className="pt-0.5 shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        disabled={isAdopt}
+                        onChange={e => {
+                          const next = new Set(userSelected);
+                          if (e.target.checked) next.add(a.id);
+                          else next.delete(a.id);
+                          setUserSelected(next);
+                        }}
+                        onClick={e => e.stopPropagation()}
+                        className="w-4 h-4 rounded accent-emerald-600 cursor-pointer"
+                        title={isAdopt ? "Auto-selected by triage" : "Select for queue"}
+                        data-testid={`check-article-${a.id}`}
+                      />
+                    </div>
+
+                    {/* Main text — clicking opens detail */}
+                    <div
+                      className="flex-1 min-w-0 cursor-pointer"
+                      onClick={() => setSelected(a)}
+                    >
+                      <p className="text-sm font-medium leading-snug line-clamp-2">{a.title}</p>
+                      <p className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-2">
+                        {dateStr && <span className="font-medium text-foreground/70">{dateStr}</span>}
+                        {a.source && <span className="capitalize">{a.source.replace(/_/g, " ")}</span>}
+                        {a.author && <span>{a.author}</span>}
+                      </p>
+                    </div>
+
+                    {/* Verdict + promote */}
+                    <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+                      {verdict
+                        ? <VerdictBadge verdict={verdict} />
+                        : <span className="text-xs text-muted-foreground italic">unreviewed</span>
+                      }
+                      {verdict === "ignore" && (
+                        <button
+                          className="text-amber-500 hover:text-amber-700"
+                          onClick={e => { e.stopPropagation(); quickPromote(a.id); }}
+                          data-testid={`btn-promote-${a.id}`}
+                          title="Promote to Agent Handoff Queue"
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {verdict
-                      ? <VerdictBadge verdict={verdict} />
-                      : <span className="text-xs text-muted-foreground italic">unreviewed</span>
-                    }
-                    {verdict === "ignore" && (
-                      <button
-                        className="text-xs text-amber-600 hover:text-amber-800 font-semibold flex items-center gap-0.5"
-                        onClick={e => { e.stopPropagation(); quickPromote(a.id); }}
-                        data-testid={`btn-promote-${a.id}`}
-                        title="Promote to Agent Handoff Queue"
-                      >
-                        <Zap className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         </div>
 
