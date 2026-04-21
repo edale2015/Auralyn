@@ -110,8 +110,7 @@ router.post("/app-code-review", requireRole(["admin"]), async (req, res) => {
 
 router.post("/medium-run", requireRole(["admin"]), async (_req, res) => {
   try {
-    res.json({ ok: true, message: "Medium pipeline started: feed scan + saved list scan running in parallel" });
-
+    // Phase 1: scan feeds + lists (fast, ~5s) — done before responding
     const [feedResult, listResult] = await Promise.allSettled([
       scanMediumFeeds(),
       scanSavedLists(),
@@ -119,27 +118,60 @@ router.post("/medium-run", requireRole(["admin"]), async (_req, res) => {
 
     const feedInserted: number[] = (feedResult.status === "fulfilled" ? (feedResult.value as any)?.inserted : []) ?? [];
     const listInserted: number[] = (listResult.status === "fulfilled" ? (listResult.value as any)?.inserted : []) ?? [];
+    const allIds = [...feedInserted, ...listInserted];
 
-    for (const articleId of [...feedInserted, ...listInserted]) {
+    // Phase 2: triage all articles (fast, CPU-only scoring) — done before responding
+    type TriagedItem = { articleId: number; verdict: string; triageResult: any };
+    const triaged: TriagedItem[] = [];
+    for (const articleId of allIds) {
       try {
         const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
         if (!article) continue;
         const triageResult = triageArticle({ title: article.title, excerpt: article.excerpt, tags: (article.tags as string[]) ?? [] });
         await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
-        await buildArticleSummary(articleId).catch(() => {});
-        if (triageResult.verdict === "adopt") {
-          await buildAgentHandoff(articleId).catch((e: any) =>
-            console.error(`[medium-run] handoff failed for article ${articleId}:`, e?.message)
-          );
-        }
+        triaged.push({ articleId, verdict: triageResult.verdict, triageResult });
       } catch (e: any) {
-        console.error(`[medium-run] article pipeline error for ${articleId}:`, e?.message);
+        console.error(`[medium-run] triage error for ${articleId}:`, e?.message);
       }
     }
 
-    console.log(`[medium-run] Complete — feeds: ${feedInserted.length} new, lists: ${listInserted.length} new`);
+    const adopted  = triaged.filter(t => t.verdict === "adopt").length;
+    const testOnly = triaged.filter(t => t.verdict === "test_only").length;
+    const ignored  = triaged.filter(t => t.verdict === "ignore").length;
+
+    // Respond immediately with actual scan + triage counts
+    res.json({
+      ok: true,
+      scanned:  allIds.length,
+      adopted,
+      testOnly,
+      ignored,
+      feeds:    feedInserted.length,
+      lists:    listInserted.length,
+      message:  `Scanned ${allIds.length} new articles — ${adopted} promoted to Agent Handoff Queue, ${testOnly} in Research Inbox`,
+    });
+
+    // Phase 3: build AI summaries + agent handoffs in background (slow — AI calls)
+    setImmediate(async () => {
+      for (const { articleId, verdict, triageResult } of triaged) {
+        try {
+          await buildArticleSummary(articleId).catch(() => {});
+          if (verdict === "adopt") {
+            await buildAgentHandoff(articleId).catch((e: any) =>
+              console.error(`[medium-run] handoff failed for article ${articleId}:`, e?.message)
+            );
+          }
+        } catch (e: any) {
+          console.error(`[medium-run] summary/handoff error for ${articleId}:`, e?.message);
+        }
+      }
+      console.log(`[medium-run] Background complete — ${adopted} handoffs, ${testOnly} test_only, ${ignored} ignored`);
+    });
+
+    console.log(`[medium-run] Scan+triage complete — feeds: ${feedInserted.length}, lists: ${listInserted.length}, adopted: ${adopted}`);
   } catch (e: any) {
     console.error("[medium-run] error:", e?.message);
+    if (!res.headersSent) res.status(500).json({ error: e?.message ?? "Pipeline failed" });
   }
 });
 

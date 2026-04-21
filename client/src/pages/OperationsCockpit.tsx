@@ -58,6 +58,10 @@ export default function OperationsCockpit() {
   const [codeRevStatus,    setCodeRevStatus]    = useState<PipelineStatus>("idle");
   const [codeRevGroup,     setCodeRevGroup]     = useState<string>("Auto (today's rotation)");
   const [groupDropOpen,    setGroupDropOpen]    = useState(false);
+  const [lastRunResult,    setLastRunResult]    = useState<{
+    label: string; scanned: number; adopted: number; testOnly: number; ignored: number; ts: Date;
+  } | null>(null);
+  const [bgProcessing,     setBgProcessing]     = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,9 +82,27 @@ export default function OperationsCockpit() {
   ) {
     setStatus("running");
     try {
-      await apiRequest("POST", endpoint, body);
+      const res = await apiRequest("POST", endpoint, body);
+      const data = await res.json().catch(() => ({})) as any;
       setStatus("done");
-      toast({ title: `${label} started`, description: "Results appear in the Agent Handoff Queue in ~60 seconds." });
+
+      const scanned  = data?.scanned  ?? 0;
+      const adopted  = data?.adopted  ?? 0;
+      const testOnly = data?.testOnly ?? 0;
+      const ignored  = data?.ignored  ?? 0;
+
+      if (scanned > 0 || adopted > 0) {
+        setLastRunResult({ label, scanned, adopted, testOnly, ignored, ts: new Date() });
+        // AI summary + handoff building continues in background for ~60s
+        setBgProcessing(true);
+        setTimeout(() => setBgProcessing(false), 75_000);
+      }
+
+      const desc = scanned > 0
+        ? `${scanned} new articles scanned — ${adopted > 0 ? `${adopted} promoted to Handoff Queue` : "none met the adopt threshold (score ≥ 72)"}`
+        : "No new articles found (feeds may be up to date)";
+
+      toast({ title: `${label} complete`, description: desc });
       setTimeout(() => setStatus("idle"), 6000);
     } catch (e: any) {
       setStatus("error");
@@ -286,6 +308,40 @@ export default function OperationsCockpit() {
             Results → <Link href="/agent-handoff" className="text-blue-500 hover:underline">Agent Handoff Queue</Link>
           </div>
         </div>
+
+        {/* Last Run Result Strip */}
+        {lastRunResult && (
+          <div className="mt-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" data-testid="last-run-result">
+            <span className="font-semibold text-blue-700 dark:text-blue-300">{lastRunResult.label}</span>
+            <span className="text-gray-500 dark:text-gray-400 text-xs">{lastRunResult.ts.toLocaleTimeString()}</span>
+            <span className="text-gray-700 dark:text-gray-200">
+              <span className="font-semibold">{lastRunResult.scanned}</span> new articles scanned
+            </span>
+            {lastRunResult.adopted > 0 ? (
+              <span className="text-green-700 dark:text-green-400 font-semibold">
+                ✓ {lastRunResult.adopted} promoted →{" "}
+                <Link href="/agent-handoff" className="underline hover:no-underline">Handoff Queue</Link>
+              </span>
+            ) : (
+              <span className="text-amber-600 dark:text-amber-400">0 met adopt threshold (score &lt; 72)</span>
+            )}
+            {lastRunResult.testOnly > 0 && (
+              <span className="text-gray-500 dark:text-gray-400">
+                {lastRunResult.testOnly} in{" "}
+                <Link href="/research-inbox" className="text-blue-500 hover:underline">Research Inbox</Link>
+              </span>
+            )}
+            {bgProcessing && (
+              <span className="flex items-center gap-1 text-xs text-gray-400">
+                <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                </svg>
+                Building AI summaries…
+              </span>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Service Health Row */}
