@@ -49,7 +49,7 @@ Non-negotiable constraints:
 export async function runOpenAIReviewStage(
   payload: OpenAIReviewRequest,
 ): Promise<OpenAIReviewResponse> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY missing — OpenAI review stage unavailable");
 
   const codeSection = Object.entries(payload.relevantCode)
@@ -89,7 +89,7 @@ Return JSON with this exact shape:
   try {
     // Use OpenAI npm package (already installed)
     const OpenAI = require("openai").default ?? require("openai");
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({
       model:           "gpt-4o",

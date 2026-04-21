@@ -45,12 +45,13 @@ export function summarizeLocally(
 
 // ── AI-enhanced summarizer (if OPENAI_API_KEY is set) ────────────────────────
 
-let _openai: any = null;
 function getOpenAI() {
-  if (!_openai) {
-    try { _openai = new (require("openai").default)(); } catch { return null; }
-  }
-  return _openai;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const OpenAIClass = require("openai").default ?? require("openai");
+    return new OpenAIClass({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+  } catch { return null; }
 }
 
 async function summarizeWithAI(
@@ -59,7 +60,7 @@ async function summarizeWithAI(
   tags:    string[],
 ): Promise<{ summary: string; takeaways: string[] } | null> {
   const openai = getOpenAI();
-  if (!openai || !process.env.OPENAI_API_KEY) return null;
+  if (!openai) return null;
 
   try {
     const prompt = [

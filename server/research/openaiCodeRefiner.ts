@@ -60,7 +60,7 @@ export async function refineCodeProposal(args: {
   sliceReview:  ClaudeSliceReview;
   articleTitle: string;
 }): Promise<RefinedCodeProposal> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY missing — code refiner unavailable");
 
   const filesSection = args.original.files
@@ -100,7 +100,7 @@ Produce the refined v2 code that addresses concerns from both Claude reviewers.
 
   try {
     const OpenAI = require("openai").default ?? require("openai");
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({
       model:           "gpt-4o",

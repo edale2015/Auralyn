@@ -80,14 +80,14 @@ export async function runClaudeReview(args: {
   }
 
   // ── Option 2: GPT-4o with adversarial safety reviewer persona (default) ──
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("No AI API key available for code review (OPENAI_API_KEY or ANTHROPIC_API_KEY required)");
 
   const userContent = buildReviewPrompt(args);
 
   try {
     const OpenAI = require("openai").default ?? require("openai");
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({
       model:           "gpt-4o",

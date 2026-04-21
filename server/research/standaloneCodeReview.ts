@@ -106,7 +106,7 @@ async function generateProactiveProposal(
   group: typeof HIGH_VALUE_FILE_GROUPS[0],
   loadedFiles: Array<{ path: string; content: string }>
 ): Promise<CodeProposal> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY required for proactive code review");
 
   const fileSection = loadedFiles
@@ -125,7 +125,7 @@ Only propose changes that are clearly improvements — do not change what is wor
 `.trim();
 
   const OpenAI = require("openai").default ?? require("openai");
-  const openai = new OpenAI({ apiKey });
+  const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
   const resp = await openai.chat.completions.create({
     model:           "gpt-4o",

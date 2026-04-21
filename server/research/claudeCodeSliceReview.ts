@@ -260,14 +260,14 @@ export async function runClaudeSliceReview(args: {
   }
 
   // ── Path 2: GPT-4o with architect reviewer persona (fallback) ──────────
-  const openaiKey = process.env.OPENAI_API_KEY;
+  const openaiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!openaiKey) {
     return fallbackReview("No AI API key available (OPENAI_API_KEY or ANTHROPIC_API_KEY required)");
   }
 
   try {
     const OpenAI = require("openai").default ?? require("openai");
-    const openai = new OpenAI({ apiKey: openaiKey });
+    const openai = new OpenAI({ apiKey: openaiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({
       model:           "gpt-4o",

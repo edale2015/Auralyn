@@ -347,19 +347,16 @@ export default function ResearchInboxPage() {
   const [filterVerdict, setFilterVerdict] = useState<string>("all");
   const [userSelected,  setUserSelected]  = useState<Set<number>>(new Set());
 
-  const articles = useQuery({
+  const articles = useQuery<{ ok: boolean; articles: Article[] }>({
     queryKey: ["/api/research/articles"],
-    queryFn:  () => apiRequest("/api/research/articles").then(r => r.json()),
   });
 
-  const upgrades = useQuery({
+  const upgrades = useQuery<{ ok: boolean; upgrades: Upgrade[] }>({
     queryKey: ["/api/research/upgrades"],
-    queryFn:  () => apiRequest("/api/research/upgrades").then(r => r.json()),
   });
 
   const config = useQuery({
     queryKey: ["/api/research/config"],
-    queryFn:  () => apiRequest("/api/research/config").then(r => r.json()),
   });
 
   const [newListLabel, setNewListLabel] = useState("");
@@ -369,7 +366,6 @@ export default function ResearchInboxPage() {
 
   const savedLists = useQuery({
     queryKey: ["/api/research/saved-lists"],
-    queryFn:  () => fetch("/api/research/saved-lists").then(r => r.json()),
   });
 
   const scan = useMutation({
