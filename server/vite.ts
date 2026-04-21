@@ -63,7 +63,15 @@ export async function setupVite(server: Server, app: Express) {
       ...viteLogger,
       error: (msg, options) => {
         viteLogger.error(msg, options);
-        process.exit(1);
+        // Only exit on genuine fatal Vite errors — not transient infra issues
+        // like WebSocket port conflicts or plugin startup warnings.
+        const isTransient =
+          /port.*in use|address already in use|EADDRINUSE/i.test(msg) ||
+          /WebSocket server error/i.test(msg) ||
+          /plugin.*failed to start/i.test(msg);
+        if (!isTransient) {
+          process.exit(1);
+        }
       },
     },
     server: {
