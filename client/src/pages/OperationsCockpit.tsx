@@ -202,8 +202,8 @@ export default function OperationsCockpit() {
               Trigger the automated research pipeline — Medium articles → AI review → Agent Handoff Queue
             </p>
           </div>
-          <Link href="/research-inbox">
-            <a className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">Open Research Inbox →</a>
+          <Link href="/research-inbox" className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">
+            Open Research Inbox →
           </Link>
         </div>
 
@@ -285,7 +285,7 @@ export default function OperationsCockpit() {
           </div>
 
           <div className="ml-auto text-xs text-gray-400 hidden md:block">
-            Results → <Link href="/agent-handoff"><a className="text-blue-500 hover:underline">Agent Handoff Queue</a></Link>
+            Results → <Link href="/agent-handoff" className="text-blue-500 hover:underline">Agent Handoff Queue</Link>
           </div>
         </div>
       </section>
