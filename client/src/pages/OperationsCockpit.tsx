@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
 import StatCard from "../components/ops/StatCard";
 import { Badge } from "@/components/ui/badge";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 type ServiceStatus = { ok: boolean; configured?: boolean; error?: string };
 type QueueStat = { waiting?: number; active?: number; completed?: number; failed?: number };
@@ -35,10 +37,85 @@ function QueueRow({ name, q }: { name: string; q: QueueStat }) {
   );
 }
 
+const CODE_REVIEW_GROUPS = [
+  "Clinical Safety & Triage",
+  "AI & Probabilistic Reasoning",
+  "FDA Compliance & Audit",
+  "EHR Integration",
+];
+
+type PipelineStatus = "idle" | "running" | "done" | "error";
+
 export default function OperationsCockpit() {
+  const { toast } = useToast();
   const [data, setData] = useState<OpsSummary | null>(null);
   const [error, setError] = useState<string>("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Research pipeline state
+  const [fullRunStatus,    setFullRunStatus]    = useState<PipelineStatus>("idle");
+  const [mediumRunStatus,  setMediumRunStatus]  = useState<PipelineStatus>("idle");
+  const [codeRevStatus,    setCodeRevStatus]    = useState<PipelineStatus>("idle");
+  const [codeRevGroup,     setCodeRevGroup]     = useState<string>("Auto (today's rotation)");
+  const [groupDropOpen,    setGroupDropOpen]    = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) {
+        setGroupDropOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  async function triggerPipeline(
+    endpoint: string,
+    body: Record<string, unknown> | undefined,
+    setStatus: (s: PipelineStatus) => void,
+    label: string,
+  ) {
+    setStatus("running");
+    try {
+      await apiRequest("POST", endpoint, body);
+      setStatus("done");
+      toast({ title: `${label} started`, description: "Results appear in the Agent Handoff Queue in ~60 seconds." });
+      setTimeout(() => setStatus("idle"), 6000);
+    } catch (e: any) {
+      setStatus("error");
+      toast({ title: `${label} failed`, description: e?.message, variant: "destructive" });
+      setTimeout(() => setStatus("idle"), 6000);
+    }
+  }
+
+  function handleFullRun() {
+    triggerPipeline("/api/research/full-run", undefined, setFullRunStatus, "Full Run");
+  }
+
+  function handleMediumRun() {
+    triggerPipeline("/api/research/medium-run", undefined, setMediumRunStatus, "Medium Run");
+  }
+
+  function handleCodeReview() {
+    const groupName = codeRevGroup === "Auto (today's rotation)" ? undefined : codeRevGroup;
+    triggerPipeline("/api/research/app-code-review", groupName ? { groupName } : undefined, setCodeRevStatus, "Code Review");
+    setGroupDropOpen(false);
+  }
+
+  function pipelineBtn(status: PipelineStatus) {
+    if (status === "running") return " opacity-70 cursor-wait";
+    if (status === "done")    return " opacity-80";
+    if (status === "error")   return " opacity-80";
+    return "";
+  }
+
+  function statusBadge(status: PipelineStatus) {
+    if (status === "running") return <span className="ml-2 text-xs animate-pulse text-gray-400">running…</span>;
+    if (status === "done")    return <span className="ml-2 text-xs text-green-500">started ✓</span>;
+    if (status === "error")   return <span className="ml-2 text-xs text-red-500">failed</span>;
+    return null;
+  }
 
   async function load() {
     try {
@@ -115,6 +192,103 @@ export default function OperationsCockpit() {
           </Link>
         ))}
       </div>
+
+      {/* Research Pipeline */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-xl font-semibold">Research Pipeline</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Trigger the automated research pipeline — Medium articles → AI review → Agent Handoff Queue
+            </p>
+          </div>
+          <Link href="/research-inbox">
+            <a className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">Open Research Inbox →</a>
+          </Link>
+        </div>
+
+        <div className="rounded-xl border p-4 flex flex-wrap gap-3 items-center bg-gray-50 dark:bg-gray-900/40">
+
+          {/* Full Run */}
+          <button
+            data-testid="btn-full-run"
+            disabled={fullRunStatus === "running"}
+            onClick={handleFullRun}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white bg-violet-600 hover:bg-violet-700 transition-colors${pipelineBtn(fullRunStatus)}`}
+          >
+            {fullRunStatus === "running" ? (
+              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            )}
+            Full Run
+            {statusBadge(fullRunStatus)}
+          </button>
+
+          {/* Medium Only */}
+          <button
+            data-testid="btn-medium-run"
+            disabled={mediumRunStatus === "running"}
+            onClick={handleMediumRun}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors${pipelineBtn(mediumRunStatus)}`}
+          >
+            {mediumRunStatus === "running" ? (
+              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            )}
+            Medium Only
+            {statusBadge(mediumRunStatus)}
+          </button>
+
+          {/* Code / Architecture Review with group dropdown */}
+          <div className="relative" ref={dropRef}>
+            <div className="flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
+              <button
+                data-testid="btn-code-review"
+                disabled={codeRevStatus === "running"}
+                onClick={handleCodeReview}
+                className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-800 dark:text-gray-100${pipelineBtn(codeRevStatus)}`}
+              >
+                {codeRevStatus === "running" ? (
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                )}
+                Code Review
+                {statusBadge(codeRevStatus)}
+              </button>
+              <button
+                data-testid="btn-code-review-dropdown"
+                onClick={() => setGroupDropOpen(v => !v)}
+                className="px-2 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border-l border-gray-300 dark:border-gray-600 transition-colors text-gray-600 dark:text-gray-300"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1 pl-1">{codeRevGroup}</p>
+
+            {groupDropOpen && (
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[220px] py-1">
+                {["Auto (today's rotation)", ...CODE_REVIEW_GROUPS].map(group => (
+                  <button
+                    key={group}
+                    data-testid={`code-review-group-${group.toLowerCase().replace(/\s+/g, "-")}`}
+                    onClick={() => { setCodeRevGroup(group); setGroupDropOpen(false); }}
+                    className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${codeRevGroup === group ? "font-semibold text-violet-600 dark:text-violet-400" : "text-gray-700 dark:text-gray-300"}`}
+                  >
+                    {group}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="ml-auto text-xs text-gray-400 hidden md:block">
+            Results → <Link href="/agent-handoff"><a className="text-blue-500 hover:underline">Agent Handoff Queue</a></Link>
+          </div>
+        </div>
+      </section>
 
       {/* Service Health Row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

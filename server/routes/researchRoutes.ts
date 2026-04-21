@@ -106,6 +106,43 @@ router.post("/app-code-review", requireRole(["admin"]), async (req, res) => {
   }
 });
 
+// ── Medium-only run: scan feeds + scan lists, no code review ──────────────────
+
+router.post("/medium-run", requireRole(["admin"]), async (_req, res) => {
+  try {
+    res.json({ ok: true, message: "Medium pipeline started: feed scan + saved list scan running in parallel" });
+
+    const [feedResult, listResult] = await Promise.allSettled([
+      scanMediumFeeds(),
+      scanSavedLists(),
+    ]);
+
+    const feedInserted: number[] = (feedResult.status === "fulfilled" ? (feedResult.value as any)?.inserted : []) ?? [];
+    const listInserted: number[] = (listResult.status === "fulfilled" ? (listResult.value as any)?.inserted : []) ?? [];
+
+    for (const articleId of [...feedInserted, ...listInserted]) {
+      try {
+        const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
+        if (!article) continue;
+        const triageResult = triageArticle({ title: article.title, excerpt: article.excerpt, tags: (article.tags as string[]) ?? [] });
+        await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
+        await buildArticleSummary(articleId).catch(() => {});
+        if (triageResult.verdict === "adopt") {
+          await buildAgentHandoff(articleId).catch((e: any) =>
+            console.error(`[medium-run] handoff failed for article ${articleId}:`, e?.message)
+          );
+        }
+      } catch (e: any) {
+        console.error(`[medium-run] article pipeline error for ${articleId}:`, e?.message);
+      }
+    }
+
+    console.log(`[medium-run] Complete — feeds: ${feedInserted.length} new, lists: ${listInserted.length} new`);
+  } catch (e: any) {
+    console.error("[medium-run] error:", e?.message);
+  }
+});
+
 // ── Full pipeline trigger: scan feeds + scan lists + app code review in parallel ─
 
 router.post("/full-run", requireRole(["admin"]), async (_req, res) => {
