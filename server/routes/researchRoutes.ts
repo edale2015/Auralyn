@@ -315,6 +315,36 @@ router.post("/triage/:articleId", async (req, res) => {
   }
 });
 
+// ── Manual promotion: override verdict → adopt, push to Agent Handoff Queue ──
+
+router.post("/promote/:articleId", requirePhysician, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
+    if (!article) return res.status(404).json({ ok: false, error: "Article not found" });
+
+    // Override verdict to "adopt" — delete old review(s) then insert fresh
+    await db.delete(researchReviews).where(eq(researchReviews.articleId, articleId));
+    await db.insert(researchReviews).values({
+      articleId,
+      verdict:             "adopt",
+      relevanceScore:      80,
+      trustScore:          70,
+      noveltyScore:        70,
+      actionabilityScore:  80,
+      reasons:             ["Manually promoted by admin"],
+    });
+
+    // Build AI summary if not yet done, then create agent handoff
+    await buildArticleSummary(articleId).catch(() => {});
+    await buildAgentHandoff(articleId);
+
+    res.json({ ok: true, message: "Article promoted to Agent Handoff Queue" });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
 router.post("/summary/:articleId", async (req, res) => {
   try {
     const summary = await buildArticleSummary(Number(req.params.articleId));

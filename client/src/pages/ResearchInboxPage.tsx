@@ -98,6 +98,18 @@ function ArticleDetail({ article, onClose }: { article: Article; onClose: () => 
   const summarize = useMutation({ mutationFn: () => mutate(`/api/research/summary/${article.id}`) });
   const propose  = useMutation({ mutationFn: () => mutate(`/api/research/propose/${article.id}`) });
 
+  const promote = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/research/promote/${article.id}`)
+      .then(r => r.json())
+      .then(d => { if (!d.ok) throw new Error(d.error ?? "Promote failed"); return d; }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/research/articles", article.id] });
+      qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      toast({ title: "Promoted", description: "Article pushed to Agent Handoff Queue — check the queue for the new item." });
+    },
+    onError: (e: any) => toast({ title: "Promote failed", description: e.message, variant: "destructive" }),
+  });
+
   const upgrade  = d.upgrades?.[0];
 
   const validate = useMutation({
@@ -151,6 +163,31 @@ function ArticleDetail({ article, onClose }: { article: Article; onClose: () => 
               <Button size="sm" variant="ghost"><ExternalLink className="w-3 h-3 mr-1" />Read Article</Button>
             </a>
           </div>
+
+          {/* Manual promote — shown when triage said ignore or test_only */}
+          {d.review && (d.review.verdict === "ignore" || d.review.verdict === "test_only") && (
+            <div className="flex items-center gap-3 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                  Auto-triage verdict: <span className="uppercase">{d.review.verdict.replace("_", " ")}</span>
+                </p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                  Override and send directly to the Agent Handoff Queue for implementation.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+                onClick={() => promote.mutate()}
+                disabled={promote.isPending}
+                data-testid="button-promote"
+              >
+                {promote.isPending
+                  ? <><RefreshCw className="w-3 h-3 animate-spin mr-1" />Promoting…</>
+                  : <><Zap className="w-3 h-3 mr-1" />Promote to Queue</>}
+              </Button>
+            </div>
+          )}
 
           {/* Triage scores */}
           {d.review && (
@@ -255,11 +292,15 @@ function ArticleDetail({ article, onClose }: { article: Article; onClose: () => 
 
 // ── Article Card ──────────────────────────────────────────────────────────────
 
-function ArticleCard({ article, onClick }: { article: any; onClick: () => void }) {
+function ArticleCard({ article, onClick, onPromote }: { article: any; onClick: () => void; onPromote?: () => void }) {
   const verdict = article.verdict as string | undefined;
+  const isIgnored = verdict === "ignore";
   return (
-    <Card className="hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}
-      data-testid={`card-article-${article.id}`}>
+    <Card
+      className={`hover:shadow-md transition-shadow cursor-pointer ${isIgnored ? "opacity-75 hover:opacity-100" : ""}`}
+      onClick={onClick}
+      data-testid={`card-article-${article.id}`}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm font-semibold leading-snug line-clamp-2 flex-1">
@@ -274,13 +315,24 @@ function ArticleCard({ article, onClick }: { article: any; onClick: () => void }
       </CardHeader>
       {article.excerpt && (
         <CardContent className="pb-2">
-          <p className="text-xs text-muted-foreground line-clamp-2">{article.excerpt}</p>
+          <p className="text-xs text-muted-foreground line-clamp-4">{article.excerpt}</p>
         </CardContent>
       )}
-      <CardFooter className="pt-0 gap-1 flex-wrap">
-        {(article.tags as string[] ?? []).slice(0, 4).map((t: string) => (
-          <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
-        ))}
+      <CardFooter className="pt-0 gap-1 flex-wrap items-center justify-between">
+        <div className="flex gap-1 flex-wrap">
+          {(article.tags as string[] ?? []).slice(0, 3).map((t: string) => (
+            <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
+          ))}
+        </div>
+        {isIgnored && onPromote && (
+          <button
+            className="text-xs text-amber-600 hover:text-amber-800 font-semibold flex items-center gap-0.5 shrink-0"
+            onClick={e => { e.stopPropagation(); onPromote(); }}
+            data-testid={`btn-promote-${article.id}`}
+          >
+            <Zap className="w-3 h-3" />Promote
+          </button>
+        )}
       </CardFooter>
     </Card>
   );
@@ -396,6 +448,25 @@ export default function ResearchInboxPage() {
   const filtered = filterVerdict === "all"
     ? allArticles
     : allArticles.filter((a: any) => a.verdict === filterVerdict || (!a.verdict && filterVerdict === "unreviewed"));
+
+  const counts: Record<string, number> = {
+    all:        allArticles.length,
+    unreviewed: allArticles.filter((a: any) => !a.verdict).length,
+    adopt:      allArticles.filter((a: any) => a.verdict === "adopt").length,
+    test_only:  allArticles.filter((a: any) => a.verdict === "test_only").length,
+    ignore:     allArticles.filter((a: any) => a.verdict === "ignore").length,
+  };
+
+  function quickPromote(articleId: number) {
+    apiRequest("POST", `/api/research/promote/${articleId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) throw new Error(d.error ?? "Promote failed");
+        qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+        toast({ title: "Promoted", description: "Article sent to Agent Handoff Queue." });
+      })
+      .catch((e: any) => toast({ title: "Promote failed", description: e.message, variant: "destructive" }));
+  }
 
   const pendingUpgrades: Upgrade[] = (upgrades.data?.upgrades ?? []).filter((u: Upgrade) => !u.approved);
   const approvedUpgrades: Upgrade[] = (upgrades.data?.upgrades ?? []).filter((u: Upgrade) => u.approved);
@@ -589,12 +660,13 @@ export default function ResearchInboxPage() {
       </div>
 
       {/* Stats bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
-          { label: "Total articles", value: allArticles.length, color: "text-blue-600" },
-          { label: "Adopt",       value: allArticles.filter((a: any) => a.verdict === "adopt").length,     color: "text-emerald-600" },
-          { label: "Test only",   value: allArticles.filter((a: any) => a.verdict === "test_only").length, color: "text-amber-600" },
-          { label: "Pending upgrades", value: pendingUpgrades.length, color: "text-violet-600" },
+          { label: "Total",    value: counts.all,       color: "text-blue-600" },
+          { label: "Adopt",    value: counts.adopt,     color: "text-emerald-600" },
+          { label: "Test only",value: counts.test_only, color: "text-amber-600" },
+          { label: "Ignored",  value: counts.ignore,    color: "text-slate-500" },
+          { label: "Upgrades", value: pendingUpgrades.length, color: "text-violet-600" },
         ].map(s => (
           <div key={s.label} className="bg-muted/40 rounded-lg p-3 text-center">
             <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
@@ -614,19 +686,28 @@ export default function ResearchInboxPage() {
       )}
 
       {/* Filter bar */}
-      <div className="flex gap-2 flex-wrap">
-        {["all", "unreviewed", "adopt", "test_only", "ignore"].map(f => (
+      <div className="flex gap-2 flex-wrap items-center">
+        <span className="text-xs text-muted-foreground font-medium">Filter:</span>
+        {[
+          { key: "all",        label: "All" },
+          { key: "adopt",      label: "Adopt" },
+          { key: "test_only",  label: "Test Only" },
+          { key: "ignore",     label: "Ignored — review these" },
+          { key: "unreviewed", label: "Unreviewed" },
+        ].map(f => (
           <button
-            key={f}
-            onClick={() => setFilterVerdict(f)}
-            data-testid={`filter-${f}`}
+            key={f.key}
+            onClick={() => setFilterVerdict(f.key)}
+            data-testid={`filter-${f.key}`}
             className={`text-xs px-3 py-1 rounded-full border transition-colors ${
-              filterVerdict === f
+              filterVerdict === f.key
                 ? "bg-foreground text-background border-foreground"
-                : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
+                : f.key === "ignore"
+                  ? "border-amber-400 text-amber-700 dark:text-amber-400 hover:border-amber-600"
+                  : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
             }`}
           >
-            {f.replace("_", " ")}
+            {f.label}{counts[f.key] > 0 ? ` (${counts[f.key]})` : ""}
           </button>
         ))}
       </div>
@@ -649,7 +730,7 @@ export default function ResearchInboxPage() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {filtered.map((a: any) => (
-              <ArticleCard key={a.id} article={a} onClick={() => setSelected(a)} />
+              <ArticleCard key={a.id} article={a} onClick={() => setSelected(a)} onPromote={() => quickPromote(a.id)} />
             ))}
           </div>
         </div>

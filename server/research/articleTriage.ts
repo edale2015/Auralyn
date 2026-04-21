@@ -1,17 +1,20 @@
 /**
  * server/research/articleTriage.ts
- * Article Triage Agent — scores every article for clinical relevance to Auralyn.
+ * Article Triage Agent — scores articles for AI/engineering relevance to Auralyn.
+ *
+ * Focus: AI techniques, agents, LLMs, databases, and system-building methods
+ * that could improve any part of Auralyn. Clinical specificity is NOT required.
  *
  * Scores (0-100) across four axes:
- *   relevance     — is this topic relevant to our system?
- *   trust         — does this source/content look credible?
+ *   relevance     — is this an AI/ML/agent/DB topic we could apply?
+ *   trust         — does this source/content look credible and practical?
  *   novelty       — does this add something new?
  *   actionability — can we actually implement something from this?
  *
  * Verdict thresholds:
- *   adopt     — total weighted ≥ 72
- *   test_only — total weighted ≥ 50
- *   ignore    — below 50
+ *   adopt     — total weighted ≥ 60  (lowered from 72 — AI articles are more broadly relevant)
+ *   test_only — total weighted ≥ 42
+ *   ignore    — below 42
  */
 
 export type TriageInput = {
@@ -32,27 +35,52 @@ export type TriageResult = {
 // ── Keyword signals ───────────────────────────────────────────────────────────
 
 const HIGH_VALUE = [
-  "clinical", "medical", "sepsis", "fhir", "audit", "bayesian", "validation",
-  "hallucination", "calibration", "triage", "decision support", "ehr",
-  "electronic health", "diagnosis", "prediction", "safety", "risk score",
-  "early warning", "deterioration", "shock", "septic", "pneumonia",
-  "fda", "samd", "510k", "hipaa", "phi", "rlhf", "reinforcement",
+  // Core AI / ML
+  "large language model", "llm", "language model", "machine learning",
+  "deep learning", "neural network", "transformer", "attention mechanism",
+  "fine-tuning", "finetuning", "pre-training", "pretraining",
+  // AI safety / reliability
+  "hallucination", "calibration", "alignment", "red teaming", "safety evaluation",
+  "guardrail", "grounding", "factual accuracy", "uncertainty quantification",
+  // Agents & orchestration
+  "agent", "multi-agent", "autonomous agent", "agentic", "tool calling",
+  "function calling", "orchestration", "planning", "reasoning", "chain-of-thought",
+  "react agent", "langgraph", "langchain", "crew", "autogen",
+  // Retrieval & knowledge
+  "rag", "retrieval augmented", "retrieval-augmented", "vector database",
+  "vector store", "embedding", "semantic search", "knowledge graph",
+  "knowledge base", "document retrieval", "reranking",
+  // Model techniques
+  "prompt engineering", "prompt tuning", "in-context learning", "few-shot",
+  "zero-shot", "chain of thought", "rlhf", "reinforcement learning",
+  "reward model", "dpo", "lora", "quantization", "distillation",
+  // AI + databases / systems
+  "text-to-sql", "nl2sql", "structured data", "database query", "sql generation",
+  "data pipeline", "streaming", "event-driven", "real-time inference",
+  // APIs and frameworks
+  "openai", "anthropic", "claude", "gpt-4", "gpt-5", "gemini", "mistral",
+  "llama", "mixtral", "cohere", "hugging face",
+  // Code / engineering
+  "code generation", "code review", "automated testing", "software architecture",
+  "system design", "scalability", "latency", "throughput",
 ];
 
 const LOW_VALUE = [
   "agi", "singularity", "10x engineer", "killer app", "replace doctors",
   "revolutionary", "game changer", "disrupt", "exponential", "hype",
+  "opinion", "hot take", "unpopular opinion", "controversial",
 ];
 
 const IMPLEMENTATION_SIGNALS = [
   "implementation", "case study", "open source", "github", "production",
   "deployed", "benchmark", "dataset", "evaluation", "experiment",
   "results show", "we built", "we developed", "code available",
+  "tutorial", "walkthrough", "step by step", "how to", "how we",
 ];
 
-const REGULATORY_SIGNALS = [
-  "fda", "fhir", "hl7", "calibration", "hipaa", "audit trail",
-  "510k", "samd", "iso 13485", "iec 62304",
+const AI_SYSTEMS_SIGNALS = [
+  "agent", "pipeline", "workflow", "architecture", "inference",
+  "api", "sdk", "framework", "integration", "backend",
 ];
 
 // ── Scorer ────────────────────────────────────────────────────────────────────
@@ -60,67 +88,73 @@ const REGULATORY_SIGNALS = [
 export function triageArticle(input: TriageInput): TriageResult {
   const text = `${input.title} ${input.excerpt ?? ""} ${(input.tags ?? []).join(" ")}`.toLowerCase();
 
-  let relevance      = 20;
+  let relevance      = 25;
   let trust          = 50;
   let novelty        = 40;
   let actionability  = 30;
   const reasons: string[] = [];
 
-  // High-value keyword hits
+  // High-value AI keyword hits
   let hvHits = 0;
   for (const term of HIGH_VALUE) {
     if (text.includes(term)) {
-      relevance     += 5;
+      relevance     += 4;
       actionability += 3;
       hvHits++;
+      if (hvHits <= 3) reasons.push(`AI keyword: "${term}"`);
     }
   }
-  if (hvHits >= 4) reasons.push(`Strong clinical keyword density (${hvHits} matches)`);
+  if (hvHits >= 3) reasons.push(`Strong AI keyword density (${hvHits} matches)`);
 
   // Low-value / hype signals
   for (const term of LOW_VALUE) {
     if (text.includes(term)) {
       trust         -= 12;
       actionability -= 8;
-      reasons.push(`Hype signal detected: "${term}"`);
+      reasons.push(`Hype/opinion signal: "${term}"`);
     }
   }
 
-  // Implementation orientation
+  // Implementation orientation — highly valued
   for (const term of IMPLEMENTATION_SIGNALS) {
     if (text.includes(term)) {
-      novelty        += 6;
-      actionability  += 8;
+      novelty        += 8;
+      actionability  += 10;
       reasons.push(`Implementation-oriented: "${term}"`);
       break;
     }
   }
 
-  // Regulatory / standards relevance
-  for (const term of REGULATORY_SIGNALS) {
-    if (text.includes(term)) {
-      trust         += 8;
-      relevance     += 4;
-      reasons.push(`Regulatory/standards relevance: "${term}"`);
-      break;
-    }
+  // AI systems / engineering signals
+  let sysHits = 0;
+  for (const term of AI_SYSTEMS_SIGNALS) {
+    if (text.includes(term)) sysHits++;
+  }
+  if (sysHits >= 2) {
+    actionability += 10;
+    reasons.push(`Systems/engineering orientation (${sysHits} signals)`);
   }
 
-  // Auralyn-specific topic boosts
-  if (text.includes("sepsis") || text.includes("deteriorat")) {
-    relevance     += 15;
-    actionability += 10;
-    reasons.push("Directly relevant: sepsis/deterioration detection");
+  // Specific topic boosts
+  if (text.includes("bayesian") || text.includes("probabilistic")) {
+    relevance  += 10;
+    novelty    += 8;
+    reasons.push("Bayesian / probabilistic methods — core Auralyn methodology");
   }
-  if (text.includes("bayesian") || text.includes("posterior")) {
-    relevance     += 10;
-    novelty       += 8;
-    reasons.push("Bayesian inference — core Auralyn methodology");
-  }
-  if (text.includes("hallucination") || text.includes("safety guard")) {
+  if (text.includes("hallucination") || text.includes("safety guard") || text.includes("guardrail")) {
     trust         += 10;
     actionability += 12;
-    reasons.push("AI hallucination / safety — critical for clinical use");
+    reasons.push("AI reliability / hallucination mitigation — critical for Auralyn");
+  }
+  if (text.includes("agent") || text.includes("agentic") || text.includes("multi-agent")) {
+    relevance     += 10;
+    actionability += 8;
+    reasons.push("Agent-based architecture — directly applicable");
+  }
+  if (text.includes("rag") || text.includes("retrieval augmented") || text.includes("vector")) {
+    relevance     += 8;
+    actionability += 8;
+    reasons.push("RAG / vector retrieval — applicable to clinical knowledge base");
   }
 
   // Clamp all scores to [0, 100]
@@ -133,10 +167,10 @@ export function triageArticle(input: TriageInput): TriageResult {
   const total = relevance * 0.35 + trust * 0.20 + novelty * 0.15 + actionability * 0.30;
 
   let verdict: TriageResult["verdict"] = "ignore";
-  if (total >= 72) verdict = "adopt";
-  else if (total >= 50) verdict = "test_only";
+  if (total >= 60) verdict = "adopt";
+  else if (total >= 42) verdict = "test_only";
 
-  if (!reasons.length) reasons.push("Standard relevance/trust/novelty/actionability scoring applied");
+  if (!reasons.length) reasons.push("Standard AI relevance scoring applied — no strong keyword signals found");
 
   return { relevanceScore: relevance, trustScore: trust, noveltyScore: novelty, actionabilityScore: actionability, verdict, reasons };
 }
