@@ -454,6 +454,21 @@ export default function ResearchInboxPage() {
     onError: (e: any) => toast({ title: "Full run failed", description: e.message, variant: "destructive" }),
   });
 
+  const retriage = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/research/retriage-all")
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error ?? "Re-triage failed"); return d; }),
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      toast({
+        title: "Re-triage complete",
+        description: `${d.updated} articles rescored: ${d.adopt} adopt, ${d.testOnly} test_only, ${d.ignored} ignored`,
+      });
+    },
+    onError: (e: any) => toast({ title: "Re-triage failed", description: e.message, variant: "destructive" }),
+  });
+
   const reviewGroups: Array<{ groupName: string; files: string[]; filesFound: number; filesTotal: number }> =
     config.data?.reviewGroups ?? [];
 
@@ -578,6 +593,19 @@ export default function ResearchInboxPage() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => retriage.mutate()}
+            disabled={retriage.isPending}
+            data-testid="button-retriage"
+            title="Re-score all articles with current triage criteria"
+          >
+            {retriage.isPending
+              ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Re-triaging…</>
+              : <><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Re-triage All</>}
+          </Button>
 
           {/* FULL RUN — the big one */}
           <Button
@@ -753,9 +781,12 @@ export default function ResearchInboxPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Article grid */}
         <div className="lg:col-span-2 space-y-3">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Articles ({filtered.length})
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              Articles ({filtered.length})
+            </h2>
+            <span className="text-xs text-muted-foreground">Click any row to open details</span>
+          </div>
           {articles.isLoading && (
             <div className="text-sm text-muted-foreground py-8 text-center">Loading articles…</div>
           )}
@@ -763,13 +794,47 @@ export default function ResearchInboxPage() {
             <div className="text-center py-12 text-muted-foreground">
               <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
               <p className="font-medium">No articles yet</p>
-              <p className="text-sm mt-1">Click "Scan Feeds" to pull the latest medical AI research</p>
+              <p className="text-sm mt-1">Click "Scan Feeds" to pull the latest AI research</p>
             </div>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {filtered.map((a: any) => (
-              <ArticleCard key={a.id} article={a} onClick={() => setSelected(a)} onPromote={() => quickPromote(a.id)} />
-            ))}
+          <div className="border rounded-lg divide-y overflow-hidden bg-card">
+            {filtered.map((a: any) => {
+              const verdict = a.verdict as string | undefined;
+              const pubDate = a.published_at ?? a.publishedAt;
+              return (
+                <div
+                  key={a.id}
+                  className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors ${selected?.id === a.id ? "bg-muted" : ""}`}
+                  onClick={() => setSelected(a)}
+                  data-testid={`row-article-${a.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium leading-snug truncate">{a.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {a.source && <span className="capitalize">{a.source.replace(/_/g, " ")}</span>}
+                      {pubDate && <span> · {new Date(pubDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>}
+                      {a.author && <span> · {a.author}</span>}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {verdict
+                      ? <VerdictBadge verdict={verdict} />
+                      : <span className="text-xs text-muted-foreground italic">unreviewed</span>
+                    }
+                    {verdict === "ignore" && (
+                      <button
+                        className="text-xs text-amber-600 hover:text-amber-800 font-semibold flex items-center gap-0.5"
+                        onClick={e => { e.stopPropagation(); quickPromote(a.id); }}
+                        data-testid={`btn-promote-${a.id}`}
+                        title="Promote to Agent Handoff Queue"
+                      >
+                        <Zap className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 

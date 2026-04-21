@@ -12,15 +12,19 @@
  *   actionability — can we actually implement something from this?
  *
  * Verdict thresholds:
- *   adopt     — total weighted ≥ 60  (lowered from 72 — AI articles are more broadly relevant)
- *   test_only — total weighted ≥ 42
- *   ignore    — below 42
+ *   adopt     — total weighted ≥ 50  (was 60 — short RSS excerpts mean fewer keyword hits)
+ *   test_only — total weighted ≥ 34
+ *   ignore    — below 34
+ *
+ * Base scores are higher for articles from Medium AI feeds (source = "medium" | "medium_saved_list")
+ * since those articles are already pre-filtered to the AI topic area.
  */
 
 export type TriageInput = {
   title:   string;
   excerpt?: string | null;
   tags?:   string[];
+  source?: string; // "medium" | "pubmed" | "medium_saved_list" — used for base score boost
 };
 
 export type TriageResult = {
@@ -88,11 +92,15 @@ const AI_SYSTEMS_SIGNALS = [
 export function triageArticle(input: TriageInput): TriageResult {
   const text = `${input.title} ${input.excerpt ?? ""} ${(input.tags ?? []).join(" ")}`.toLowerCase();
 
-  let relevance      = 25;
-  let trust          = 50;
-  let novelty        = 40;
-  let actionability  = 30;
+  // Articles from Medium AI feeds are pre-filtered — give them a higher base score
+  const isMediumSource = input.source === "medium" || input.source === "medium_saved_list";
+
+  let relevance      = isMediumSource ? 38 : 25;
+  let trust          = isMediumSource ? 52 : 50;
+  let novelty        = isMediumSource ? 42 : 40;
+  let actionability  = isMediumSource ? 36 : 30;
   const reasons: string[] = [];
+  if (isMediumSource) reasons.push("Medium AI feed article — higher base relevance");
 
   // High-value AI keyword hits
   let hvHits = 0;
@@ -167,8 +175,8 @@ export function triageArticle(input: TriageInput): TriageResult {
   const total = relevance * 0.35 + trust * 0.20 + novelty * 0.15 + actionability * 0.30;
 
   let verdict: TriageResult["verdict"] = "ignore";
-  if (total >= 60) verdict = "adopt";
-  else if (total >= 42) verdict = "test_only";
+  if (total >= 50) verdict = "adopt";
+  else if (total >= 34) verdict = "test_only";
 
   if (!reasons.length) reasons.push("Standard AI relevance scoring applied — no strong keyword signals found");
 

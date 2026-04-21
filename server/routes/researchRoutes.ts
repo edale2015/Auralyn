@@ -11,7 +11,7 @@ import express from "express";
 import { requirePhysician } from "../auth/requirePhysician";
 import { requireRole }      from "../auth/requirePhysician";
 import { db }               from "../db";
-import { eq, desc }         from "drizzle-orm";
+import { eq, desc, sql }    from "drizzle-orm";
 import {
   researchArticles, researchReviews, researchSummaries,
   proposedUpgrades, githubExports,
@@ -221,16 +221,24 @@ router.post("/full-run", requireRole(["admin"]), async (_req, res) => {
 
 router.use(requirePhysician);
 
-// ── Article listing ───────────────────────────────────────────────────────────
+// ── Article listing (joined with reviews so verdict is always present) ────────
 
 router.get("/articles", async (_req, res) => {
   try {
-    const articles = await db
-      .select()
-      .from(researchArticles)
-      .orderBy(desc(researchArticles.createdAt))
-      .limit(100);
-    res.json({ ok: true, articles });
+    const rows = await db.execute(sql`
+      SELECT
+        a.*,
+        r.verdict,
+        r.relevance_score,
+        r.trust_score,
+        r.novelty_score,
+        r.actionability_score
+      FROM research_articles a
+      LEFT JOIN research_reviews r ON r.article_id = a.id
+      ORDER BY a.created_at DESC
+      LIMIT 500
+    `);
+    res.json({ ok: true, articles: rows.rows });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }
@@ -287,6 +295,44 @@ router.post("/scan", requireRole(["admin"]), async (_req, res) => {
     }
 
     res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
+// ── Re-triage ALL existing articles ───────────────────────────────────────────
+// Re-runs the keyword triage scorer on every article in the DB and upserts results.
+// This lets you re-score after changing thresholds without re-scanning.
+
+router.post("/retriage-all", requireRole(["admin"]), async (_req, res) => {
+  try {
+    const all = await db.select().from(researchArticles);
+    let updated = 0, adopt = 0, testOnly = 0, ignored = 0;
+
+    for (const article of all) {
+      try {
+        const t = triageArticle({
+          title:   article.title,
+          excerpt: article.excerpt,
+          tags:    (article.tags as string[]) ?? [],
+          source:  article.source ?? undefined,
+        });
+
+        // Delete old review, insert fresh one (no unique constraint — delete+insert)
+        await db.delete(researchReviews).where(eq(researchReviews.articleId, article.id));
+        await db.insert(researchReviews).values({ articleId: article.id, ...t });
+
+        updated++;
+        if (t.verdict === "adopt")     adopt++;
+        else if (t.verdict === "test_only") testOnly++;
+        else                            ignored++;
+      } catch (e: any) {
+        console.error(`[retriage-all] failed for article ${article.id}:`, e?.message);
+      }
+    }
+
+    console.log(`[retriage-all] Done — ${updated} articles: ${adopt} adopt, ${testOnly} test_only, ${ignored} ignored`);
+    res.json({ ok: true, updated, adopt, testOnly, ignored });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }
