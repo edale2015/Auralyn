@@ -364,6 +364,7 @@ export default function ResearchInboxPage() {
   const [newListLabel, setNewListLabel] = useState("");
   const [newListUrl,   setNewListUrl]   = useState("");
   const [showAddList,  setShowAddList]  = useState(false);
+  const [lastScan,     setLastScan]     = useState<{ label: string; new: number; skippedOld: number; total: number } | null>(null);
 
   const savedLists = useQuery({
     queryKey: ["/api/research/saved-lists"],
@@ -372,26 +373,38 @@ export default function ResearchInboxPage() {
 
   const scan = useMutation({
     mutationFn: () =>
-      apiRequest("/api/research/scan", { method: "POST" })
+      apiRequest("POST", "/api/research/scan")
         .then(r => r.json())
         .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
-      toast({ title: "Feed scan complete", description: `${d.inserted?.length ?? 0} new articles found` });
+      const newCount = d.inserted?.length ?? 0;
+      const skipped  = d.skippedOld ?? 0;
+      setLastScan({ label: "Feed scan", new: newCount, skippedOld: skipped, total: newCount + skipped });
+      if (newCount > 0) {
+        toast({ title: "Feed scan complete", description: `${newCount} new articles — triaging in background…` });
+      } else {
+        toast({ title: "Feed scan complete", description: `No new articles (${skipped} skipped — already seen or >90 days old)` });
+      }
     },
     onError: (e: any) => toast({ title: "Scan failed", description: e.message, variant: "destructive" }),
   });
 
   const scanLists = useMutation({
     mutationFn: () =>
-      apiRequest("/api/research/scan-lists", { method: "POST" })
+      apiRequest("POST", "/api/research/scan-lists")
         .then(r => r.json())
         .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      const newCount = d.inserted?.length ?? 0;
+      const scraped  = d.scraped ?? 0;
+      setLastScan({ label: "List scan", new: newCount, skippedOld: scraped - newCount, total: scraped });
       toast({
         title: "Saved lists scanned",
-        description: `${d.scraped ?? 0} articles found, ${d.inserted?.length ?? 0} new`,
+        description: newCount > 0
+          ? `${newCount} new articles out of ${scraped} found — triaging…`
+          : `${scraped} articles found, all already in inbox`,
       });
     },
     onError: (e: any) => toast({ title: "List scan failed", description: e.message, variant: "destructive" }),
@@ -658,6 +671,31 @@ export default function ResearchInboxPage() {
           Click "Scan My Lists" to pull all articles from your saved Medium lists through the full pipeline (triage → AI code proposal → safety review → agent handoff).
         </p>
       </div>
+
+      {/* Last scan result strip */}
+      {lastScan && (
+        <div className="flex items-center gap-3 p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg text-sm">
+          <div className="flex-1 min-w-0 flex flex-wrap gap-4">
+            <span className="font-semibold text-blue-800 dark:text-blue-300">{lastScan.label} result</span>
+            <span className="text-blue-700 dark:text-blue-400">
+              <span className="font-bold">{lastScan.new}</span> new ingested
+            </span>
+            <span className="text-blue-600 dark:text-blue-500">
+              {lastScan.skippedOld} already in inbox or &gt;90 days old
+            </span>
+            {lastScan.new > 0 && (
+              <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400">
+                <RefreshCw className="w-3 h-3 animate-spin" />Building AI summaries in background…
+              </span>
+            )}
+          </div>
+          <button
+            className="text-blue-400 hover:text-blue-600 shrink-0"
+            onClick={() => setLastScan(null)}
+            aria-label="Dismiss"
+          >✕</button>
+        </div>
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

@@ -1,12 +1,10 @@
 /**
  * server/research/mediumScout.ts
- * Medium Scout Agent — polls RSS feeds for medical AI articles.
+ * Medium Scout Agent — polls RSS feeds for AI/LLM/agent engineering articles.
  *
- * Uses RSS (not scraping) for reliability. Configured feeds target:
- *   medical-ai, clinical-decision-support, fhir, bayesian, artificial-intelligence
- *
- * Articles are deduplicated by URL (UNIQUE constraint on research_articles.url).
- * Returns IDs of newly inserted articles only.
+ * Feeds target broad AI/engineering topics that match Auralyn's triage keywords.
+ * Articles more than 90 days old are skipped (RSS sometimes includes older items).
+ * Deduplication is by URL (UNIQUE constraint on research_articles.url).
  */
 
 import Parser from "rss-parser";
@@ -16,32 +14,42 @@ import { sql } from "drizzle-orm";
 
 const rssParser = new Parser({ timeout: 10_000, headers: { "User-Agent": "Auralyn-Research-Scout/1.0" } });
 
-// Feeds ordered by clinical relevance to Auralyn
-const MEDIUM_FEEDS = [
-  "https://medium.com/feed/tag/medical-ai",
-  "https://medium.com/feed/tag/clinical-decision-support",
-  "https://medium.com/feed/tag/fhir",
-  "https://medium.com/feed/tag/bayesian",
-  "https://medium.com/feed/tag/sepsis",
-  "https://medium.com/feed/tag/healthcare-ai",
-];
+// 90-day cutoff — skip articles older than this
+const MAX_AGE_DAYS = 90;
 
-// Additional curated sources (PubMed RSS for high-signal content)
-const PUBMED_FEEDS = [
-  "https://pubmed.ncbi.nlm.nih.gov/rss/search/1T-z8cSbBv-NMRPXtXVbCmZjz8Z6s44Z_ZcCQ10bRuJo-n5gLtIGH2gGxeKSmx5a/?limit=20&utm_campaign=pubmed-2&fc=20240101000000",
+function isTooOld(pubDate?: string): boolean {
+  if (!pubDate) return false; // no date → include it
+  const published = new Date(pubDate);
+  if (isNaN(published.getTime())) return false;
+  const cutoff = new Date(Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+  return published < cutoff;
+}
+
+// Broad AI/LLM/agent engineering feeds — matches the triage keyword set
+const MEDIUM_FEEDS = [
+  "https://medium.com/feed/tag/artificial-intelligence",
+  "https://medium.com/feed/tag/machine-learning",
+  "https://medium.com/feed/tag/large-language-models",
+  "https://medium.com/feed/tag/generative-ai",
+  "https://medium.com/feed/tag/llm",
+  "https://medium.com/feed/tag/chatgpt",
+  "https://medium.com/feed/tag/openai",
+  "https://medium.com/feed/tag/prompt-engineering",
+  "https://medium.com/feed/tag/ai-agents",
+  "https://medium.com/feed/tag/rag",
+  "https://medium.com/feed/tag/langchain",
 ];
 
 function extractTags(categories?: string[]): string[] {
   return (categories ?? []).filter(Boolean).map(c => c.toLowerCase()).slice(0, 10);
 }
 
-export async function scanMediumFeeds(): Promise<{ inserted: number[]; errors: string[] }> {
+export async function scanMediumFeeds(): Promise<{ inserted: number[]; errors: string[]; skippedOld: number }> {
   const inserted: number[] = [];
   const errors: string[] = [];
+  let skippedOld = 0;
 
-  const allFeeds = [...MEDIUM_FEEDS, ...PUBMED_FEEDS];
-
-  for (const feedUrl of allFeeds) {
+  for (const feedUrl of MEDIUM_FEEDS) {
     let feed;
     try {
       feed = await rssParser.parseURL(feedUrl);
@@ -57,11 +65,17 @@ export async function scanMediumFeeds(): Promise<{ inserted: number[]; errors: s
       const url   = item.link?.trim();
       if (!title || !url) continue;
 
+      // Skip articles older than MAX_AGE_DAYS
+      if (isTooOld(item.pubDate)) {
+        skippedOld++;
+        continue;
+      }
+
       try {
         const result = await db
           .insert(researchArticles)
           .values({
-            source:      feedUrl.includes("pubmed") ? "pubmed" : "medium",
+            source:      "medium",
             title,
             url,
             author:      item.creator ?? item.author ?? null,
@@ -80,8 +94,8 @@ export async function scanMediumFeeds(): Promise<{ inserted: number[]; errors: s
     }
   }
 
-  console.log(`[mediumScout] Scan complete — ${inserted.length} new articles, ${errors.length} errors`);
-  return { inserted, errors };
+  console.log(`[mediumScout] Scan complete — ${inserted.length} new articles, ${skippedOld} skipped (too old), ${errors.length} errors`);
+  return { inserted, errors, skippedOld };
 }
 
 /** Fetch all articles with a given verdict from triage, newest first */
