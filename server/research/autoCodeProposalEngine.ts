@@ -186,13 +186,29 @@ If no concrete improvement is warranted, return a single file with an explanatio
     });
 
     const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-    const parsed = JSON.parse(raw) as CodeProposal;
 
-    if (!Array.isArray(parsed.files) || !parsed.summary) {
-      throw new Error("GPT-4o Code Architect returned invalid structure");
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[autoCodeProposalEngine] Step A JSON parse error. Raw:\n", raw.slice(0, 500));
+      throw new Error(`GPT-4o Code Architect returned non-JSON: ${(parseErr as Error).message}`);
     }
 
-    return parsed;
+    // Coerce alternate field names GPT-4o sometimes uses
+    if (!Array.isArray(parsed.files)) {
+      const alt = parsed.changes ?? parsed.improvements ?? parsed.modifications ?? parsed.code_changes ?? parsed.file_changes ?? [];
+      parsed.files = Array.isArray(alt) ? alt : [];
+      console.warn("[autoCodeProposalEngine] Step A: 'files' missing, coerced from alternate. Keys:", Object.keys(parsed).join(", "));
+    }
+    if (!parsed.summary) {
+      parsed.summary = parsed.description ?? parsed.overview ?? parsed.analysis ?? "Code proposal generated.";
+    }
+    if (!Array.isArray(parsed.concerns)) {
+      parsed.concerns = parsed.risks ?? parsed.issues ?? [];
+    }
+
+    return parsed as CodeProposal;
   } catch (err: any) {
     console.error("[autoCodeProposalEngine] GPT-4o call failed:", err?.message);
     return {

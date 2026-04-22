@@ -90,18 +90,20 @@ You are doing a PROACTIVE code review — not implementing an article's findings
 
 Focus on the most impactful, concrete improvements. Propose REAL code changes — full function bodies, not TODOs.
 
-Return strict JSON:
+CRITICAL: Return STRICT JSON — nothing before or after it. The top-level keys MUST be exactly "files", "summary", and "concerns":
 {
   "files": [
     {
       "path": "server/path/to/file.ts",
-      "content": "FULL improved file content",
+      "content": "FULL improved file content — complete file, not a diff",
       "explanation": "What was improved and why — 2-3 sentences"
     }
   ],
   "summary": "2-paragraph description of what this code review found and what the improvements address",
-  "concerns": ["safety, HIPAA, or FDA concerns this change introduces that reviewers must check"]
-}`;
+  "concerns": ["safety, HIPAA, or FDA concern this change introduces that reviewers must check"]
+}
+
+If the code looks good and you have no improvements to propose, return: { "files": [], "summary": "No critical improvements identified for these files.", "concerns": [] }`;
 
 async function generateProactiveProposal(
   group: typeof HIGH_VALUE_FILE_GROUPS[0],
@@ -129,7 +131,7 @@ Only propose changes that are clearly improvements — do not change what is wor
 
   const resp = await openai.chat.completions.create({
     model:           "gpt-4o",
-    max_tokens:      3500,
+    max_tokens:      4096,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: PROACTIVE_ARCHITECT_SYSTEM },
@@ -138,13 +140,34 @@ Only propose changes that are clearly improvements — do not change what is wor
   });
 
   const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-  const parsed = JSON.parse(raw) as CodeProposal;
 
-  if (!Array.isArray(parsed.files) || !parsed.summary) {
-    throw new Error("GPT-4o proactive review returned invalid structure");
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (parseErr) {
+    console.error("[standaloneCodeReview] Step A JSON parse error. Raw response:\n", raw.slice(0, 500));
+    throw new Error(`GPT-4o proactive review returned non-JSON: ${(parseErr as Error).message}`);
   }
 
-  return parsed;
+  // Coerce common alternate field names GPT-4o uses instead of "files"
+  if (!Array.isArray(parsed.files)) {
+    const altFiles = parsed.changes ?? parsed.improvements ?? parsed.modifications ?? parsed.code_changes ?? parsed.file_changes ?? [];
+    parsed.files = Array.isArray(altFiles) ? altFiles : [];
+    console.warn(`[standaloneCodeReview] Step A: "files" missing, coerced from alternate key. Keys returned: ${Object.keys(parsed).join(", ")}`);
+  }
+
+  // Coerce alternate "summary" field names
+  if (!parsed.summary) {
+    parsed.summary = parsed.description ?? parsed.overview ?? parsed.analysis ?? parsed.review ?? `Proactive review of ${group.groupName}`;
+    console.warn("[standaloneCodeReview] Step A: 'summary' missing, coerced from alternate key.");
+  }
+
+  // Ensure concerns is always an array
+  if (!Array.isArray(parsed.concerns)) {
+    parsed.concerns = parsed.risks ?? parsed.issues ?? parsed.warnings ?? [];
+  }
+
+  return parsed as CodeProposal;
 }
 
 // ── Step 1: Create handoff record synchronously (fast — DB only) ───────────
