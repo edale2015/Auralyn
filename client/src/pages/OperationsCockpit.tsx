@@ -677,7 +677,7 @@ export default function OperationsCockpit() {
                 <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
                 <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
                   All {CODE_REVIEW_STEPS.length} steps complete —{" "}
-                  <Link href="/agent-handoff" className="underline hover:no-underline">open Agent Handoff Queue</Link>{" "}
+                  <Link href={`/agent-handoff?id=${liveReviewId}`} className="underline hover:no-underline">open Agent Handoff Queue</Link>{" "}
                   to review and approve the code changes.
                 </span>
               </div>

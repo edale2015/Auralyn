@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -207,6 +208,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
   const hasSliceReview = !!handoff.claudeSliceReview;
   const confidenceScore = handoff.claudeSliceReview?.confidenceScore ?? null;
   const isLowConfidence = confidenceScore !== null && confidenceScore < 60;
+  const isCodeReview = handoff.articleUrl === "#app-code-review";
 
   return (
     <div className="space-y-6">
@@ -223,11 +225,24 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
               </span>
             )}
           </div>
+          <div className="flex items-center gap-2 mb-0.5">
+            {isCodeReview ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700 uppercase tracking-wide">
+                <FileCode2 className="w-2.5 h-2.5" /> Standalone Code Review
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-500 uppercase tracking-wide">
+                <BookOpen className="w-2.5 h-2.5" /> Article Pipeline
+              </span>
+            )}
+          </div>
           <h2 className="text-lg font-semibold text-gray-900">{handoff.articleTitle}</h2>
-          <a href={handoff.articleUrl} target="_blank" rel="noreferrer"
-             className="text-xs text-blue-600 hover:underline flex items-center gap-1">
-            View source article <ExternalLink className="w-3 h-3" />
-          </a>
+          {!isCodeReview && (
+            <a href={handoff.articleUrl} target="_blank" rel="noreferrer"
+               className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+              View source article <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
         <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
       </div>
@@ -288,7 +303,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
         </div>
       )}
 
-      <Tabs defaultValue="article">
+      <Tabs defaultValue={isCodeReview ? "refined" : "article"}>
         <TabsList className="grid grid-cols-5 w-full">
           <TabsTrigger value="article" data-testid="tab-article" className="text-xs">
             <BookOpen className="w-3.5 h-3.5 mr-1" />Article
@@ -549,13 +564,60 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
       {awaiting && (
         <div className="border-t pt-4 space-y-3">
           <p className="text-sm font-semibold text-gray-800">Your decision</p>
+
+          {/* What will change — shown before approve button */}
+          {handoff.openaiRefinedCode && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+              <p className="text-xs font-bold text-amber-800 uppercase tracking-wide flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5" /> What will be implemented if you approve
+              </p>
+              <p className="text-sm text-amber-900 whitespace-pre-line leading-snug">
+                {handoff.openaiRefinedCode.changesSummary}
+              </p>
+              {handoff.openaiRefinedCode.files.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-amber-700 mb-1.5">
+                    Files to be written ({handoff.openaiRefinedCode.files.length}):
+                  </p>
+                  <div className="space-y-0.5">
+                    {handoff.openaiRefinedCode.files.map((f, i) => (
+                      <div key={i} className="flex items-center gap-1.5 text-xs font-mono text-amber-800 bg-amber-100 rounded px-2 py-0.5">
+                        <FileCode2 className="w-3 h-3 shrink-0" />{f.path}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {handoff.openaiRefinedCode.resolvedConcerns.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-green-700 mb-1">Issues resolved by this change:</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {handoff.openaiRefinedCode.resolvedConcerns.map((c, i) => (
+                      <li key={i} className="text-xs text-green-800">{c}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {handoff.openaiRefinedCode.remainingRisks.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-red-700 mb-1">Physician / FDA decisions needed before deployment:</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {handoff.openaiRefinedCode.remainingRisks.map((r, i) => (
+                      <li key={i} className="text-xs text-red-800">{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {isLowConfidence && (
             <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-800">
               <strong>Low confidence score ({confidenceScore}/100).</strong> Review the Architecture tab carefully — especially the open questions — before approving.
             </div>
           )}
           <p className="text-xs text-gray-500">
-            Review all five tabs. The Architecture tab shows coupling blast-radius and open questions Claude flagged.
+            The Code v2 tab shows the full refined code. The Architecture tab shows coupling blast-radius and open questions Claude flagged.
             Approve to send this package to the agent for implementation.
           </p>
           <div className="flex gap-3">
@@ -607,6 +669,17 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
 
 export default function AgentHandoffPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [location] = useLocation();
+
+  // Auto-select handoff from ?id= query param (e.g. deep-linked from Ops Cockpit)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const idParam = params.get("id");
+    if (idParam) {
+      const parsed = parseInt(idParam, 10);
+      if (!isNaN(parsed)) setSelectedId(parsed);
+    }
+  }, [location]);
 
   const { data: handoffs = [], isLoading } = useQuery<HandoffSummary[]>({
     queryKey: ["/api/agent-handoffs"],
@@ -618,20 +691,34 @@ export default function AgentHandoffPage() {
 
   function renderList(items: HandoffSummary[], emptyMsg: string) {
     if (items.length === 0) return <p className="text-sm text-gray-400 py-3 text-center">{emptyMsg}</p>;
-    return items.map(h => (
-      <button
-        key={h.id}
-        data-testid={`handoff-row-${h.id}`}
-        onClick={() => setSelectedId(h.id)}
-        className={`w-full text-left border rounded-lg p-3 hover:bg-gray-50 transition space-y-1 ${selectedId === h.id ? "ring-2 ring-indigo-300 border-indigo-300" : ""}`}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-gray-800 line-clamp-1 flex-1">{h.articleTitle}</span>
-          <StatusBadge status={h.pipelineStatus} />
-        </div>
-        <p className="text-xs text-gray-400">{new Date(h.createdAt).toLocaleString()}</p>
-      </button>
-    ));
+    return items.map(h => {
+      const isCodeReview = h.articleTitle?.startsWith("App Code Review");
+      return (
+        <button
+          key={h.id}
+          data-testid={`handoff-row-${h.id}`}
+          onClick={() => setSelectedId(h.id)}
+          className={`w-full text-left border rounded-lg p-3 hover:bg-gray-50 transition space-y-1 ${selectedId === h.id ? "ring-2 ring-indigo-300 border-indigo-300" : ""}`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-gray-800 line-clamp-1 flex-1">{h.articleTitle}</span>
+            <StatusBadge status={h.pipelineStatus} />
+          </div>
+          <div className="flex items-center gap-2">
+            {isCodeReview ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 text-indigo-700">
+                <FileCode2 className="w-2.5 h-2.5" /> Code Review
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-500">
+                <BookOpen className="w-2.5 h-2.5" /> Article Pipeline
+              </span>
+            )}
+            <span className="text-xs text-gray-400">{new Date(h.createdAt).toLocaleString()}</span>
+          </div>
+        </button>
+      );
+    });
   }
 
   return (
