@@ -41,8 +41,8 @@ function QueueRow({ name, q }: { name: string; q: QueueStat }) {
 const CODE_REVIEW_GROUPS = [
   "Clinical Safety & Triage",
   "AI & Probabilistic Reasoning",
-  "FDA Compliance & Audit",
-  "EHR Integration",
+  "Diagnosis & Evidence Engine",
+  "Clinical Scoring & EHR",
 ];
 
 type PipelineStatus = "idle" | "running" | "done" | "error";
@@ -212,6 +212,12 @@ export default function OperationsCockpit() {
 
   // Research Inbox inline panel
   const [showInbox, setShowInbox] = useState(false);
+
+  // Review groups — fetched once to show slice counts in dropdown
+  const { data: researchConfig } = useQuery<{
+    reviewGroups?: Array<{ groupName: string; filesFound: number; filesTotal: number }>;
+  }>({ queryKey: ["/api/research/config"], staleTime: 60_000 });
+  const reviewGroupMeta = researchConfig?.reviewGroups ?? [];
 
   // Live code review tracking
   const [liveReviewId,   setLiveReviewId]   = useState<number | null>(null);
@@ -556,18 +562,26 @@ export default function OperationsCockpit() {
             <p className="text-xs text-gray-400 mt-1 pl-1">{codeRevGroup}</p>
 
             {groupDropOpen && (
-              <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[220px] py-1">
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[260px] py-1">
                 <p className="px-4 pt-2 pb-1 text-xs text-gray-400">No article needed — reviews live app files</p>
-                {["Auto (today's rotation)", ...CODE_REVIEW_GROUPS].map(group => (
-                  <button
-                    key={group}
-                    data-testid={`code-review-group-${group.toLowerCase().replace(/\s+/g, "-")}`}
-                    onClick={() => { setCodeRevGroup(group); setGroupDropOpen(false); }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${codeRevGroup === group ? "font-semibold text-violet-600 dark:text-violet-400" : "text-gray-700 dark:text-gray-300"}`}
-                  >
-                    {group}
-                  </button>
-                ))}
+                {["Auto (today's rotation)", ...CODE_REVIEW_GROUPS].map(group => {
+                  const meta = reviewGroupMeta.find(g => g.groupName === group);
+                  return (
+                    <button
+                      key={group}
+                      data-testid={`code-review-group-${group.toLowerCase().replace(/\s+/g, "-")}`}
+                      onClick={() => { setCodeRevGroup(group); setGroupDropOpen(false); }}
+                      className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-between gap-2 ${codeRevGroup === group ? "font-semibold text-violet-600 dark:text-violet-400" : "text-gray-700 dark:text-gray-300"}`}
+                    >
+                      <span>{group}</span>
+                      {meta && (
+                        <span className="text-xs font-normal text-gray-400 shrink-0">
+                          {meta.filesFound} slice{meta.filesFound !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

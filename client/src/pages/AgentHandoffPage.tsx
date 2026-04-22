@@ -83,6 +83,23 @@ type HandoffDetail = HandoffSummary & {
   agentNotes: string | null;
 };
 
+// ── Safe string coercion — AI sometimes returns objects instead of strings ──
+
+function safeStr(val: unknown): string {
+  if (typeof val === "string") return val;
+  if (val === null || val === undefined) return "";
+  if (typeof val === "object") {
+    // e.g. {fix: "...", line: 42} or {text: "..."}
+    const o = val as Record<string, unknown>;
+    if (typeof o.fix === "string")  return o.fix;
+    if (typeof o.text === "string") return o.text;
+    if (typeof o.issue === "string") return o.issue;
+    if (typeof o.recommendation === "string") return o.recommendation;
+    return JSON.stringify(val);
+  }
+  return String(val);
+}
+
 // ── Status badge ───────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
@@ -470,7 +487,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                       <p className="text-xs font-semibold text-amber-700 mb-1">Author's own concerns:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiCodeProposal.concerns.map((c, i) => (
-                          <li key={i} className="text-xs text-amber-800">{c}</li>
+                          <li key={i} className="text-xs text-amber-800">{safeStr(c)}</li>
                         ))}
                       </ul>
                     </div>
@@ -513,7 +530,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   <div key={label} className={`rounded-lg border p-3 ${color}`}>
                     <p className="text-xs font-semibold mb-1">{label}</p>
                     <ul className="list-disc pl-4 space-y-0.5">
-                      {items.map((item, i) => <li key={i} className="text-xs">{item}</li>)}
+                      {items.map((item, i) => <li key={i} className="text-xs">{safeStr(item)}</li>)}
                     </ul>
                   </div>
                 ) : null
@@ -577,7 +594,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   <div key={label} className={`rounded-lg border p-3 ${color}`}>
                     <p className="text-xs font-semibold mb-1 flex items-center gap-1">{icon}{label}</p>
                     <ul className="list-disc pl-4 space-y-0.5">
-                      {items.map((item, i) => <li key={i} className="text-xs">{item}</li>)}
+                      {items.map((item, i) => <li key={i} className="text-xs">{safeStr(item)}</li>)}
                     </ul>
                   </div>
                 ) : null
@@ -597,7 +614,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                     {handoff.claudeSliceReview.openQuestions.map((q, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs text-yellow-900">
                         <span className="font-mono bg-yellow-200 px-1 rounded shrink-0">Q{i + 1}</span>
-                        {q}
+                        {safeStr(q)}
                       </li>
                     ))}
                   </ul>
@@ -637,7 +654,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                       <p className="text-xs font-semibold text-green-700 mb-1">Claude concerns resolved in Step C:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.resolvedConcerns.map((c, i) => (
-                          <li key={i} className="text-xs text-green-800">{c}</li>
+                          <li key={i} className="text-xs text-green-800">{safeStr(c)}</li>
                         ))}
                       </ul>
                     </div>
@@ -647,7 +664,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                       <p className="text-xs font-semibold text-purple-700 mb-1">Step D — GPT-4o self-improvements (auto-implemented):</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.additionalRecommendations!.map((r, i) => (
-                          <li key={i} className="text-xs text-purple-800">{r}</li>
+                          <li key={i} className="text-xs text-purple-800">{safeStr(r)}</li>
                         ))}
                       </ul>
                     </div>
@@ -657,7 +674,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                       <p className="text-xs font-semibold text-red-700 mb-1">Non-code decisions — physician/FDA review required before deployment:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.remainingRisks.map((r, i) => (
-                          <li key={i} className="text-xs text-red-800">{r}</li>
+                          <li key={i} className="text-xs text-red-800">{safeStr(r)}</li>
                         ))}
                       </ul>
                     </div>
@@ -710,7 +727,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   <p className="text-xs font-semibold text-green-700 mb-1">Issues resolved by this change:</p>
                   <ul className="list-disc pl-4 space-y-0.5">
                     {handoff.openaiRefinedCode.resolvedConcerns.map((c, i) => (
-                      <li key={i} className="text-xs text-green-800">{c}</li>
+                      <li key={i} className="text-xs text-green-800">{safeStr(c)}</li>
                     ))}
                   </ul>
                 </div>
@@ -720,7 +737,7 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                   <p className="text-xs font-semibold text-red-700 mb-1">Physician / FDA decisions needed before deployment:</p>
                   <ul className="list-disc pl-4 space-y-0.5">
                     {handoff.openaiRefinedCode.remainingRisks.map((r, i) => (
-                      <li key={i} className="text-xs text-red-800">{r}</li>
+                      <li key={i} className="text-xs text-red-800">{safeStr(r)}</li>
                     ))}
                   </ul>
                 </div>

@@ -29,28 +29,33 @@ const HIGH_VALUE_FILE_GROUPS = [
     groupName: "Clinical Safety & Triage",
     files: [
       "server/clinical/safetyGate.ts",
-      "server/clinical/clinicalDispositionEngine.ts",
-      "server/ai/triageEngine.ts",
+      "server/agent/safety/supervisor.ts",
+      "server/agent/safety/redFlags.ts",
     ],
   },
   {
     groupName: "AI & Probabilistic Reasoning",
     files: [
       "server/ai/bayesianNetwork.ts",
-      "server/clinical/hallucinationExtensions.ts",
+      "server/agent/llm/agentLlm.ts",
+      "server/agent/llm/llmGuardrails.ts",
     ],
   },
   {
-    groupName: "FDA Compliance & Audit",
+    groupName: "Diagnosis & Evidence Engine",
     files: [
-      "server/fda/fdaAuditChain.ts",
-      "server/validation/calibrationMonitor.ts",
+      "server/agents/diagnosisAgent.ts",
+      "server/agents/evidenceEngine.ts",
+      "server/agents/consensusEngine.ts",
     ],
   },
   {
-    groupName: "EHR Integration",
+    groupName: "Clinical Scoring & EHR",
     files: [
+      "server/agent/scoring/centor.ts",
+      "server/agent/scoring/chestPainScore.ts",
       "server/ehr/fhir/fhirClient.ts",
+      "server/validation/calibrationMonitor.ts",
     ],
   },
 ];
