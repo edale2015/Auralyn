@@ -40,12 +40,28 @@ type SliceReview = {
   verdict: "proceed" | "caution" | "hold";
 };
 
+type SliceAnalysis = {
+  issues:          string[];
+  hipaaRisks:      string[];
+  fdaRisks:        string[];
+  safetyFlags:     string[];
+  recommendations: string[];
+  verdict:         "approve" | "needs_improvement" | "critical_issues";
+};
+
+type PerSliceResult = {
+  path:           string;
+  claudeAnalysis: SliceAnalysis;
+  gptExplanation: string;
+};
+
 type HandoffDetail = HandoffSummary & {
   articleSummary: string | null;
   openaiCodeProposal: {
-    files: CodeFile[];
-    summary: string;
+    files:    CodeFile[];
+    summary:  string;
     concerns: string[];
+    slices?:  PerSliceResult[];
   } | null;
   claudeCodeReview: {
     overallVerdict: "approve" | "revise" | "reject";
@@ -303,13 +319,15 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
         </div>
       )}
 
-      <Tabs defaultValue={isCodeReview ? "refined" : "article"}>
+      <Tabs defaultValue={isCodeReview ? "slices" : "article"}>
         <TabsList className="grid grid-cols-5 w-full">
-          <TabsTrigger value="article" data-testid="tab-article" className="text-xs">
-            <BookOpen className="w-3.5 h-3.5 mr-1" />Article
+          <TabsTrigger value={isCodeReview ? "slices" : "article"} data-testid="tab-first" className="text-xs">
+            {isCodeReview
+              ? <><Zap className="w-3.5 h-3.5 mr-1" />Per-Slice</>
+              : <><BookOpen className="w-3.5 h-3.5 mr-1" />Article</>}
           </TabsTrigger>
           <TabsTrigger value="proposal" data-testid="tab-proposal" className="text-xs">
-            <FileCode2 className="w-3.5 h-3.5 mr-1" />Code v1
+            <FileCode2 className="w-3.5 h-3.5 mr-1" />{isCodeReview ? "Summary" : "Code v1"}
           </TabsTrigger>
           <TabsTrigger value="safety" data-testid="tab-safety" className="text-xs">
             <ShieldAlert className="w-3.5 h-3.5 mr-1" />Safety
@@ -326,7 +344,106 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
           </TabsTrigger>
         </TabsList>
 
-        {/* Tab 1: Article */}
+        {/* Tab 1A: Per-Slice Analysis (code review only) */}
+        <TabsContent value="slices" className="space-y-3 pt-3">
+          {!handoff.openaiCodeProposal?.slices || handoff.openaiCodeProposal.slices.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 text-sm">
+              {handoff.openaiCodeProposal
+                ? "No per-slice data — this handoff was created before the per-slice pipeline."
+                : "Per-slice analysis still in progress…"}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-xs text-blue-800 space-y-1">
+                <p className="font-semibold">How Step A works (per-file pipeline):</p>
+                <p>Each file is sent to <strong>Claude</strong> first — Claude identifies every HIPAA, FDA SaMD, clinical safety, and code quality issue. Then Claude's findings + the original file go to <strong>GPT-4o</strong>, which writes the improved code.</p>
+                <p className="font-semibold mt-1">{handoff.openaiCodeProposal.slices.length} slices reviewed:</p>
+              </div>
+              {handoff.openaiCodeProposal.slices.map((slice, si) => {
+                const verdictColor = slice.claudeAnalysis.verdict === "approve"
+                  ? "border-green-200 bg-green-50"
+                  : slice.claudeAnalysis.verdict === "critical_issues"
+                  ? "border-red-200 bg-red-50"
+                  : "border-amber-200 bg-amber-50";
+                const verdictLabel = slice.claudeAnalysis.verdict === "approve"
+                  ? "✓ Approved as-is"
+                  : slice.claudeAnalysis.verdict === "critical_issues"
+                  ? "⚠ Critical issues"
+                  : "↻ Needs improvement";
+                const verdictText = slice.claudeAnalysis.verdict === "approve"
+                  ? "text-green-700"
+                  : slice.claudeAnalysis.verdict === "critical_issues"
+                  ? "text-red-700"
+                  : "text-amber-700";
+                const totalIssues = slice.claudeAnalysis.issues.length +
+                  slice.claudeAnalysis.hipaaRisks.length +
+                  slice.claudeAnalysis.fdaRisks.length +
+                  slice.claudeAnalysis.safetyFlags.length;
+                return (
+                  <div key={si} className={`rounded-lg border p-4 space-y-3 ${verdictColor}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-mono font-semibold text-gray-700">Slice {si + 1}/{handoff.openaiCodeProposal!.slices!.length}</p>
+                        <p className="font-medium text-sm text-gray-900 font-mono">{slice.path}</p>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${verdictText} border ${verdictColor}`}>
+                        {verdictLabel}
+                      </span>
+                    </div>
+
+                    {/* Claude findings */}
+                    {totalIssues > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+                          <ShieldAlert className="w-3 h-3" /> Claude findings ({totalIssues} issue{totalIssues !== 1 ? "s" : ""}):
+                        </p>
+                        {[
+                          { items: slice.claudeAnalysis.safetyFlags, label: "Safety", color: "text-red-700" },
+                          { items: slice.claudeAnalysis.hipaaRisks,  label: "HIPAA",  color: "text-orange-700" },
+                          { items: slice.claudeAnalysis.fdaRisks,    label: "FDA",    color: "text-purple-700" },
+                          { items: slice.claudeAnalysis.issues,      label: "Code",   color: "text-gray-700" },
+                        ].filter(g => g.items.length > 0).map(g => (
+                          <div key={g.label}>
+                            <p className={`text-[10px] font-bold uppercase tracking-wide ${g.color} mb-0.5`}>{g.label}</p>
+                            <ul className="list-disc pl-4 space-y-0.5">
+                              {g.items.map((item, ii) => (
+                                <li key={ii} className={`text-xs ${g.color}`}>{item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Claude recommendations */}
+                    {slice.claudeAnalysis.recommendations.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-blue-700 mb-1 flex items-center gap-1">
+                          <Wrench className="w-3 h-3" /> Claude recommendations sent to GPT-4o:
+                        </p>
+                        <ol className="list-decimal pl-4 space-y-0.5">
+                          {slice.claudeAnalysis.recommendations.map((r, ri) => (
+                            <li key={ri} className="text-xs text-blue-800">{r}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+
+                    {/* GPT-4o result */}
+                    <div className="border-t border-gray-200 pt-2">
+                      <p className="text-xs font-semibold text-indigo-700 mb-0.5 flex items-center gap-1">
+                        <FileCode2 className="w-3 h-3" /> GPT-4o coded:
+                      </p>
+                      <p className="text-xs text-indigo-800">{slice.gptExplanation}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Tab 1B: Article (article pipeline only) */}
         <TabsContent value="article" className="space-y-3 pt-3">
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">Article Summary</CardTitle></CardHeader>

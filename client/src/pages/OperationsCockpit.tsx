@@ -72,13 +72,13 @@ const HANDOFF_STATUS_LEGEND = [
 const CODE_REVIEW_STEPS = [
   {
     letter: "A",  key: "openaiCodeProposal",
-    label: "GPT-4o reads your code",
-    detail: "Sends current file group to GPT-4o → proposes improvements",
+    label: "Claude + GPT-4o — per file",
+    detail: "Each file: Claude finds issues → GPT-4o writes fixes from Claude's recs",
   },
   {
     letter: "B",  key: "claudeCodeReview",
-    label: "Claude: safety & HIPAA",
-    detail: "Claude reviews the proposal for HIPAA, FDA SaMD, and clinical safety risks",
+    label: "Claude: combined safety",
+    detail: "Claude safety-reviews all coded files together: HIPAA, FDA SaMD, clinical safety",
   },
   {
     letter: "B2", key: "claudeSliceReview",
@@ -87,8 +87,8 @@ const CODE_REVIEW_STEPS = [
   },
   {
     letter: "C",  key: "openaiRefinedCode",
-    label: "GPT-4o implements fixes",
-    detail: "GPT-4o gets your code + both Claude reviews → writes final production-ready code",
+    label: "GPT-4o: final refiner",
+    detail: "GPT-4o gets coded files + both Claude reviews → writes final production-ready code",
     isStepC: true,
   },
   {

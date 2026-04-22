@@ -2,18 +2,19 @@
  * server/research/standaloneCodeReview.ts
  * Standalone App Code Review — no article required
  *
- * Reviews the current Auralyn codebase directly (not article-driven).
- * Picks the highest-value clinical/safety/FDA files, runs GPT-4o to propose
- * improvements, then passes both Claude review passes and lands in the
- * agent_handoffs queue, exactly like the article pipeline.
+ * Per-slice pipeline (new):
+ *   For each file in the group:
+ *     1. Claude analyzes the raw file → HIPAA, FDA, safety, quality issues + recommendations
+ *     2. GPT-4o receives file + Claude's recommendations → writes the improved code
+ *   Combined slice results → Step B (Claude safety review) → B2 (arch review) → C (refiner) → D
  *
  * Triggered by POST /api/research/app-code-review
- * Can also be called as part of the "Full Run" combined trigger.
  */
 
 import * as fs   from "fs";
 import * as path from "path";
-import OpenAI from "openai";
+import OpenAI    from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { db }                    from "../db";
 import { agentHandoffs }         from "../../shared/schema";
 import { runClaudeReview }       from "./claudeReviewAgent";
@@ -54,7 +55,7 @@ const HIGH_VALUE_FILE_GROUPS = [
   },
 ];
 
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT  = process.cwd();
 const MAX_FILE_CHARS = 2500;
 
 function loadFile(shortPath: string): string | null {
@@ -68,8 +69,6 @@ function loadFile(shortPath: string): string | null {
   }
 }
 
-// ── Pick one group to review (rotate daily so different files get reviewed) ─
-
 function pickReviewGroup(seed?: string): typeof HIGH_VALUE_FILE_GROUPS[0] {
   const dayIndex = seed
     ? 0
@@ -77,101 +76,165 @@ function pickReviewGroup(seed?: string): typeof HIGH_VALUE_FILE_GROUPS[0] {
   return HIGH_VALUE_FILE_GROUPS[dayIndex];
 }
 
-// ── GPT-4o Proactive Code Review Architect ─────────────────────────────────
+// ── Per-Slice Types ─────────────────────────────────────────────────────────
 
-const PROACTIVE_ARCHITECT_SYSTEM = `You are a principal TypeScript engineer and clinical software architect reviewing Auralyn, a HIPAA-compliant FDA-regulated medical triage SaaS for NYC urgent care.
+export type SliceAnalysis = {
+  issues:          string[];
+  hipaaRisks:      string[];
+  fdaRisks:        string[];
+  safetyFlags:     string[];
+  recommendations: string[];
+  verdict:         "approve" | "needs_improvement" | "critical_issues";
+};
 
-You are doing a PROACTIVE code review — not implementing an article's findings, but auditing existing code for:
-1. HIPAA compliance gaps (PHI handling, audit logging, access control)
-2. FDA SaMD compliance gaps (21 CFR Part 11, audit chain, algorithm validation annotations)
-3. Clinical safety improvements (hallucination controls, safety gate hardening, threshold accuracy)
-4. Software quality (type safety, error handling, null safety, performance)
-5. Architectural improvements (separation of concerns, coupling, testability)
+export type PerSliceResult = {
+  path:            string;
+  claudeAnalysis:  SliceAnalysis;
+  gptExplanation:  string;
+};
 
-Focus on the most impactful, concrete improvements. Propose REAL code changes — full function bodies, not TODOs.
+// ── Step A-slice: Claude analyzes one raw file ──────────────────────────────
 
-CRITICAL: Return STRICT JSON — nothing before or after it. The top-level keys MUST be exactly "files", "summary", and "concerns":
+const CLAUDE_SLICE_REVIEW_SYSTEM = `You are an expert clinical software safety reviewer for Auralyn, a HIPAA/FDA-regulated medical triage SaaS for NYC urgent care (FDA 510(k) candidate, SaMD Class II).
+
+You will be given ONE TypeScript source file. Review it for every possible issue:
+1. HIPAA compliance gaps — PHI handling, audit logging, access control, consent flows
+2. FDA SaMD non-compliance — 21 CFR Part 11 audit chain, algorithm annotation, change control
+3. Clinical safety risks — wrong thresholds, safety gate bypasses, hallucination pathways, edge-case mishandling
+4. Code quality — null safety, unhandled errors, type safety, injection risks, resource leaks
+
+Return STRICT JSON only — nothing before or after:
 {
-  "files": [
-    {
-      "path": "server/path/to/file.ts",
-      "content": "FULL improved file content — complete file, not a diff",
-      "explanation": "What was improved and why — 2-3 sentences"
-    }
-  ],
-  "summary": "2-paragraph description of what this code review found and what the improvements address",
-  "concerns": ["safety, HIPAA, or FDA concern this change introduces that reviewers must check"]
+  "issues":          ["specific concrete issues found in the code — reference actual line content"],
+  "hipaaRisks":      ["HIPAA/PHI-specific risks with file location"],
+  "fdaRisks":        ["FDA SaMD non-compliance issues with file location"],
+  "safetyFlags":     ["clinical safety risks that could harm patients"],
+  "recommendations": ["concrete actionable fix for each issue — describe exactly what to change and why"],
+  "verdict":         "approve" | "needs_improvement" | "critical_issues"
 }
 
-If the code looks good and you have no improvements to propose, return: { "files": [], "summary": "No critical improvements identified for these files.", "concerns": [] }`;
+If the file looks correct, return: { "issues": [], "hipaaRisks": [], "fdaRisks": [], "safetyFlags": [], "recommendations": [], "verdict": "approve" }`;
 
-async function generateProactiveProposal(
-  group: typeof HIGH_VALUE_FILE_GROUPS[0],
-  loadedFiles: Array<{ path: string; content: string }>
-): Promise<CodeProposal> {
+async function analyzeSliceWithClaude(
+  file:      { path: string; content: string },
+  groupName: string
+): Promise<SliceAnalysis> {
+  const userPrompt = `Group: ${groupName}
+File: ${file.path}
+
+\`\`\`typescript
+${file.content}
+\`\`\`
+
+Review this file completely. Identify every HIPAA, FDA SaMD, clinical safety, and code quality issue.`;
+
+  // Try real Claude (Anthropic) first
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
+  if (anthropicKey) {
+    try {
+      const client = new Anthropic({ apiKey: anthropicKey });
+      const msg = await client.messages.create({
+        model:      "claude-3-5-sonnet-20241022",
+        max_tokens: 1500,
+        system:     CLAUDE_SLICE_REVIEW_SYSTEM,
+        messages:   [{ role: "user", content: userPrompt }],
+      });
+      const raw = (msg.content[0] as any)?.text?.trim() ?? "";
+      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim()) as SliceAnalysis;
+      if (!Array.isArray(parsed.issues)) throw new Error("Invalid structure");
+      return parsed;
+    } catch (e: any) {
+      console.warn(`[slice-claude] Anthropic failed for ${file.path}, falling back to GPT-4o:`, e?.message);
+    }
+  }
+
+  // Fallback: GPT-4o with Claude safety reviewer persona
   const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY required for proactive code review");
-
-  const fileSection = loadedFiles
-    .map(f => `FILE: ${f.path}\n\`\`\`typescript\n${f.content}\n\`\`\``)
-    .join("\n\n");
-
-  const userPrompt = `
-Review Group: ${group.groupName}
-Files being reviewed: ${loadedFiles.map(f => f.path).join(", ")}
-
-${fileSection}
-
-Identify the top improvements for these files and produce concrete TypeScript code changes.
-Focus on HIPAA, FDA SaMD, clinical safety, and code quality in that priority order.
-Only propose changes that are clearly improvements — do not change what is working well.
-`.trim();
+  if (!apiKey) throw new Error("No AI API key available for slice review");
 
   const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+  const resp = await openai.chat.completions.create({
+    model:           "gpt-4o",
+    max_tokens:      1500,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: CLAUDE_SLICE_REVIEW_SYSTEM },
+      { role: "user",   content: userPrompt },
+    ],
+  });
+
+  const raw    = resp.choices[0]?.message?.content?.trim() ?? "";
+  const parsed = JSON.parse(raw) as SliceAnalysis;
+  if (!Array.isArray(parsed.issues)) throw new Error("Invalid structure from GPT-4o fallback");
+  return parsed;
+}
+
+// ── Step B-slice: GPT-4o codes one file using Claude's analysis ─────────────
+
+const GPT4O_SLICE_CODER_SYSTEM = `You are a principal TypeScript engineer for Auralyn, a HIPAA/FDA-regulated medical triage SaaS. You will be given ONE TypeScript source file plus a safety analysis from our clinical reviewer.
+
+Your task: implement every recommendation from the safety analysis. Write the COMPLETE improved file — not a diff, the entire file with all improvements incorporated, production-ready.
+
+Focus on:
+- Fixing every HIPAA, FDA SaMD, clinical safety, and code quality issue identified
+- Preserving all existing functionality — do not remove working features
+- Adding only what is needed, not speculative changes
+
+Return STRICT JSON only:
+{
+  "content":     "FULL improved TypeScript file — complete, compilable",
+  "explanation": "2-4 sentences: what was changed, which issues were resolved, and what was deliberately left unchanged"
+}`;
+
+async function codeSliceWithGPT4o(
+  file:     { path: string; content: string },
+  analysis: SliceAnalysis
+): Promise<{ content: string; explanation: string }> {
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY required for per-slice coding");
+
+  const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+
+  const issueList = [
+    ...analysis.issues,
+    ...analysis.hipaaRisks.map(r => `[HIPAA] ${r}`),
+    ...analysis.fdaRisks.map(r  => `[FDA] ${r}`),
+    ...analysis.safetyFlags.map(s => `[SAFETY] ${s}`),
+  ].join("\n");
+
+  const userPrompt = `File to improve: ${file.path}
+
+\`\`\`typescript
+${file.content}
+\`\`\`
+
+Safety reviewer findings (implement ALL of these):
+${analysis.recommendations.length > 0 ? analysis.recommendations.map((r, i) => `${i + 1}. ${r}`).join("\n") : "No specific recommendations — file approved as-is."}
+
+Issues found:
+${issueList || "None"}
+
+Write the complete improved TypeScript file implementing all recommendations.`;
 
   const resp = await openai.chat.completions.create({
     model:           "gpt-4o",
     max_tokens:      4096,
     response_format: { type: "json_object" },
     messages: [
-      { role: "system", content: PROACTIVE_ARCHITECT_SYSTEM },
+      { role: "system", content: GPT4O_SLICE_CODER_SYSTEM },
       { role: "user",   content: userPrompt },
     ],
   });
 
-  const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (parseErr) {
-    console.error("[standaloneCodeReview] Step A JSON parse error. Raw response:\n", raw.slice(0, 500));
-    throw new Error(`GPT-4o proactive review returned non-JSON: ${(parseErr as Error).message}`);
+  const raw    = resp.choices[0]?.message?.content?.trim() ?? "";
+  const parsed = JSON.parse(raw) as { content: string; explanation: string };
+  if (typeof parsed.content !== "string" || parsed.content.length < 10) {
+    throw new Error(`GPT-4o returned empty content for ${file.path}`);
   }
-
-  // Coerce common alternate field names GPT-4o uses instead of "files"
-  if (!Array.isArray(parsed.files)) {
-    const altFiles = parsed.changes ?? parsed.improvements ?? parsed.modifications ?? parsed.code_changes ?? parsed.file_changes ?? [];
-    parsed.files = Array.isArray(altFiles) ? altFiles : [];
-    console.warn(`[standaloneCodeReview] Step A: "files" missing, coerced from alternate key. Keys returned: ${Object.keys(parsed).join(", ")}`);
-  }
-
-  // Coerce alternate "summary" field names
-  if (!parsed.summary) {
-    parsed.summary = parsed.description ?? parsed.overview ?? parsed.analysis ?? parsed.review ?? `Proactive review of ${group.groupName}`;
-    console.warn("[standaloneCodeReview] Step A: 'summary' missing, coerced from alternate key.");
-  }
-
-  // Ensure concerns is always an array
-  if (!Array.isArray(parsed.concerns)) {
-    parsed.concerns = parsed.risks ?? parsed.issues ?? parsed.warnings ?? [];
-  }
-
-  return parsed as CodeProposal;
+  return parsed;
 }
 
 // ── Step 1: Create handoff record synchronously (fast — DB only) ───────────
-// Call this BEFORE responding to the HTTP request so the client gets the ID.
 
 export async function createCodeReviewHandoff(options?: {
   groupName?: string;
@@ -191,6 +254,7 @@ export async function createCodeReviewHandoff(options?: {
   }
 
   const reviewTitle = `App Code Review — ${group.groupName} (${new Date().toLocaleDateString()})`;
+  const sliceNames  = loadedFiles.map(f => path.basename(f.path)).join(", ");
 
   const [handoff] = await db
     .insert(agentHandoffs)
@@ -198,7 +262,7 @@ export async function createCodeReviewHandoff(options?: {
       articleId:      0,
       articleTitle:   reviewTitle,
       articleUrl:     "#app-code-review",
-      articleSummary: `Reviewing ${group.groupName} — Step A: GPT-4o architect in progress…`,
+      articleSummary: `${loadedFiles.length} slices ready (${sliceNames}) — Step A: Claude per-file analysis starting…`,
       pipelineStatus: "running",
     })
     .returning();
@@ -207,7 +271,6 @@ export async function createCodeReviewHandoff(options?: {
 }
 
 // ── Step 2: Run the full AI pipeline for an existing handoff record ──────────
-// Call this fire-and-forget AFTER responding to the HTTP request.
 
 export async function runPipelineForHandoff(
   handoffId: number,
@@ -224,31 +287,125 @@ export async function runPipelineForHandoff(
     .filter((f): f is { path: string; content: string } => f.content !== null);
 
   const reviewTitle = `App Code Review — ${group.groupName} (${new Date().toLocaleDateString()})`;
+  const totalSlices = loadedFiles.length;
 
-  console.log(`[standaloneCodeReview #${handoffId}] Reviewing group: "${group.groupName}" | files: ${loadedFiles.map(f => f.path).join(", ")}`);
+  console.log(`[standaloneCodeReview #${handoffId}] Group: "${group.groupName}" | ${totalSlices} slices: ${loadedFiles.map(f => f.path).join(", ")}`);
+
+  // Helper: build a readable per-slice progress string
+  function buildProgressMsg(
+    sliceIndex: number,
+    phase: "claude-analyzing" | "gpt-coding" | "done",
+    doneCount: number
+  ): string {
+    const basename = path.basename(loadedFiles[sliceIndex].path);
+    const phaseLabel = phase === "claude-analyzing"
+      ? `Claude analyzing…`
+      : phase === "gpt-coding"
+      ? `Claude ✓ → GPT-4o coding…`
+      : `Claude ✓ → GPT-4o ✓`;
+
+    const parts = loadedFiles.map((f, i) => {
+      const name = path.basename(f.path);
+      if (i < sliceIndex || (i === sliceIndex && phase === "done")) return `${name}: ✓`;
+      if (i === sliceIndex) return `${name}: ${phaseLabel}`;
+      return `${name}: queued`;
+    });
+
+    return `Step A — ${doneCount}/${totalSlices} slices done | ${parts.join(" | ")}`;
+  }
 
   try {
-    // ── Step A: GPT-4o Proactive Architect ────────────────────────────────
-    console.log(`[standaloneCodeReview #${handoffId}] Step A: GPT-4o architecture review`);
-    await db.update(agentHandoffs)
-      .set({ articleSummary: `Step A — GPT-4o reviewing ${group.groupName} architecture…` })
-      .where(eq(agentHandoffs.id, handoffId));
+    // ── Per-slice Phase: Claude analyzes → GPT-4o codes (Step A in UI) ────
 
-    const proposal = await generateProactiveProposal(group, loadedFiles);
+    const sliceResults: PerSliceResult[] = [];
+    const codedFiles: Array<{ path: string; content: string; explanation: string }> = [];
+    const allIssues: string[]          = [];
+    const allHipaaRisks: string[]      = [];
+    const allFdaRisks: string[]        = [];
+    const allSafetyFlags: string[]     = [];
+    const allRecommendations: string[] = [];
+
+    for (let i = 0; i < loadedFiles.length; i++) {
+      const file = loadedFiles[i];
+      const basename = path.basename(file.path);
+
+      // ── Phase 1: Claude analyzes the raw file ───────────────────────────
+      console.log(`[standaloneCodeReview #${handoffId}] Slice ${i + 1}/${totalSlices}: Claude analyzing ${file.path}`);
+      await db.update(agentHandoffs)
+        .set({ articleSummary: buildProgressMsg(i, "claude-analyzing", i) })
+        .where(eq(agentHandoffs.id, handoffId));
+
+      const analysis = await analyzeSliceWithClaude(file, group.groupName);
+      console.log(`[standaloneCodeReview #${handoffId}] Slice ${i + 1}/${totalSlices} [${basename}]: Claude verdict=${analysis.verdict} issues=${analysis.issues.length} recs=${analysis.recommendations.length}`);
+
+      // ── Phase 2: GPT-4o codes the improved file using Claude's recs ─────
+      await db.update(agentHandoffs)
+        .set({ articleSummary: buildProgressMsg(i, "gpt-coding", i) })
+        .where(eq(agentHandoffs.id, handoffId));
+
+      let coded: { content: string; explanation: string };
+      if (analysis.verdict === "approve" && analysis.recommendations.length === 0) {
+        // File looks good — carry forward unchanged
+        coded = { content: file.content, explanation: `${basename} — no issues found by Claude. File carried forward unchanged.` };
+        console.log(`[standaloneCodeReview #${handoffId}] Slice ${i + 1}/${totalSlices} [${basename}]: approved as-is, skipping GPT-4o coding`);
+      } else {
+        coded = await codeSliceWithGPT4o(file, analysis);
+        console.log(`[standaloneCodeReview #${handoffId}] Slice ${i + 1}/${totalSlices} [${basename}]: GPT-4o coded ${coded.content.length} chars`);
+      }
+
+      sliceResults.push({ path: file.path, claudeAnalysis: analysis, gptExplanation: coded.explanation });
+      codedFiles.push({ path: file.path, content: coded.content, explanation: coded.explanation });
+
+      allIssues.push(...analysis.issues.map(s => `[${basename}] ${s}`));
+      allHipaaRisks.push(...analysis.hipaaRisks.map(s => `[${basename}] ${s}`));
+      allFdaRisks.push(...analysis.fdaRisks.map(s => `[${basename}] ${s}`));
+      allSafetyFlags.push(...analysis.safetyFlags.map(s => `[${basename}] ${s}`));
+      allRecommendations.push(...analysis.recommendations.map(s => `[${basename}] ${s}`));
+
+      // Save partial progress after each slice
+      await db.update(agentHandoffs)
+        .set({ articleSummary: buildProgressMsg(i, "done", i + 1) })
+        .where(eq(agentHandoffs.id, handoffId));
+    }
+
+    // ── Save combined Step A result ────────────────────────────────────────
+    const verdicts = sliceResults.map(s => s.claudeAnalysis.verdict);
+    const criticalCount     = verdicts.filter(v => v === "critical_issues").length;
+    const needsImprovCount  = verdicts.filter(v => v === "needs_improvement").length;
+    const approvedCount     = verdicts.filter(v => v === "approve").length;
+
+    const overallSummary = [
+      `Per-slice Claude → GPT-4o review of ${group.groupName} (${totalSlices} files):`,
+      approvedCount > 0     ? `${approvedCount} file(s) approved as-is` : "",
+      needsImprovCount > 0  ? `${needsImprovCount} file(s) need improvement` : "",
+      criticalCount > 0     ? `${criticalCount} file(s) have critical issues` : "",
+      allIssues.length > 0  ? `${allIssues.length} total issue(s) found across all files` : "No issues found.",
+    ].filter(Boolean).join(". ");
+
+    const proposal: CodeProposal & { slices: PerSliceResult[] } = {
+      files:   codedFiles,
+      summary: overallSummary,
+      concerns: [
+        ...allHipaaRisks,
+        ...allFdaRisks,
+        ...allSafetyFlags,
+      ],
+      slices: sliceResults,
+    };
 
     await db.update(agentHandoffs)
       .set({
         openaiCodeProposal: proposal as any,
-        articleSummary: `Step A complete (${proposal.files.length} file proposals). Step B — Claude safety review in progress…`,
+        articleSummary: `Step A complete — ${totalSlices} slices: ${approvedCount} approved, ${needsImprovCount} improved, ${criticalCount} critical. Step B — Claude safety review in progress…`,
       })
       .where(eq(agentHandoffs.id, handoffId));
 
-    // ── Step B: Claude Safety Review ──────────────────────────────────────
-    console.log(`[standaloneCodeReview #${handoffId}] Step B: Claude safety review`);
+    // ── Step B: Claude Safety Review (of combined coded output) ────────────
+    console.log(`[standaloneCodeReview #${handoffId}] Step B: Claude safety review on ${codedFiles.length} coded files`);
     const review = await runClaudeReview({
       codeProposal:   proposal,
       articleTitle:   reviewTitle,
-      articleSummary: `Proactive review of ${group.groupName}`,
+      articleSummary: `Per-slice review of ${group.groupName}: ${overallSummary}`,
     });
 
     await db.update(agentHandoffs)
@@ -258,7 +415,7 @@ export async function runPipelineForHandoff(
       })
       .where(eq(agentHandoffs.id, handoffId));
 
-    // ── Step B2: Claude Slice Review ──────────────────────────────────────
+    // ── Step B2: Claude Slice Review (architecture & coupling) ─────────────
     console.log(`[standaloneCodeReview #${handoffId}] Step B2: Claude architecture/slice review`);
     const sliceReview = await runClaudeSliceReview({
       proposal,
@@ -268,14 +425,14 @@ export async function runPipelineForHandoff(
     await db.update(agentHandoffs)
       .set({
         claudeSliceReview: sliceReview as any,
-        articleSummary: `Step B2 complete (slice verdict: ${sliceReview.verdict}, confidence: ${sliceReview.confidenceScore}/100). Step C — GPT-4o refiner in progress…`,
+        articleSummary: `Step B2 complete (verdict: ${sliceReview.verdict}, confidence: ${sliceReview.confidenceScore}/100). Step C — GPT-4o final refiner in progress…`,
       })
       .where(eq(agentHandoffs.id, handoffId));
 
     console.log(`[standaloneCodeReview #${handoffId}] Step B2: verdict=${sliceReview.verdict} confidence=${sliceReview.confidenceScore}/100`);
 
-    // ── Step C: GPT-4o Refiner ────────────────────────────────────────────
-    console.log(`[standaloneCodeReview #${handoffId}] Step C: GPT-4o refiner`);
+    // ── Step C: GPT-4o Final Refiner ──────────────────────────────────────
+    console.log(`[standaloneCodeReview #${handoffId}] Step C: GPT-4o final refiner`);
     const refined = await refineCodeProposal({
       original:     proposal,
       review,
@@ -283,17 +440,17 @@ export async function runPipelineForHandoff(
       articleTitle: reviewTitle,
     });
 
-    console.log(`[standaloneCodeReview #${handoffId}] Step C complete — ${refined.files.length} file(s), ${refined.additionalRecommendations?.length ?? 0} additional recommendations`);
+    console.log(`[standaloneCodeReview #${handoffId}] Step C complete — ${refined.files.length} file(s), ${refined.additionalRecommendations?.length ?? 0} additional recs`);
 
     // ── Step D: Auto-implement GPT-4o's own additional recommendations ────
-    let finalFiles = refined.files;
+    let finalFiles  = refined.files;
     let stepDSkipped: string[] = [];
 
     if ((refined.additionalRecommendations?.length ?? 0) > 0) {
       console.log(`[standaloneCodeReview #${handoffId}] Step D: implementing ${refined.additionalRecommendations!.length} additional recommendations`);
 
       await db.update(agentHandoffs)
-        .set({ articleSummary: `Step C complete (${refined.files.length} file(s)). Step D — auto-implementing GPT-4o's ${refined.additionalRecommendations!.length} additional recommendation(s)…` })
+        .set({ articleSummary: `Step C complete (${refined.files.length} file(s)). Step D — auto-implementing ${refined.additionalRecommendations!.length} additional recommendation(s)…` })
         .where(eq(agentHandoffs.id, handoffId));
 
       const stepD = await implementAdditionalRecommendations({
@@ -304,7 +461,6 @@ export async function runPipelineForHandoff(
 
       stepDSkipped = stepD.skipped;
 
-      // Merge: Step D files for same path override Step C files; new paths are appended
       if (stepD.files.length > 0) {
         const stepDPaths = new Set(stepD.files.map(f => f.path));
         const carried    = refined.files.filter(f => !stepDPaths.has(f.path));
@@ -315,10 +471,10 @@ export async function runPipelineForHandoff(
 
     const finalRefined = {
       ...refined,
-      files:                   finalFiles,
+      files:                     finalFiles,
       additionalRecommendations: refined.additionalRecommendations ?? [],
       stepDSkipped,
-      changesSummary:          refined.additionalRecommendations?.length
+      changesSummary: refined.additionalRecommendations?.length
         ? `${refined.changesSummary} Additionally, ${refined.additionalRecommendations.length} self-identified improvement(s) were auto-implemented in Step D.`
         : refined.changesSummary,
     };
@@ -327,7 +483,7 @@ export async function runPipelineForHandoff(
       .set({
         openaiRefinedCode: finalRefined as any,
         pipelineStatus:    "awaiting_approval",
-        articleSummary:    `Review complete — ${finalFiles.length} file(s) ready (${refined.files.length} from Claude review fixes, ${finalFiles.length - refined.files.length} from GPT-4o self-improvements). Awaiting your approval.`,
+        articleSummary:    `Review complete — ${totalSlices} slices reviewed, ${finalFiles.length} file(s) ready for approval. Claude found ${allIssues.length} issue(s) total.`,
       })
       .where(eq(agentHandoffs.id, handoffId));
 
@@ -355,11 +511,11 @@ export async function runStandaloneCodeReview(options?: {
   return { handoffId, groupName, status: "awaiting_approval" };
 }
 
-/** Return the available review groups for the UI to display */
 export function getReviewGroups() {
   return HIGH_VALUE_FILE_GROUPS.map(g => ({
-    groupName: g.groupName,
-    files: g.files,
+    groupName:  g.groupName,
+    files:      g.files,
+    sliceCount: g.files.length,
     filesFound: g.files.filter(fp => fs.existsSync(path.join(PROJECT_ROOT, fp))).length,
     filesTotal: g.files.length,
   }));
