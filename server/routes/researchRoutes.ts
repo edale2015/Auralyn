@@ -26,7 +26,7 @@ import { approveUpgrade, rejectUpgrade } from "../research/humanApproval";
 import { exportUpgradeToGitHub, isGitHubConfigured } from "../integrations/githubExporter";
 import { buildAgentHandoff }        from "../research/agentHandoffBuilder";
 import { scanSavedLists, SAVED_LISTS, addSavedList } from "../research/mediumListScraper";
-import { runStandaloneCodeReview, getReviewGroups } from "../research/standaloneCodeReview";
+import { runStandaloneCodeReview, getReviewGroups, createCodeReviewHandoff, runPipelineForHandoff } from "../research/standaloneCodeReview";
 
 const router = express.Router();
 
@@ -96,11 +96,25 @@ router.post("/scan-lists", requireRole(["admin"]), async (_req, res) => {
 router.post("/app-code-review", requireRole(["admin"]), async (req, res) => {
   try {
     const { groupName } = req.body ?? {};
-    // Fire and forget — pipeline can take 30-60 seconds
-    runStandaloneCodeReview({ groupName }).catch((e: any) =>
-      console.error("[app-code-review] standalone review failed:", e?.message)
-    );
-    res.json({ ok: true, message: "Standalone code review started — results will appear in Agent Handoff Queue" });
+
+    // Phase 1 — create the handoff record synchronously so the client gets the ID immediately
+    const { handoffId, groupName: resolvedGroup } = await createCodeReviewHandoff({ groupName });
+
+    // Respond immediately with the handoff ID so the client can poll progress
+    res.json({
+      ok: true,
+      handoffId,
+      groupName: resolvedGroup,
+      message: `Code review started for "${resolvedGroup}" — polling handoff #${handoffId} for live progress`,
+    });
+
+    // Phase 2 — run the full AI pipeline in background (30-90 seconds)
+    setImmediate(() => {
+      runPipelineForHandoff(handoffId, { groupName }).catch((e: any) =>
+        console.error(`[app-code-review #${handoffId}] pipeline failed:`, e?.message)
+      );
+    });
+
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message });
   }

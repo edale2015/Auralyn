@@ -147,18 +147,18 @@ Only propose changes that are clearly improvements — do not change what is wor
   return parsed;
 }
 
-// ── Main entry point ───────────────────────────────────────────────────────
+// ── Step 1: Create handoff record synchronously (fast — DB only) ───────────
+// Call this BEFORE responding to the HTTP request so the client gets the ID.
 
-export async function runStandaloneCodeReview(options?: {
-  groupName?: string;  // force a specific group
-}): Promise<{ handoffId: number; groupName: string; status: string }> {
+export async function createCodeReviewHandoff(options?: {
+  groupName?: string;
+}): Promise<{ handoffId: number; groupName: string }> {
+  const { eq } = await import("drizzle-orm");
 
-  // 1. Pick the file group to review
   const group = options?.groupName
     ? (HIGH_VALUE_FILE_GROUPS.find(g => g.groupName === options.groupName) ?? pickReviewGroup())
     : pickReviewGroup();
 
-  // 2. Load the files that actually exist
   const loadedFiles = group.files
     .map(fp => ({ path: fp, content: loadFile(fp) }))
     .filter((f): f is { path: string; content: string } => f.content !== null);
@@ -169,30 +169,56 @@ export async function runStandaloneCodeReview(options?: {
 
   const reviewTitle = `App Code Review — ${group.groupName} (${new Date().toLocaleDateString()})`;
 
-  console.log(`[standaloneCodeReview] Reviewing group: "${group.groupName}" | files: ${loadedFiles.map(f => f.path).join(", ")}`);
-
-  // 3. Create handoff record
   const [handoff] = await db
     .insert(agentHandoffs)
     .values({
-      articleId:      0,  // no article — standalone review
+      articleId:      0,
       articleTitle:   reviewTitle,
       articleUrl:     "#app-code-review",
-      articleSummary: `Proactive code review of ${group.groupName} files: ${loadedFiles.map(f => f.path).join(", ")}`,
+      articleSummary: `Reviewing ${group.groupName} — Step A: GPT-4o architect in progress…`,
       pipelineStatus: "running",
     })
     .returning();
 
-  const handoffId = handoff.id;
+  return { handoffId: handoff.id, groupName: group.groupName };
+}
+
+// ── Step 2: Run the full AI pipeline for an existing handoff record ──────────
+// Call this fire-and-forget AFTER responding to the HTTP request.
+
+export async function runPipelineForHandoff(
+  handoffId: number,
+  options?: { groupName?: string }
+): Promise<void> {
+  const { eq } = await import("drizzle-orm");
+
+  const group = options?.groupName
+    ? (HIGH_VALUE_FILE_GROUPS.find(g => g.groupName === options.groupName) ?? pickReviewGroup())
+    : pickReviewGroup();
+
+  const loadedFiles = group.files
+    .map(fp => ({ path: fp, content: loadFile(fp) }))
+    .filter((f): f is { path: string; content: string } => f.content !== null);
+
+  const reviewTitle = `App Code Review — ${group.groupName} (${new Date().toLocaleDateString()})`;
+
+  console.log(`[standaloneCodeReview #${handoffId}] Reviewing group: "${group.groupName}" | files: ${loadedFiles.map(f => f.path).join(", ")}`);
 
   try {
     // ── Step A: GPT-4o Proactive Architect ────────────────────────────────
-    console.log(`[standaloneCodeReview #${handoffId}] Step A: generating proactive code review proposal`);
+    console.log(`[standaloneCodeReview #${handoffId}] Step A: GPT-4o architecture review`);
+    await db.update(agentHandoffs)
+      .set({ articleSummary: `Step A — GPT-4o reviewing ${group.groupName} architecture…` })
+      .where(eq(agentHandoffs.id, handoffId));
+
     const proposal = await generateProactiveProposal(group, loadedFiles);
 
     await db.update(agentHandoffs)
-      .set({ openaiCodeProposal: proposal as any })
-      .where(require("drizzle-orm").eq(agentHandoffs.id, handoffId));
+      .set({
+        openaiCodeProposal: proposal as any,
+        articleSummary: `Step A complete (${proposal.files.length} file proposals). Step B — Claude safety review in progress…`,
+      })
+      .where(eq(agentHandoffs.id, handoffId));
 
     // ── Step B: Claude Safety Review ──────────────────────────────────────
     console.log(`[standaloneCodeReview #${handoffId}] Step B: Claude safety review`);
@@ -203,8 +229,11 @@ export async function runStandaloneCodeReview(options?: {
     });
 
     await db.update(agentHandoffs)
-      .set({ claudeCodeReview: review as any })
-      .where(require("drizzle-orm").eq(agentHandoffs.id, handoffId));
+      .set({
+        claudeCodeReview: review as any,
+        articleSummary: `Step B complete (Claude verdict: ${review.overallVerdict}). Step B2 — Claude architecture/slice review in progress…`,
+      })
+      .where(eq(agentHandoffs.id, handoffId));
 
     // ── Step B2: Claude Slice Review ──────────────────────────────────────
     console.log(`[standaloneCodeReview #${handoffId}] Step B2: Claude architecture/slice review`);
@@ -214,13 +243,16 @@ export async function runStandaloneCodeReview(options?: {
     });
 
     await db.update(agentHandoffs)
-      .set({ claudeSliceReview: sliceReview as any })
-      .where(require("drizzle-orm").eq(agentHandoffs.id, handoffId));
+      .set({
+        claudeSliceReview: sliceReview as any,
+        articleSummary: `Step B2 complete (slice verdict: ${sliceReview.verdict}, confidence: ${sliceReview.confidenceScore}/100). Step C — GPT-4o refiner in progress…`,
+      })
+      .where(eq(agentHandoffs.id, handoffId));
 
     console.log(`[standaloneCodeReview #${handoffId}] Step B2: verdict=${sliceReview.verdict} confidence=${sliceReview.confidenceScore}/100`);
 
     // ── Step C: GPT-4o Refiner ────────────────────────────────────────────
-    console.log(`[standaloneCodeReview #${handoffId}] Step C: refining with both Claude inputs`);
+    console.log(`[standaloneCodeReview #${handoffId}] Step C: GPT-4o refiner`);
     const refined = await refineCodeProposal({
       original:     proposal,
       review,
@@ -232,19 +264,32 @@ export async function runStandaloneCodeReview(options?: {
       .set({
         openaiRefinedCode: refined as any,
         pipelineStatus:    "awaiting_approval",
+        articleSummary:    `Review complete — ${refined.files.length} file(s) refined. Awaiting your approval.`,
       })
-      .where(require("drizzle-orm").eq(agentHandoffs.id, handoffId));
+      .where(eq(agentHandoffs.id, handoffId));
 
     console.log(`[standaloneCodeReview #${handoffId}] Complete — awaiting human approval`);
-    return { handoffId, groupName: group.groupName, status: "awaiting_approval" };
 
   } catch (err: any) {
     console.error(`[standaloneCodeReview #${handoffId}] Failed:`, err?.message);
     await db.update(agentHandoffs)
-      .set({ pipelineStatus: "failed" })
-      .where(require("drizzle-orm").eq(agentHandoffs.id, handoffId));
+      .set({
+        pipelineStatus: "failed",
+        articleSummary: `Pipeline failed: ${err?.message ?? "unknown error"}`,
+      })
+      .where(eq(agentHandoffs.id, handoffId));
     throw err;
   }
+}
+
+// ── Backward-compatible wrapper ─────────────────────────────────────────────
+
+export async function runStandaloneCodeReview(options?: {
+  groupName?: string;
+}): Promise<{ handoffId: number; groupName: string; status: string }> {
+  const { handoffId, groupName } = await createCodeReviewHandoff(options);
+  await runPipelineForHandoff(handoffId, options);
+  return { handoffId, groupName, status: "awaiting_approval" };
 }
 
 /** Return the available review groups for the UI to display */

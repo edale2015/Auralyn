@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -359,10 +359,22 @@ export default function ResearchInboxPage() {
     queryKey: ["/api/research/config"],
   });
 
-  const [newListLabel, setNewListLabel] = useState("");
-  const [newListUrl,   setNewListUrl]   = useState("");
-  const [showAddList,  setShowAddList]  = useState(false);
-  const [lastScan,     setLastScan]     = useState<{ label: string; new: number; skippedOld: number; total: number } | null>(null);
+  const [newListLabel,  setNewListLabel]  = useState("");
+  const [newListUrl,    setNewListUrl]    = useState("");
+  const [showAddList,   setShowAddList]   = useState(false);
+  const [lastScan,      setLastScan]      = useState<{ label: string; new: number; skippedOld: number; total: number } | null>(null);
+  const [liveReviewId,  setLiveReviewId]  = useState<number | null>(null);
+
+  // Poll the live code review handoff every 4 s while it's running
+  const liveReview = useQuery({
+    queryKey: ["/api/agent-handoffs", liveReviewId],
+    queryFn: () => fetch(`/api/agent-handoffs/${liveReviewId}`).then(r => r.json()),
+    enabled: liveReviewId !== null,
+    refetchInterval: (query) => {
+      const status = (query.state.data as any)?.pipelineStatus;
+      return status === "running" ? 4000 : false;
+    },
+  });
 
   const savedLists = useQuery({
     queryKey: ["/api/research/saved-lists"],
@@ -381,7 +393,7 @@ export default function ResearchInboxPage() {
       if (newCount > 0) {
         toast({ title: "Feed scan complete", description: `${newCount} new articles — triaging in background…` });
       } else {
-        toast({ title: "Feed scan complete", description: `No new articles (${skipped} skipped — already seen or >90 days old)` });
+        toast({ title: "Feed scan complete", description: `No new articles (${skipped} skipped — already seen or >4 months old)` });
       }
     },
     onError: (e: any) => toast({ title: "Scan failed", description: e.message, variant: "destructive" }),
@@ -428,9 +440,10 @@ export default function ResearchInboxPage() {
         .then(r => r.json())
         .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
     onSuccess: (d) => {
+      if (d.handoffId) setLiveReviewId(d.handoffId);
       toast({
-        title: "Code review queued",
-        description: d.message ?? "GPT-4o will review the selected file group (architecture + individual code slices). Check Agent Handoff Queue in ~2 minutes.",
+        title: "Code review started",
+        description: `Reviewing "${d.groupName ?? "selected group"}" — watching progress below.`,
       });
     },
     onError: (e: any) => toast({ title: "Code review failed", description: e.message, variant: "destructive" }),
@@ -716,7 +729,7 @@ export default function ResearchInboxPage() {
               <span className="font-bold">{lastScan.new}</span> new ingested
             </span>
             <span className="text-blue-600 dark:text-blue-500">
-              {lastScan.skippedOld} already in inbox or &gt;90 days old
+              {lastScan.skippedOld} already in inbox or &gt;4 months old
             </span>
             {lastScan.new > 0 && (
               <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400">
@@ -731,6 +744,103 @@ export default function ResearchInboxPage() {
           >✕</button>
         </div>
       )}
+
+      {/* Live code review progress panel */}
+      {liveReviewId !== null && (() => {
+        const hr = liveReview.data as any;
+        const status = hr?.pipelineStatus ?? "running";
+        const done = (field: string) => hr?.[field] != null;
+
+        const steps = [
+          { label: "GPT-4o Architecture Review",  key: "openaiCodeProposal",  letter: "A" },
+          { label: "Claude Safety Review",         key: "claudeCodeReview",    letter: "B" },
+          { label: "Claude Code Slice Review",     key: "claudeSliceReview",   letter: "B2" },
+          { label: "GPT-4o Refiner & Finalise",   key: "openaiRefinedCode",   letter: "C" },
+        ];
+
+        const completedCount = steps.filter(s => done(s.key)).length;
+        const activeIdx = status === "running" ? completedCount : 4;
+        const isFailed  = status === "failed";
+        const isReady   = status === "awaiting_approval";
+
+        return (
+          <div className={`border rounded-lg p-4 space-y-3 ${
+            isFailed ? "bg-red-50 border-red-200" :
+            isReady  ? "bg-emerald-50 border-emerald-200" :
+                       "bg-blue-50 border-blue-100"
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {isFailed
+                  ? <XCircle className="w-4 h-4 text-red-500" />
+                  : isReady
+                    ? <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    : <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />}
+                <span className={`text-sm font-semibold ${isFailed ? "text-red-700" : isReady ? "text-emerald-800" : "text-blue-800"}`}>
+                  {isFailed ? "Code Review Failed" : isReady ? "Review Complete — Awaiting Approval" : `Code Review Running (${completedCount}/4 steps done)`}
+                </span>
+                {!isFailed && !isReady && (
+                  <span className="text-xs text-blue-500 font-mono">#{liveReviewId}</span>
+                )}
+              </div>
+              {(isReady || isFailed) && (
+                <button
+                  className="text-gray-400 hover:text-gray-600 text-sm"
+                  onClick={() => setLiveReviewId(null)}
+                  aria-label="Dismiss"
+                >✕</button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {steps.map((step, i) => {
+                const complete = done(step.key);
+                const active   = i === activeIdx && !isFailed;
+                return (
+                  <div
+                    key={step.key}
+                    className={`flex flex-col gap-1 p-2 rounded-lg border text-xs ${
+                      complete ? "bg-white border-emerald-300" :
+                      active   ? "bg-white border-blue-300" :
+                      isFailed && i === completedCount ? "bg-white border-red-300" :
+                                  "bg-white/50 border-gray-200 opacity-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {complete
+                        ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        : active
+                          ? <RefreshCw className="w-3.5 h-3.5 text-blue-500 animate-spin shrink-0" />
+                          : isFailed && i === completedCount
+                            ? <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            : <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 shrink-0" />}
+                      <span className={`font-mono font-bold text-[10px] ${
+                        complete ? "text-emerald-600" :
+                        active   ? "text-blue-600"    :
+                                   "text-gray-400"
+                      }`}>Step {step.letter}</span>
+                    </div>
+                    <span className={`leading-tight ${complete ? "text-gray-700" : active ? "text-gray-700" : "text-gray-400"}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {hr?.articleSummary && (
+              <p className="text-xs text-gray-600 italic leading-snug">{hr.articleSummary}</p>
+            )}
+
+            {isReady && (
+              <div className="flex items-center gap-2 text-xs text-emerald-700 font-medium">
+                <CheckCircle className="w-3.5 h-3.5" />
+                Open Agent Handoff Queue to approve and apply the code changes.
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -879,7 +989,7 @@ export default function ResearchInboxPage() {
                       className="flex-1 min-w-0 cursor-pointer"
                       onClick={() => setSelected(a)}
                     >
-                      <p className="text-sm font-medium leading-snug line-clamp-2">{a.title}</p>
+                      <p className="text-sm font-medium leading-snug">{a.title}</p>
                       <p className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-2">
                         {dateStr && <span className="font-medium text-foreground/70">{dateStr}</span>}
                         {a.source && <span className="capitalize">{a.source.replace(/_/g, " ")}</span>}

@@ -3,7 +3,7 @@
  * Medium Scout Agent — polls RSS feeds for AI/LLM/agent engineering articles.
  *
  * Feeds target broad AI/engineering topics that match Auralyn's triage keywords.
- * Articles more than 90 days old are skipped (RSS sometimes includes older items).
+ * Articles more than 120 days old (4 months) are skipped (RSS sometimes includes older items).
  * Deduplication is by URL (UNIQUE constraint on research_articles.url).
  */
 
@@ -14,8 +14,8 @@ import { sql } from "drizzle-orm";
 
 const rssParser = new Parser({ timeout: 10_000, headers: { "User-Agent": "Auralyn-Research-Scout/1.0" } });
 
-// 90-day cutoff — skip articles older than this
-const MAX_AGE_DAYS = 90;
+// 4-month cutoff (120 days) — skip articles older than this
+const MAX_AGE_DAYS = 120;
 
 function isTooOld(pubDate?: string): boolean {
   if (!pubDate) return false; // no date → include it
