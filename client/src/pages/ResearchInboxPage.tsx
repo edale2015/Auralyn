@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -297,7 +298,7 @@ function ArticleCard({ article, onClick, onPromote }: { article: any; onClick: (
   const isIgnored = verdict === "ignore";
   return (
     <Card
-      className={`hover:shadow-md transition-shadow cursor-pointer ${isIgnored ? "opacity-75 hover:opacity-100" : ""}`}
+      className={`hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group ${isIgnored ? "opacity-75 hover:opacity-100" : ""}`}
       onClick={onClick}
       data-testid={`card-article-${article.id}`}
     >
@@ -324,15 +325,20 @@ function ArticleCard({ article, onClick, onPromote }: { article: any; onClick: (
             <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
           ))}
         </div>
-        {isIgnored && onPromote && (
-          <button
-            className="text-xs text-amber-600 hover:text-amber-800 font-semibold flex items-center gap-0.5 shrink-0"
-            onClick={e => { e.stopPropagation(); onPromote(); }}
-            data-testid={`btn-promote-${article.id}`}
-          >
-            <Zap className="w-3 h-3" />Promote
-          </button>
-        )}
+        <div className="flex items-center gap-2 ml-auto">
+          {isIgnored && onPromote && (
+            <button
+              className="text-xs text-amber-600 hover:text-amber-800 font-semibold flex items-center gap-0.5 shrink-0"
+              onClick={e => { e.stopPropagation(); onPromote(); }}
+              data-testid={`btn-promote-${article.id}`}
+            >
+              <Zap className="w-3 h-3" />Promote
+            </button>
+          )}
+          <span className="text-xs text-muted-foreground group-hover:text-blue-500 transition-colors flex items-center gap-0.5 shrink-0">
+            View details <ChevronDown className="w-3 h-3 -rotate-90" />
+          </span>
+        </div>
       </CardFooter>
     </Card>
   );
@@ -515,6 +521,10 @@ export default function ResearchInboxPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
+          <Link href="/ops" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-2 transition-colors" data-testid="link-back-to-ops">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7"/></svg>
+            Back to Operations
+          </Link>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-violet-500" />
             Research Inbox
@@ -893,6 +903,11 @@ export default function ResearchInboxPage() {
             {f.label}{counts[f.key] > 0 ? ` (${counts[f.key]})` : ""}
           </button>
         ))}
+      </div>
+
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300" data-testid="inbox-click-hint">
+        <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span><strong>Click any article card</strong> to open its details — triage scores, AI summary, code proposal, and approve/reject actions are shown in the panel that opens.</span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

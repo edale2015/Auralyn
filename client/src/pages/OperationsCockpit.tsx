@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import StatCard from "../components/ops/StatCard";
 import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
@@ -75,6 +76,99 @@ const CODE_REVIEW_STEPS = [
   { letter: "C",  label: "GPT-4o Refiner & Finalise",  key: "openaiRefinedCode" },
 ];
 
+function InlineInbox() {
+  const [filter, setFilter] = useState("all");
+  const articlesQ = useQuery<{ ok: boolean; articles: any[] }>({
+    queryKey: ["/api/research/articles"],
+  });
+  const all: any[] = articlesQ.data?.articles ?? [];
+  const counts: Record<string, number> = {
+    all:        all.length,
+    adopt:      all.filter(a => a.verdict === "adopt").length,
+    test_only:  all.filter(a => a.verdict === "test_only").length,
+    ignore:     all.filter(a => a.verdict === "ignore").length,
+    unreviewed: all.filter(a => !a.verdict).length,
+  };
+  const FILTERS = [
+    { value: "all",        label: "All" },
+    { value: "adopt",      label: "Adopt" },
+    { value: "test_only",  label: "Test Only" },
+    { value: "ignore",     label: "Ignore" },
+    { value: "unreviewed", label: "Unreviewed" },
+  ];
+  const filtered = filter === "all" ? all : all.filter(a =>
+    a.verdict === filter || (!a.verdict && filter === "unreviewed")
+  );
+  const verdictStyle = (v: string) =>
+    v === "adopt"     ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200" :
+    v === "test_only" ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" :
+                        "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400";
+
+  return (
+    <div className="mt-3 rounded-xl border bg-white dark:bg-gray-900/60 p-4 space-y-3" data-testid="inline-inbox">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">Research Inbox</span>
+          <span className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{all.length} articles</span>
+        </div>
+        <Link href="/research-inbox" className="text-xs text-blue-500 hover:underline font-medium" data-testid="link-open-full-inbox">
+          Open full inbox →
+        </Link>
+      </div>
+
+      <div className="flex gap-1.5 flex-wrap">
+        {FILTERS.map(f => (
+          <button
+            key={f.value}
+            onClick={() => setFilter(f.value)}
+            data-testid={`inbox-filter-${f.value}`}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              filter === f.value
+                ? "bg-gray-800 text-white dark:bg-gray-100 dark:text-gray-900"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+            }`}
+          >
+            {f.label}{counts[f.value] > 0 ? ` (${counts[f.value]})` : ""}
+          </button>
+        ))}
+      </div>
+
+      {articlesQ.isLoading ? (
+        <p className="text-sm text-gray-400 py-3 text-center">Loading articles…</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-sm text-gray-400 py-3 text-center">
+          {all.length === 0 ? "No articles yet — run Scan Feeds or Full Run to populate." : "No articles in this category."}
+        </p>
+      ) : (
+        <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+          {filtered.map((a: any) => (
+            <Link key={a.id} href="/research-inbox" data-testid={`inline-article-${a.id}`}>
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent hover:border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer group transition-colors">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium leading-snug text-gray-800 dark:text-gray-100 truncate">{a.title}</p>
+                  <p className="text-xs text-gray-400 mt-0.5 truncate">{a.source}{a.author ? ` · ${a.author}` : ""}</p>
+                </div>
+                {a.verdict ? (
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${verdictStyle(a.verdict)}`}>
+                    {a.verdict.replace("_", " ").toUpperCase()}
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-300 dark:text-gray-600 shrink-0">Not triaged</span>
+                )}
+                <span className="text-xs text-gray-300 group-hover:text-blue-500 shrink-0 transition-colors font-medium">View →</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-gray-400 border-t pt-2 dark:border-gray-700">
+        Click any article to open its detail view — triage scores, AI summary, code proposal, and approve/reject actions are all in the full inbox.
+      </p>
+    </div>
+  );
+}
+
 export default function OperationsCockpit() {
   const { toast } = useToast();
   const [data, setData] = useState<OpsSummary | null>(null);
@@ -92,6 +186,9 @@ export default function OperationsCockpit() {
     label: string; scanned: number; adopted: number; testOnly: number; ignored: number; ts: Date;
   } | null>(null);
   const [bgProcessing,    setBgProcessing]    = useState(false);
+
+  // Research Inbox inline panel
+  const [showInbox, setShowInbox] = useState(false);
 
   // Live code review tracking
   const [liveReviewId,   setLiveReviewId]   = useState<number | null>(null);
@@ -310,18 +407,13 @@ export default function OperationsCockpit() {
               Medium articles → AI code proposal → Claude safety review → your approval → app implementation
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              className="text-xs text-blue-500 hover:underline"
-              onClick={() => setShowPipelineGuide(v => !v)}
-              data-testid="btn-pipeline-guide"
-            >
-              {showPipelineGuide ? "Hide pipeline guide ↑" : "How does this work? ↓"}
-            </button>
-            <Link href="/research-inbox" className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">
-              Research Inbox →
-            </Link>
-          </div>
+          <button
+            className="text-xs text-blue-500 hover:underline"
+            onClick={() => setShowPipelineGuide(v => !v)}
+            data-testid="btn-pipeline-guide"
+          >
+            {showPipelineGuide ? "Hide pipeline guide ↑" : "How does this work? ↓"}
+          </button>
         </div>
 
         {/* Pipeline guide — collapsible */}
@@ -444,6 +536,21 @@ export default function OperationsCockpit() {
               </div>
             )}
           </div>
+
+          {/* Research Inbox toggle */}
+          <button
+            data-testid="btn-toggle-inbox"
+            onClick={() => setShowInbox(v => !v)}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold border transition-colors ${
+              showInbox
+                ? "bg-gray-800 text-white border-gray-700 hover:bg-gray-900 dark:bg-gray-200 dark:text-gray-900 dark:border-gray-300"
+                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700"
+            }`}
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            Research Inbox
+            <svg className={`h-3 w-3 transition-transform ${showInbox ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+          </button>
 
           <div className="ml-auto text-xs text-gray-400 hidden md:block">
             Results → <Link href="/agent-handoff" className="text-blue-500 hover:underline">Agent Handoff Queue</Link>
@@ -574,6 +681,9 @@ export default function OperationsCockpit() {
             )}
           </div>
         )}
+
+        {/* Research Inbox inline panel */}
+        {showInbox && <InlineInbox />}
       </section>
 
       {/* Service Health Row */}
