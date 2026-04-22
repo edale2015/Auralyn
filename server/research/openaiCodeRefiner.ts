@@ -11,6 +11,7 @@
  * and documents what risks remain for human sign-off.
  */
 
+import OpenAI from "openai";
 import type { CodeProposal }       from "./autoCodeProposalEngine";
 import type { ClaudeReview }       from "./claudeReviewAgent";
 import type { ClaudeSliceReview }  from "./claudeCodeSliceReview";
@@ -99,7 +100,6 @@ Produce the refined v2 code that addresses concerns from both Claude reviewers.
 `.trim();
 
   try {
-    const OpenAI = require("openai").default ?? require("openai");
     const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({

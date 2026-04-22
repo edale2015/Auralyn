@@ -9,6 +9,7 @@
  * summary using GPT-4o-mini with a clinical lens.
  */
 
+import OpenAI from "openai";
 import { db }  from "../db";
 import { researchArticles, researchSummaries } from "../../shared/schema";
 import { eq } from "drizzle-orm";
@@ -49,8 +50,7 @@ function getOpenAI() {
   const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   try {
-    const OpenAIClass = require("openai").default ?? require("openai");
-    return new OpenAIClass({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+    return new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
   } catch { return null; }
 }
 

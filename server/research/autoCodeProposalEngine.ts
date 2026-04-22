@@ -12,6 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import OpenAI from "openai";
 
 export type CodeProposalFile = {
   path: string;
@@ -172,7 +173,6 @@ If no concrete improvement is warranted, return a single file with an explanatio
 `.trim();
 
   try {
-    const OpenAI = require("openai").default ?? require("openai");
     const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({

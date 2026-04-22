@@ -9,6 +9,8 @@
  * Model: gpt-4o for structured clinical review quality.
  */
 
+import OpenAI from "openai";
+
 export type OpenAIReviewRequest = {
   claudeRecommendations: string;
   relevantCode:          Record<string, string>;
@@ -87,8 +89,6 @@ Return JSON with this exact shape:
 }`.trim();
 
   try {
-    // Use OpenAI npm package (already installed)
-    const OpenAI = require("openai").default ?? require("openai");
     const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({

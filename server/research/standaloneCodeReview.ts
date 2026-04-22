@@ -13,6 +13,7 @@
 
 import * as fs   from "fs";
 import * as path from "path";
+import OpenAI from "openai";
 import { db }                    from "../db";
 import { agentHandoffs }         from "../../shared/schema";
 import { runClaudeReview }       from "./claudeReviewAgent";
@@ -124,7 +125,6 @@ Focus on HIPAA, FDA SaMD, clinical safety, and code quality in that priority ord
 Only propose changes that are clearly improvements — do not change what is working well.
 `.trim();
 
-  const OpenAI = require("openai").default ?? require("openai");
   const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
   const resp = await openai.chat.completions.create({

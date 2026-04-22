@@ -20,6 +20,8 @@
 
 import * as fs   from "fs";
 import * as path from "path";
+import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import type { CodeProposal } from "./autoCodeProposalEngine";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -239,7 +241,6 @@ export async function runClaudeSliceReview(args: {
   const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
   if (anthropicKey) {
     try {
-      const Anthropic = require("@anthropic-ai/sdk").default ?? require("@anthropic-ai/sdk");
       const client = new Anthropic({ apiKey: anthropicKey });
 
       const msg = await client.messages.create({
@@ -266,7 +267,6 @@ export async function runClaudeSliceReview(args: {
   }
 
   try {
-    const OpenAI = require("openai").default ?? require("openai");
     const openai = new OpenAI({ apiKey: openaiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
 
     const resp = await openai.chat.completions.create({
