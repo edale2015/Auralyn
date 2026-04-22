@@ -46,22 +46,58 @@ const CODE_REVIEW_GROUPS = [
 
 type PipelineStatus = "idle" | "running" | "done" | "error";
 
+const PIPELINE_STAGES = [
+  { icon: "📡", label: "Scan",           desc: "RSS feeds + saved Medium lists fetched" },
+  { icon: "🏷️", label: "Triage",         desc: "Auto-scored: Adopt (≥50), Test Only (≥34), Ignore (<34)" },
+  { icon: "🤖", label: "AI Summary",     desc: "GPT-4o reads the article, writes key takeaways" },
+  { icon: "🏗️", label: "Code Proposal",  desc: "GPT-4o proposes TypeScript code changes for this app" },
+  { icon: "🛡️", label: "Safety Review",  desc: "Claude audits for HIPAA, FDA SaMD, clinical safety risks" },
+  { icon: "🔬", label: "Slice Review",   desc: "Claude reviews architecture + coupling across files" },
+  { icon: "✨", label: "Refine",         desc: "GPT-4o refines the code using both Claude reviews" },
+  { icon: "👤", label: "Your Approval",  desc: "You review and approve or reject in Agent Handoff Queue" },
+  { icon: "⚙️", label: "Implement",      desc: "Agent applies the approved code changes to the app" },
+];
+
+const HANDOFF_STATUS_LEGEND = [
+  { status: "running",           color: "bg-blue-100 text-blue-700",     label: "Running",            desc: "AI pipeline in progress (steps 3–7 above)" },
+  { status: "awaiting_approval", color: "bg-yellow-100 text-yellow-700", label: "Awaiting Approval",  desc: "Pipeline done — waiting for you to review" },
+  { status: "approved",          color: "bg-green-100 text-green-700",   label: "Approved",           desc: "You approved it — queued for implementation" },
+  { status: "implementing",      color: "bg-purple-100 text-purple-700", label: "Implementing",       desc: "Agent is writing the code changes" },
+  { status: "implemented",       color: "bg-emerald-100 text-emerald-700", label: "Implemented",      desc: "Code changes applied to the app" },
+  { status: "rejected",          color: "bg-red-100 text-red-700",       label: "Rejected",           desc: "You rejected this article's changes" },
+  { status: "failed",            color: "bg-gray-100 text-gray-600",     label: "Failed",             desc: "AI pipeline error — click Retry in Agent Handoff Queue" },
+];
+
+const CODE_REVIEW_STEPS = [
+  { letter: "A",  label: "GPT-4o Architecture Review", key: "openaiCodeProposal" },
+  { letter: "B",  label: "Claude Safety Review",        key: "claudeCodeReview"  },
+  { letter: "B2", label: "Claude Slice Review",         key: "claudeSliceReview" },
+  { letter: "C",  label: "GPT-4o Refiner & Finalise",  key: "openaiRefinedCode" },
+];
+
 export default function OperationsCockpit() {
   const { toast } = useToast();
   const [data, setData] = useState<OpsSummary | null>(null);
   const [error, setError] = useState<string>("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [showPipelineGuide, setShowPipelineGuide] = useState(false);
 
   // Research pipeline state
-  const [fullRunStatus,    setFullRunStatus]    = useState<PipelineStatus>("idle");
-  const [mediumRunStatus,  setMediumRunStatus]  = useState<PipelineStatus>("idle");
-  const [codeRevStatus,    setCodeRevStatus]    = useState<PipelineStatus>("idle");
-  const [codeRevGroup,     setCodeRevGroup]     = useState<string>("Auto (today's rotation)");
-  const [groupDropOpen,    setGroupDropOpen]    = useState(false);
-  const [lastRunResult,    setLastRunResult]    = useState<{
+  const [fullRunStatus,   setFullRunStatus]   = useState<PipelineStatus>("idle");
+  const [mediumRunStatus, setMediumRunStatus] = useState<PipelineStatus>("idle");
+  const [codeRevStatus,   setCodeRevStatus]   = useState<PipelineStatus>("idle");
+  const [codeRevGroup,    setCodeRevGroup]    = useState<string>("Auto (today's rotation)");
+  const [groupDropOpen,   setGroupDropOpen]   = useState(false);
+  const [lastRunResult,   setLastRunResult]   = useState<{
     label: string; scanned: number; adopted: number; testOnly: number; ignored: number; ts: Date;
   } | null>(null);
-  const [bgProcessing,     setBgProcessing]     = useState(false);
+  const [bgProcessing,    setBgProcessing]    = useState(false);
+
+  // Live code review tracking
+  const [liveReviewId,   setLiveReviewId]   = useState<number | null>(null);
+  const [liveReviewData, setLiveReviewData] = useState<any>(null);
+  const liveReviewPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -74,6 +110,33 @@ export default function OperationsCockpit() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  function stopReviewPoll() {
+    if (liveReviewPollRef.current) {
+      clearInterval(liveReviewPollRef.current);
+      liveReviewPollRef.current = null;
+    }
+  }
+
+  function startReviewPoll(handoffId: number) {
+    stopReviewPoll();
+    async function pollOnce() {
+      try {
+        const res = await fetch(`/api/agent-handoffs/${handoffId}`);
+        const d = await res.json();
+        setLiveReviewData(d);
+        if (d.pipelineStatus !== "running") {
+          stopReviewPoll();
+          setCodeRevStatus("done");
+          setTimeout(() => setCodeRevStatus("idle"), 8000);
+        }
+      } catch {}
+    }
+    pollOnce();
+    liveReviewPollRef.current = setInterval(pollOnce, 4000);
+  }
+
+  useEffect(() => () => stopReviewPoll(), []);
+
   async function triggerPipeline(
     endpoint: string,
     body: Record<string, unknown> | undefined,
@@ -83,23 +146,22 @@ export default function OperationsCockpit() {
     setStatus("running");
     try {
       const res = await apiRequest("POST", endpoint, body);
-      const data = await res.json().catch(() => ({})) as any;
+      const d = await res.json().catch(() => ({})) as any;
       setStatus("done");
 
-      const scanned  = data?.scanned  ?? 0;
-      const adopted  = data?.adopted  ?? 0;
-      const testOnly = data?.testOnly ?? 0;
-      const ignored  = data?.ignored  ?? 0;
+      const scanned  = d?.scanned  ?? 0;
+      const adopted  = d?.adopted  ?? 0;
+      const testOnly = d?.testOnly ?? 0;
+      const ignored  = d?.ignored  ?? 0;
 
       if (scanned > 0 || adopted > 0) {
         setLastRunResult({ label, scanned, adopted, testOnly, ignored, ts: new Date() });
-        // AI summary + handoff building continues in background for ~60s
         setBgProcessing(true);
         setTimeout(() => setBgProcessing(false), 75_000);
       }
 
       const desc = scanned > 0
-        ? `${scanned} new articles scanned — ${adopted > 0 ? `${adopted} promoted to Handoff Queue` : "none met the adopt threshold (score ≥ 72)"}`
+        ? `${scanned} new articles scanned — ${adopted > 0 ? `${adopted} promoted to Handoff Queue` : "none met the adopt threshold (score ≥ 50)"}`
         : "No new articles found (feeds may be up to date)";
 
       toast({ title: `${label} complete`, description: desc });
@@ -116,13 +178,30 @@ export default function OperationsCockpit() {
   }
 
   function handleMediumRun() {
-    triggerPipeline("/api/research/medium-run", undefined, setMediumRunStatus, "Medium Run");
+    triggerPipeline("/api/research/medium-run", undefined, setMediumRunStatus, "Medium Only");
   }
 
-  function handleCodeReview() {
+  async function handleCodeReview() {
     const groupName = codeRevGroup === "Auto (today's rotation)" ? undefined : codeRevGroup;
-    triggerPipeline("/api/research/app-code-review", groupName ? { groupName } : undefined, setCodeRevStatus, "Code Review");
+    setCodeRevStatus("running");
     setGroupDropOpen(false);
+    setLiveReviewData(null);
+    setLiveReviewId(null);
+    try {
+      const res = await apiRequest("POST", "/api/research/app-code-review", groupName ? { groupName } : undefined);
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error || "Code review failed to start");
+      setLiveReviewId(d.handoffId);
+      startReviewPoll(d.handoffId);
+      toast({
+        title: "Code review started",
+        description: `Reviewing "${d.groupName}" — watch the 4-step progress panel below.`,
+      });
+    } catch (e: any) {
+      setCodeRevStatus("error");
+      toast({ title: "Code Review failed", description: e?.message, variant: "destructive" });
+      setTimeout(() => setCodeRevStatus("idle"), 6000);
+    }
   }
 
   function pipelineBtn(status: PipelineStatus) {
@@ -187,6 +266,15 @@ export default function OperationsCockpit() {
 
   const usingInMemory = !redisConfigured || data.queues?.status?.ok === false;
 
+  // Code review live state helpers
+  const crDone = (field: string) => liveReviewData?.[field] != null;
+  const crStatus = liveReviewData?.pipelineStatus ?? (liveReviewId ? "running" : "idle");
+  const crCompletedCount = CODE_REVIEW_STEPS.filter(s => crDone(s.key)).length;
+  const crActiveIdx = crStatus === "running" ? crCompletedCount : 4;
+  const crFailed  = crStatus === "failed";
+  const crReady   = crStatus === "awaiting_approval";
+  const crRunning = crStatus === "running";
+
   return (
     <div className="p-6 space-y-6" data-testid="operations-cockpit">
       <div className="flex items-center justify-between">
@@ -219,14 +307,66 @@ export default function OperationsCockpit() {
           <div>
             <h2 className="text-xl font-semibold">Research Pipeline</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Trigger the automated research pipeline — Medium articles → AI review → Agent Handoff Queue
+              Medium articles → AI code proposal → Claude safety review → your approval → app implementation
             </p>
           </div>
-          <Link href="/research-inbox" className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">
-            Open Research Inbox →
-          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              className="text-xs text-blue-500 hover:underline"
+              onClick={() => setShowPipelineGuide(v => !v)}
+              data-testid="btn-pipeline-guide"
+            >
+              {showPipelineGuide ? "Hide pipeline guide ↑" : "How does this work? ↓"}
+            </button>
+            <Link href="/research-inbox" className="text-xs text-blue-500 hover:underline" data-testid="link-research-inbox">
+              Research Inbox →
+            </Link>
+          </div>
         </div>
 
+        {/* Pipeline guide — collapsible */}
+        {showPipelineGuide && (
+          <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/60 dark:bg-blue-950/20 dark:border-blue-900 p-4 space-y-4">
+            <div>
+              <p className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">
+                Article → Code Pipeline (9 stages)
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {PIPELINE_STAGES.map((stage, i) => (
+                  <div key={i} className="flex items-start gap-2 bg-white dark:bg-gray-900 rounded-lg border border-blue-100 dark:border-blue-900 px-3 py-2">
+                    <span className="text-base shrink-0 mt-0.5">{stage.icon}</span>
+                    <div>
+                      <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">{i + 1}. {stage.label}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{stage.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                Status labels you'll see in the Agent Handoff Queue
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {HANDOFF_STATUS_LEGEND.map(({ status, color, label, desc }) => (
+                  <div key={status} className="flex items-center gap-2 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-1.5">
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${color}`}>{label}</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">{desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              <strong>Medium Only</strong> runs stages 1–7 for all articles. Articles scored "adopt" (≥50 pts) appear in the{" "}
+              <Link href="/agent-handoff" className="text-blue-500 hover:underline">Agent Handoff Queue</Link> at stage 7, waiting for your approval.
+              Click <strong>Code Review</strong> to run the 4-step AI code review on existing app files (no article needed).
+            </p>
+          </div>
+        )}
+
+        {/* Trigger buttons */}
         <div className="rounded-xl border p-4 flex flex-wrap gap-3 items-center bg-gray-50 dark:bg-gray-900/40">
 
           {/* Full Run */}
@@ -263,12 +403,12 @@ export default function OperationsCockpit() {
 
           {/* Code / Architecture Review with group dropdown */}
           <div className="relative" ref={dropRef}>
-            <div className="flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
+            <div className="flex rounded-lg overflow-hidden border border-blue-400">
               <button
                 data-testid="btn-code-review"
                 disabled={codeRevStatus === "running"}
                 onClick={handleCodeReview}
-                className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-800 dark:text-gray-100${pipelineBtn(codeRevStatus)}`}
+                className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors${pipelineBtn(codeRevStatus)}`}
               >
                 {codeRevStatus === "running" ? (
                   <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
@@ -281,7 +421,7 @@ export default function OperationsCockpit() {
               <button
                 data-testid="btn-code-review-dropdown"
                 onClick={() => setGroupDropOpen(v => !v)}
-                className="px-2 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border-l border-gray-300 dark:border-gray-600 transition-colors text-gray-600 dark:text-gray-300"
+                className="px-2 py-2 text-sm bg-blue-500 hover:bg-blue-600 border-l border-blue-400 transition-colors text-white"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
               </button>
@@ -290,6 +430,7 @@ export default function OperationsCockpit() {
 
             {groupDropOpen && (
               <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[220px] py-1">
+                <p className="px-4 pt-2 pb-1 text-xs text-gray-400">No article needed — reviews live app files</p>
                 {["Auto (today's rotation)", ...CODE_REVIEW_GROUPS].map(group => (
                   <button
                     key={group}
@@ -309,7 +450,97 @@ export default function OperationsCockpit() {
           </div>
         </div>
 
-        {/* Last Run Result Strip */}
+        {/* Live Code Review Progress Panel */}
+        {liveReviewId !== null && (
+          <div className={`mt-3 rounded-xl border p-4 space-y-3 ${
+            crFailed ? "bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-800" :
+            crReady  ? "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800" :
+                       "bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-800"
+          }`} data-testid="code-review-progress-panel">
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {crFailed ? (
+                  <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                ) : crReady ? (
+                  <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                ) : (
+                  <svg className="animate-spin w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                )}
+                <span className={`text-sm font-semibold ${crFailed ? "text-red-700" : crReady ? "text-emerald-800 dark:text-emerald-300" : "text-blue-800 dark:text-blue-300"}`}>
+                  {crFailed
+                    ? "Code Review Failed"
+                    : crReady
+                      ? `Review Complete — open Agent Handoff Queue to approve`
+                      : `Code Review Running (${crCompletedCount}/4 steps complete)`}
+                </span>
+                {crRunning && (
+                  <span className="text-xs text-blue-400 font-mono">handoff #{liveReviewId}</span>
+                )}
+              </div>
+              {(crReady || crFailed) && (
+                <button
+                  className="text-gray-400 hover:text-gray-600 text-sm"
+                  onClick={() => { setLiveReviewId(null); setLiveReviewData(null); }}
+                  aria-label="Dismiss"
+                >✕</button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {CODE_REVIEW_STEPS.map((step, i) => {
+                const complete = crDone(step.key);
+                const active   = i === crActiveIdx && !crFailed;
+                return (
+                  <div
+                    key={step.key}
+                    className={`flex flex-col gap-1.5 p-2.5 rounded-lg border text-xs ${
+                      complete ? "bg-white border-emerald-300 dark:bg-gray-900 dark:border-emerald-700" :
+                      active   ? "bg-white border-blue-400 dark:bg-gray-900 dark:border-blue-600" :
+                      crFailed && i === crCompletedCount ? "bg-white border-red-300 dark:bg-gray-900 dark:border-red-700" :
+                                  "bg-white/50 border-gray-200 opacity-40 dark:bg-gray-900/40 dark:border-gray-700"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {complete ? (
+                        <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                      ) : active ? (
+                        <svg className="animate-spin w-3.5 h-3.5 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                      ) : crFailed && i === crCompletedCount ? (
+                        <svg className="w-3.5 h-3.5 text-red-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                      ) : (
+                        <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 dark:border-gray-600 shrink-0" />
+                      )}
+                      <span className={`font-mono font-bold text-[10px] ${complete ? "text-emerald-600 dark:text-emerald-400" : active ? "text-blue-600 dark:text-blue-400" : "text-gray-400"}`}>
+                        Step {step.letter}
+                      </span>
+                    </div>
+                    <span className={`leading-tight ${complete || active ? "text-gray-700 dark:text-gray-200" : "text-gray-400 dark:text-gray-500"}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {liveReviewData?.articleSummary && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 italic leading-snug">{liveReviewData.articleSummary}</p>
+            )}
+
+            {crReady && (
+              <div className="flex items-center gap-2">
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                  All 4 steps complete —{" "}
+                  <Link href="/agent-handoff" className="underline hover:no-underline">open Agent Handoff Queue</Link>{" "}
+                  to review and approve the code changes.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Medium Run Last Result Strip */}
         {lastRunResult && (
           <div className="mt-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" data-testid="last-run-result">
             <span className="font-semibold text-blue-700 dark:text-blue-300">{lastRunResult.label}</span>
@@ -319,15 +550,16 @@ export default function OperationsCockpit() {
             </span>
             {lastRunResult.adopted > 0 ? (
               <span className="text-green-700 dark:text-green-400 font-semibold">
-                ✓ {lastRunResult.adopted} promoted →{" "}
-                <Link href="/agent-handoff" className="underline hover:no-underline">Handoff Queue</Link>
+                ✓ {lastRunResult.adopted} promoted to{" "}
+                <Link href="/agent-handoff" className="underline hover:no-underline">Agent Handoff Queue</Link>
+                {" "}— AI code proposal + reviews running in background (~60s)
               </span>
             ) : (
-              <span className="text-amber-600 dark:text-amber-400">0 met adopt threshold (score &lt; 72)</span>
+              <span className="text-amber-600 dark:text-amber-400">0 met adopt threshold (score &lt; 50)</span>
             )}
             {lastRunResult.testOnly > 0 && (
               <span className="text-gray-500 dark:text-gray-400">
-                {lastRunResult.testOnly} in{" "}
+                {lastRunResult.testOnly} test-only in{" "}
                 <Link href="/research-inbox" className="text-blue-500 hover:underline">Research Inbox</Link>
               </span>
             )}
@@ -337,7 +569,7 @@ export default function OperationsCockpit() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
                 </svg>
-                Building AI summaries…
+                Building AI summaries + code proposals…
               </span>
             )}
           </div>
