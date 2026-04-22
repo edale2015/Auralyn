@@ -60,6 +60,8 @@ type HandoffDetail = HandoffSummary & {
     changesSummary: string;
     resolvedConcerns: string[];
     remainingRisks: string[];
+    additionalRecommendations?: string[];
+    stepDSkipped?: string[];
   } | null;
   agentNotes: string | null;
 };
@@ -479,13 +481,28 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
             <p className="text-gray-500 text-sm">Refinement not yet complete.</p>
           ) : (
             <>
+              {/* Pipeline flow explanation */}
+              <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-xs text-blue-800 space-y-1">
+                <p className="font-semibold">How this code was produced:</p>
+                <p><span className="font-mono font-bold">Step A</span> — GPT-4o was sent the current source files and produced initial improvement proposals.</p>
+                <p><span className="font-mono font-bold">Steps B &amp; B2</span> — Claude reviewed those proposals for HIPAA, FDA SaMD, clinical safety, architecture coupling, and blast radius. Each concern is listed in the Claude Review tabs.</p>
+                <p><span className="font-mono font-bold">Step C</span> — GPT-4o received the original code <strong>plus</strong> both Claude reviews, then wrote the final implementation you see below — addressing every concern Claude raised.</p>
+                {(handoff.openaiRefinedCode.additionalRecommendations?.length ?? 0) > 0 && (
+                  <p><span className="font-mono font-bold">Step D</span> — GPT-4o also identified {handoff.openaiRefinedCode.additionalRecommendations!.length} additional improvement(s) of its own, which were <strong>automatically implemented</strong> and merged into the files below.</p>
+                )}
+              </div>
+
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">GPT-4o Refiner — v1 → v2 (both Claude reviews applied)</CardTitle></CardHeader>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">
+                    Final Code — Step C{(handoff.openaiRefinedCode.additionalRecommendations?.length ?? 0) > 0 ? " + Step D" : ""} ({handoff.openaiRefinedCode.files.length} file{handoff.openaiRefinedCode.files.length !== 1 ? "s" : ""})
+                  </CardTitle>
+                </CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-gray-700 whitespace-pre-line">{handoff.openaiRefinedCode.changesSummary}</p>
                   {handoff.openaiRefinedCode.resolvedConcerns.length > 0 && (
                     <div>
-                      <p className="text-xs font-semibold text-green-700 mb-1">Resolved concerns:</p>
+                      <p className="text-xs font-semibold text-green-700 mb-1">Claude concerns resolved in Step C:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.resolvedConcerns.map((c, i) => (
                           <li key={i} className="text-xs text-green-800">{c}</li>
@@ -493,9 +510,19 @@ function HandoffDetailPanel({ id, onClose }: { id: number; onClose: () => void }
                       </ul>
                     </div>
                   )}
+                  {(handoff.openaiRefinedCode.additionalRecommendations?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-purple-700 mb-1">Step D — GPT-4o self-improvements (auto-implemented):</p>
+                      <ul className="list-disc pl-4 space-y-0.5">
+                        {handoff.openaiRefinedCode.additionalRecommendations!.map((r, i) => (
+                          <li key={i} className="text-xs text-purple-800">{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {handoff.openaiRefinedCode.remainingRisks.length > 0 && (
                     <div>
-                      <p className="text-xs font-semibold text-red-700 mb-1">Remaining risks — physician/FDA review required before deployment:</p>
+                      <p className="text-xs font-semibold text-red-700 mb-1">Non-code decisions — physician/FDA review required before deployment:</p>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {handoff.openaiRefinedCode.remainingRisks.map((r, i) => (
                           <li key={i} className="text-xs text-red-800">{r}</li>

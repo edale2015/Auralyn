@@ -70,10 +70,33 @@ const HANDOFF_STATUS_LEGEND = [
 ];
 
 const CODE_REVIEW_STEPS = [
-  { letter: "A",  label: "GPT-4o Architecture Review", key: "openaiCodeProposal" },
-  { letter: "B",  label: "Claude Safety Review",        key: "claudeCodeReview"  },
-  { letter: "B2", label: "Claude Slice Review",         key: "claudeSliceReview" },
-  { letter: "C",  label: "GPT-4o Refiner & Finalise",  key: "openaiRefinedCode" },
+  {
+    letter: "A",  key: "openaiCodeProposal",
+    label: "GPT-4o reads your code",
+    detail: "Sends current file group to GPT-4o → proposes improvements",
+  },
+  {
+    letter: "B",  key: "claudeCodeReview",
+    label: "Claude: safety & HIPAA",
+    detail: "Claude reviews the proposal for HIPAA, FDA SaMD, and clinical safety risks",
+  },
+  {
+    letter: "B2", key: "claudeSliceReview",
+    label: "Claude: architecture",
+    detail: "Claude checks import graph, coupling, and blast radius across connected files",
+  },
+  {
+    letter: "C",  key: "openaiRefinedCode",
+    label: "GPT-4o implements fixes",
+    detail: "GPT-4o gets your code + both Claude reviews → writes final production-ready code",
+    isStepC: true,
+  },
+  {
+    letter: "D",  key: "_stepD",
+    label: "GPT-4o self-improvements",
+    detail: "Any extra improvements GPT-4o flagged are automatically implemented and merged",
+    isStepD: true,
+  },
 ];
 
 function InlineInbox() {
@@ -340,11 +363,11 @@ export default function OperationsCockpit() {
     return <div className="p-6" data-testid="ops-loading">Loading operations cockpit...</div>;
   }
 
-  const redis = data.services.redis;
+  const redis = data.services?.redis ?? {};
   const redisConfigured = redis.configured !== false;
   const redisValue = !redisConfigured ? "Not Configured" : redis.ok ? "OK" : "FAIL";
   const redisStatus = !redisConfigured ? "neutral" : redis.ok ? "ok" : "fail";
-  const redisSubtitle = !redisConfigured ? "Using in-memory queues" : redis.error;
+  const redisSubtitle = !redisConfigured ? "Using in-memory queues" : (redis.error ?? undefined);
 
   const totalWaiting =
     (data.queues?.triage?.waiting ?? 0) +
@@ -364,10 +387,22 @@ export default function OperationsCockpit() {
   const usingInMemory = !redisConfigured || data.queues?.status?.ok === false;
 
   // Code review live state helpers
-  const crDone = (field: string) => liveReviewData?.[field] != null;
+  const crSummary = liveReviewData?.articleSummary ?? "";
+  const crStepDRunning = crSummary.includes("Step D");
+  const crDone = (key: string) => {
+    if (key === "_stepD") {
+      // Step D is complete when openaiRefinedCode is saved (D runs before that save)
+      return liveReviewData?.["openaiRefinedCode"] != null;
+    }
+    if (key === "openaiRefinedCode") {
+      // Step C is done when refined code exists OR Step D is actively running (means C finished)
+      return liveReviewData?.["openaiRefinedCode"] != null || crStepDRunning;
+    }
+    return liveReviewData?.[key] != null;
+  };
   const crStatus = liveReviewData?.pipelineStatus ?? (liveReviewId ? "running" : "idle");
   const crCompletedCount = CODE_REVIEW_STEPS.filter(s => crDone(s.key)).length;
-  const crActiveIdx = crStatus === "running" ? crCompletedCount : 4;
+  const crActiveIdx = crStatus === "running" ? crCompletedCount : CODE_REVIEW_STEPS.length;
   const crFailed  = crStatus === "failed";
   const crReady   = crStatus === "awaiting_approval";
   const crRunning = crStatus === "running";
@@ -404,7 +439,7 @@ export default function OperationsCockpit() {
           <div>
             <h2 className="text-xl font-semibold">Research Pipeline</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Medium articles → AI code proposal → Claude safety review → your approval → app implementation
+              Code sent to Claude → Claude makes recommendations → GPT-4o implements everything → you approve
             </p>
           </div>
           <button
@@ -579,7 +614,7 @@ export default function OperationsCockpit() {
                     ? "Code Review Failed"
                     : crReady
                       ? `Review Complete — open Agent Handoff Queue to approve`
-                      : `Code Review Running (${crCompletedCount}/4 steps complete)`}
+                      : `Code Review Running (${crCompletedCount}/${CODE_REVIEW_STEPS.length} steps complete)`}
                 </span>
                 {crRunning && (
                   <span className="text-xs text-blue-400 font-mono">handoff #{liveReviewId}</span>
@@ -594,7 +629,7 @@ export default function OperationsCockpit() {
               )}
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {CODE_REVIEW_STEPS.map((step, i) => {
                 const complete = crDone(step.key);
                 const active   = i === crActiveIdx && !crFailed;
@@ -622,8 +657,11 @@ export default function OperationsCockpit() {
                         Step {step.letter}
                       </span>
                     </div>
-                    <span className={`leading-tight ${complete || active ? "text-gray-700 dark:text-gray-200" : "text-gray-400 dark:text-gray-500"}`}>
+                    <span className={`leading-tight font-medium ${complete || active ? "text-gray-700 dark:text-gray-200" : "text-gray-400 dark:text-gray-500"}`}>
                       {step.label}
+                    </span>
+                    <span className={`leading-tight text-[10px] ${complete || active ? "text-gray-400 dark:text-gray-500" : "text-gray-300 dark:text-gray-600"}`}>
+                      {step.detail}
                     </span>
                   </div>
                 );
@@ -638,7 +676,7 @@ export default function OperationsCockpit() {
               <div className="flex items-center gap-2">
                 <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
                 <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                  All 4 steps complete —{" "}
+                  All {CODE_REVIEW_STEPS.length} steps complete —{" "}
                   <Link href="/agent-handoff" className="underline hover:no-underline">open Agent Handoff Queue</Link>{" "}
                   to review and approve the code changes.
                 </span>

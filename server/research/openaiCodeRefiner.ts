@@ -21,27 +21,34 @@ export type RefinedCodeProposal = {
   changesSummary: string;
   resolvedConcerns: string[];
   remainingRisks: string[];
+  additionalRecommendations?: string[];
 };
 
 const REFINER_SYSTEM = `You are a senior TypeScript engineer for Auralyn, a HIPAA-compliant, FDA-regulated medical triage system.
 
 You have been given:
-1. An initial code proposal from GPT-4o (the architect)
-2. A Claude adversarial safety review (HIPAA, FDA SaMD, clinical safety)
-3. A Claude architecture/coupling review (import graph, interface contracts, blast radius)
+1. The actual source code files being reviewed
+2. An initial code proposal from GPT-4o (Step A architect)
+3. A Claude adversarial safety review — HIPAA, FDA SaMD, clinical safety (Step B)
+4. A Claude architecture/coupling review — import graph, interface contracts, blast radius (Step B2)
 
 Your job: produce a REVISED, IMPROVED version of the code that:
-- Addresses every concern flagged by both Claude reviewers
+- Addresses EVERY concern flagged by both Claude reviewers — leave nothing unaddressed
 - Respects the coupling blast-radius (update callers if needed)
 - Preserves all safety gates (hallucination controls, physician review, audit logging)
-- Is production-ready TypeScript — no TODOs, no pseudocode
+- Is production-ready TypeScript — no TODOs, no pseudocode, no placeholder comments
 - Documents exactly what was changed to address each concern
-- For open questions flagged by the architecture reviewer, add a TODO comment referencing the question
+
+CRITICAL RULES:
+1. ALL improvements must appear as actual code in the "files" array. Never leave an improvement as a bullet point.
+2. "remainingRisks" is ONLY for genuine human decisions that CANNOT be resolved in code — for example: "Algorithm threshold 0.7 requires clinical validation by a physician" or "This data retention policy needs HIPAA legal review." DO NOT use remainingRisks for code suggestions.
+3. After addressing Claude's concerns, identify any additional improvements you want to make to the code. List each one in "additionalRecommendations" — these will be auto-implemented in the next step.
+4. Never append bullet points, suggestions, or notes after your JSON. Return ONLY the JSON.
 
 If the safety reviewer verdict was "reject", do NOT produce implementation code. Return a single explanation file.
 If the architecture reviewer verdict was "hold", flag prominently but still produce code with "HOLD" warnings in comments.
 
-Return strict JSON:
+Return STRICT JSON — nothing before or after it:
 {
   "files": [
     {
@@ -52,7 +59,8 @@ Return strict JSON:
   ],
   "changesSummary": "2-3 sentence summary of what was improved in this revision",
   "resolvedConcerns": ["each concern that was addressed and how"],
-  "remainingRisks": ["any risks that could NOT be resolved — require physician/FDA review before deployment"]
+  "remainingRisks": ["ONLY genuine physician/FDA/legal decisions that cannot be coded — NOT code suggestions"],
+  "additionalRecommendations": ["Additional code improvement you identified but have not yet implemented — will be auto-implemented in Step D"]
 }`;
 
 export async function refineCodeProposal(args: {
@@ -128,5 +136,101 @@ Produce the refined v2 code that addresses concerns from both Claude reviewers.
       resolvedConcerns: [],
       remainingRisks: ["Refinement pipeline failed — manual engineering review required before implementation."],
     };
+  }
+}
+
+// ── Step D: Auto-implement GPT-4o's own additional recommendations ──────────
+// Takes the bullet-point recommendations from Step C and turns them into real code.
+
+const STEP_D_SYSTEM = `You are a senior TypeScript engineer for Auralyn, a HIPAA-compliant, FDA-regulated medical triage system.
+
+You have been given:
+1. A set of code files that have already been improved by a prior review pass
+2. A list of additional code improvements that were identified but not yet implemented
+
+Your job: implement EVERY item in the additional improvements list as production-ready TypeScript code.
+
+Rules:
+- Return the COMPLETE content of each modified file — not diffs, not snippets
+- Only include files that actually change
+- Each improvement must be fully implemented — no TODO comments, no pseudocode
+- Preserve all existing safety gates, HIPAA controls, and audit logging
+- If an improvement item is too vague to implement safely, skip it and note why in "skipped"
+
+Return STRICT JSON — nothing before or after it:
+{
+  "files": [
+    {
+      "path": "server/path/to/file.ts",
+      "content": "FULL file content",
+      "explanation": "Which additional recommendation this implements and what changed"
+    }
+  ],
+  "implementedCount": 3,
+  "skipped": ["optional — items that were too vague or unsafe to implement, with reason"]
+}`;
+
+export async function implementAdditionalRecommendations(args: {
+  additionalRecommendations: string[];
+  existingFiles: { path: string; content: string; explanation: string }[];
+  articleTitle: string;
+}): Promise<{ files: { path: string; content: string; explanation: string }[]; skipped: string[] }> {
+  if (args.additionalRecommendations.length === 0) {
+    return { files: [], skipped: [] };
+  }
+
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.warn("[Step D] No API key — skipping self-implementation");
+    return { files: [], skipped: args.additionalRecommendations };
+  }
+
+  const filesSection = args.existingFiles
+    .map(f => `FILE: ${f.path}\n\`\`\`typescript\n${f.content.slice(0, 2000)}\n\`\`\``)
+    .join("\n\n");
+
+  const recsSection = args.additionalRecommendations
+    .map((r, i) => `${i + 1}. ${r}`)
+    .join("\n");
+
+  const userPrompt = `
+Context: "${args.articleTitle}"
+
+=== ALREADY-IMPROVED CODE FILES (from Step C) ===
+${filesSection || "(none)"}
+
+=== ADDITIONAL IMPROVEMENTS TO IMPLEMENT NOW ===
+${recsSection}
+
+Implement each of the above improvements as complete TypeScript code changes.
+`.trim();
+
+  try {
+    const openai = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+
+    const resp = await openai.chat.completions.create({
+      model:           "gpt-4o",
+      max_tokens:      3500,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: STEP_D_SYSTEM },
+        { role: "user",   content: userPrompt },
+      ],
+    });
+
+    const raw = resp.choices[0]?.message?.content?.trim() ?? "";
+    const parsed = JSON.parse(raw) as {
+      files: { path: string; content: string; explanation: string }[];
+      implementedCount: number;
+      skipped?: string[];
+    };
+
+    return {
+      files:   Array.isArray(parsed.files) ? parsed.files : [],
+      skipped: Array.isArray(parsed.skipped) ? parsed.skipped : [],
+    };
+  } catch (err: any) {
+    console.error("[Step D] Failed:", err?.message);
+    return { files: [], skipped: args.additionalRecommendations };
   }
 }

@@ -18,7 +18,7 @@ import { db }                    from "../db";
 import { agentHandoffs }         from "../../shared/schema";
 import { runClaudeReview }       from "./claudeReviewAgent";
 import { runClaudeSliceReview }  from "./claudeCodeSliceReview";
-import { refineCodeProposal }    from "./openaiCodeRefiner";
+import { refineCodeProposal, implementAdditionalRecommendations } from "./openaiCodeRefiner";
 import type { CodeProposal }     from "./autoCodeProposalEngine";
 
 // ── Curated high-value files for proactive review ─────────────────────────
@@ -260,11 +260,51 @@ export async function runPipelineForHandoff(
       articleTitle: reviewTitle,
     });
 
+    console.log(`[standaloneCodeReview #${handoffId}] Step C complete — ${refined.files.length} file(s), ${refined.additionalRecommendations?.length ?? 0} additional recommendations`);
+
+    // ── Step D: Auto-implement GPT-4o's own additional recommendations ────
+    let finalFiles = refined.files;
+    let stepDSkipped: string[] = [];
+
+    if ((refined.additionalRecommendations?.length ?? 0) > 0) {
+      console.log(`[standaloneCodeReview #${handoffId}] Step D: implementing ${refined.additionalRecommendations!.length} additional recommendations`);
+
+      await db.update(agentHandoffs)
+        .set({ articleSummary: `Step C complete (${refined.files.length} file(s)). Step D — auto-implementing GPT-4o's ${refined.additionalRecommendations!.length} additional recommendation(s)…` })
+        .where(eq(agentHandoffs.id, handoffId));
+
+      const stepD = await implementAdditionalRecommendations({
+        additionalRecommendations: refined.additionalRecommendations!,
+        existingFiles:             refined.files,
+        articleTitle:              reviewTitle,
+      });
+
+      stepDSkipped = stepD.skipped;
+
+      // Merge: Step D files for same path override Step C files; new paths are appended
+      if (stepD.files.length > 0) {
+        const stepDPaths = new Set(stepD.files.map(f => f.path));
+        const carried    = refined.files.filter(f => !stepDPaths.has(f.path));
+        finalFiles = [...carried, ...stepD.files];
+        console.log(`[standaloneCodeReview #${handoffId}] Step D merged — total ${finalFiles.length} file(s) (${stepD.files.length} from Step D)`);
+      }
+    }
+
+    const finalRefined = {
+      ...refined,
+      files:                   finalFiles,
+      additionalRecommendations: refined.additionalRecommendations ?? [],
+      stepDSkipped,
+      changesSummary:          refined.additionalRecommendations?.length
+        ? `${refined.changesSummary} Additionally, ${refined.additionalRecommendations.length} self-identified improvement(s) were auto-implemented in Step D.`
+        : refined.changesSummary,
+    };
+
     await db.update(agentHandoffs)
       .set({
-        openaiRefinedCode: refined as any,
+        openaiRefinedCode: finalRefined as any,
         pipelineStatus:    "awaiting_approval",
-        articleSummary:    `Review complete — ${refined.files.length} file(s) refined. Awaiting your approval.`,
+        articleSummary:    `Review complete — ${finalFiles.length} file(s) ready (${refined.files.length} from Claude review fixes, ${finalFiles.length - refined.files.length} from GPT-4o self-improvements). Awaiting your approval.`,
       })
       .where(eq(agentHandoffs.id, handoffId));
 

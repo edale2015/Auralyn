@@ -17,7 +17,7 @@ import { eq }                      from "drizzle-orm";
 import { generateCodeProposal }    from "./autoCodeProposalEngine";
 import { runClaudeReview }         from "./claudeReviewAgent";
 import { runClaudeSliceReview }    from "./claudeCodeSliceReview";
-import { refineCodeProposal }      from "./openaiCodeRefiner";
+import { refineCodeProposal, implementAdditionalRecommendations } from "./openaiCodeRefiner";
 
 export async function buildAgentHandoff(articleId: number): Promise<{ handoffId: number; status: string }> {
   const [article] = await db.select().from(researchArticles).where(eq(researchArticles.id, articleId));
@@ -90,9 +90,44 @@ export async function buildAgentHandoff(articleId: number): Promise<{ handoffId:
       articleTitle: article.title,
     });
 
+    console.log(`[agentHandoff #${handoffId}] Step C complete — ${refined.files.length} file(s), ${refined.additionalRecommendations?.length ?? 0} additional recommendations`);
+
+    // ── Step D: Auto-implement GPT-4o's own additional recommendations ────────
+    let finalFiles = refined.files;
+    let stepDSkipped: string[] = [];
+
+    if ((refined.additionalRecommendations?.length ?? 0) > 0) {
+      console.log(`[agentHandoff #${handoffId}] Step D: implementing ${refined.additionalRecommendations!.length} additional recommendations`);
+
+      const stepD = await implementAdditionalRecommendations({
+        additionalRecommendations: refined.additionalRecommendations!,
+        existingFiles:             refined.files,
+        articleTitle:              article.title,
+      });
+
+      stepDSkipped = stepD.skipped;
+
+      if (stepD.files.length > 0) {
+        const stepDPaths = new Set(stepD.files.map(f => f.path));
+        const carried    = refined.files.filter(f => !stepDPaths.has(f.path));
+        finalFiles = [...carried, ...stepD.files];
+        console.log(`[agentHandoff #${handoffId}] Step D merged — total ${finalFiles.length} file(s)`);
+      }
+    }
+
+    const finalRefined = {
+      ...refined,
+      files: finalFiles,
+      additionalRecommendations: refined.additionalRecommendations ?? [],
+      stepDSkipped,
+      changesSummary: refined.additionalRecommendations?.length
+        ? `${refined.changesSummary} Additionally, ${refined.additionalRecommendations.length} self-identified improvement(s) were auto-implemented in Step D.`
+        : refined.changesSummary,
+    };
+
     await db.update(agentHandoffs)
       .set({
-        openaiRefinedCode: refined as any,
+        openaiRefinedCode: finalRefined as any,
         pipelineStatus:    "awaiting_approval",
       })
       .where(eq(agentHandoffs.id, handoffId));
