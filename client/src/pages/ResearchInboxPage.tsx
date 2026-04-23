@@ -6,11 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import {
   BookOpen, Search, CheckCircle, XCircle, GitBranch, RefreshCw,
   ChevronDown, ChevronUp, AlertTriangle, Sparkles, ShieldCheck,
   ExternalLink, Play, ThumbsUp, ThumbsDown, List, Plus, Library,
-  Code2, Zap,
+  Code2, Zap, Link2,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -371,6 +375,30 @@ export default function ResearchInboxPage() {
   const [lastScan,      setLastScan]      = useState<{ label: string; new: number; skippedOld: number; total: number } | null>(null);
   const [liveReviewId,  setLiveReviewId]  = useState<number | null>(null);
 
+  // Submit-article dialog
+  const [showSubmit,    setShowSubmit]    = useState(false);
+  const [submitUrl,     setSubmitUrl]     = useState("");
+  const [submitTitle,   setSubmitTitle]   = useState("");
+  const [submitNotes,   setSubmitNotes]   = useState("");
+  const [submitResult,  setSubmitResult]  = useState<{
+    articleId: number; verdict: string; duplicate: boolean; message: string;
+  } | null>(null);
+
+  const submitArticle = useMutation({
+    mutationFn: (payload: { url: string; title?: string; notes?: string }) =>
+      apiRequest("POST", "/api/research/submit-article", payload)
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["/api/research/articles"] });
+      setSubmitResult(d);
+      setSubmitUrl("");
+      setSubmitTitle("");
+      setSubmitNotes("");
+    },
+    onError: (e: any) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
+  });
+
   // Poll the live code review handoff every 4 s while it's running
   const liveReview = useQuery({
     queryKey: ["/api/agent-handoffs", liveReviewId],
@@ -518,6 +546,135 @@ export default function ResearchInboxPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
 
+      {/* Add Article Dialog */}
+      <Dialog open={showSubmit} onOpenChange={(open) => { setShowSubmit(open); if (!open) setSubmitResult(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Link2 className="w-4 h-4 text-violet-500" />
+              Add an Article
+            </DialogTitle>
+            <DialogDescription>
+              Paste any URL you want the pipeline to consider — Medium, PubMed, FDA guidance, any clinical AI publication.
+              The full review pipeline runs automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          {submitResult ? (
+            <div className="space-y-3 py-2">
+              <div className={`rounded-lg border p-4 space-y-2 ${
+                submitResult.duplicate ? "border-amber-200 bg-amber-50" :
+                submitResult.verdict === "adopt" ? "border-green-200 bg-green-50" :
+                "border-blue-100 bg-blue-50"
+              }`}>
+                <p className={`text-sm font-semibold ${
+                  submitResult.duplicate ? "text-amber-800" :
+                  submitResult.verdict === "adopt" ? "text-green-800" : "text-blue-800"
+                }`}>
+                  {submitResult.duplicate ? "Already in pipeline" :
+                   submitResult.verdict === "adopt" ? "Added — pipeline running" :
+                   "Added to inbox"}
+                </p>
+                <p className="text-sm text-gray-700">{submitResult.message}</p>
+                {!submitResult.duplicate && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-gray-500">Triage verdict:</span>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      submitResult.verdict === "adopt" ? "bg-emerald-100 text-emerald-800" :
+                      submitResult.verdict === "test_only" ? "bg-amber-100 text-amber-800" :
+                      "bg-slate-100 text-slate-700"
+                    }`}>{submitResult.verdict}</span>
+                    <span className="text-xs text-gray-400">• Full pipeline started regardless</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSubmitResult(null)}
+                  data-testid="button-submit-another"
+                >
+                  Add another
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setShowSubmit(false); setSubmitResult(null); }}
+                  data-testid="button-submit-done"
+                >
+                  Done
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 py-1">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">Article URL <span className="text-red-500">*</span></label>
+                <Input
+                  data-testid="input-submit-url"
+                  placeholder="https://medium.com/… or https://pubmed.ncbi.nlm.nih.gov/…"
+                  value={submitUrl}
+                  onChange={e => setSubmitUrl(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && submitUrl.trim()) {
+                      submitArticle.mutate({ url: submitUrl, title: submitTitle || undefined, notes: submitNotes || undefined });
+                    }
+                  }}
+                  autoFocus
+                />
+                <p className="text-xs text-gray-400">Title will be auto-detected from the page if you leave it blank</p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">Title override <span className="text-gray-400 font-normal">(optional)</span></label>
+                <Input
+                  data-testid="input-submit-title"
+                  placeholder="Leave blank to auto-detect"
+                  value={submitTitle}
+                  onChange={e => setSubmitTitle(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">Why is this relevant? <span className="text-gray-400 font-normal">(optional)</span></label>
+                <Textarea
+                  data-testid="input-submit-notes"
+                  placeholder="e.g. New FDA guidance on AI-assisted triage scoring thresholds — directly affects our safety gate logic"
+                  value={submitNotes}
+                  onChange={e => setSubmitNotes(e.target.value)}
+                  rows={3}
+                  className="resize-none text-sm"
+                />
+                <p className="text-xs text-gray-400">This becomes the article excerpt used by the triage scorer and AI summarizer</p>
+              </div>
+            </div>
+          )}
+
+          {!submitResult && (
+            <DialogFooter className="gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowSubmit(false)}
+                data-testid="button-submit-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => submitArticle.mutate({ url: submitUrl, title: submitTitle || undefined, notes: submitNotes || undefined })}
+                disabled={!submitUrl.trim() || submitArticle.isPending}
+                data-testid="button-submit-article"
+                className="bg-violet-600 hover:bg-violet-700 text-white"
+              >
+                {submitArticle.isPending
+                  ? <><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Adding…</>
+                  : <><Plus className="w-3.5 h-3.5 mr-1.5" />Add &amp; Run Pipeline</>}
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -543,6 +700,16 @@ export default function ResearchInboxPage() {
             <div className={`w-1.5 h-1.5 rounded-full ${config.data?.anthropicConfigured ? "bg-emerald-500" : "bg-slate-400"}`} />
             Claude {config.data?.anthropicConfigured ? "connected" : "GPT-4o fallback"}
           </div>
+
+          {/* Add Article — primary action */}
+          <Button
+            size="sm"
+            onClick={() => { setShowSubmit(true); setSubmitResult(null); }}
+            data-testid="button-add-article"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />Add Article
+          </Button>
 
           {/* Individual triggers */}
           <Button

@@ -57,6 +57,130 @@ router.post("/saved-lists", requirePhysician, (req, res) => {
   res.json({ ok: true, lists });
 });
 
+// ── Manual article submission — user adds any URL to the pipeline ─────────────
+
+/**
+ * Fetch a page's title from its URL using a short-timeout HTTP request.
+ * Falls back to the URL itself if anything goes wrong.
+ */
+async function fetchPageTitle(url: string): Promise<string> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; AuralynResearchBot/1.0)" },
+    });
+    clearTimeout(timer);
+    const html = await res.text();
+    // og:title first (best quality)
+    const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                 ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+    if (ogMatch) return ogMatch[1].trim();
+    // <title> fallback
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleMatch) return titleMatch[1].trim().replace(/\s*[|\-–—]\s*.*$/, "").trim();
+  } catch { /* timeout or fetch error — fall through */ }
+  // Last resort: clean up the URL into a readable label
+  try {
+    const { pathname, hostname } = new URL(url);
+    const slug = pathname.split("/").filter(Boolean).pop() ?? hostname;
+    return slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  } catch {
+    return url;
+  }
+}
+
+router.post("/submit-article", requirePhysician, async (req, res) => {
+  try {
+    const { url, title: titleOverride, notes } = req.body ?? {};
+    if (!url || typeof url !== "string") return res.status(400).json({ ok: false, error: "url is required" });
+
+    let parsedUrl: URL;
+    try { parsedUrl = new URL(url.trim()); } catch {
+      return res.status(400).json({ ok: false, error: "Invalid URL — please include https://" });
+    }
+    const cleanUrl = parsedUrl.href;
+
+    // Check for duplicate
+    const existing = await db.select({ id: researchArticles.id })
+      .from(researchArticles)
+      .where(eq(researchArticles.url, cleanUrl))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const articleId = existing[0].id;
+      // Check if it already has a handoff
+      const handoff = await db.select({ id: agentHandoffs.id })
+        .from(agentHandoffs)
+        .where(eq(agentHandoffs.articleId, articleId))
+        .limit(1);
+      return res.json({
+        ok:        true,
+        articleId,
+        duplicate: true,
+        handoffId: handoff[0]?.id ?? null,
+        message:   "Article already exists in the pipeline.",
+      });
+    }
+
+    // Fetch title from page if not provided
+    const title = (titleOverride?.trim()) || await fetchPageTitle(cleanUrl);
+
+    // Detect source from hostname
+    const hostname = parsedUrl.hostname.replace(/^www\./, "");
+    const source = hostname.includes("medium.com") ? "medium"
+      : hostname.includes("pubmed") || hostname.includes("ncbi.nlm.nih.gov") ? "pubmed"
+      : hostname.includes("fda.gov") ? "fda"
+      : "manual";
+
+    // Insert into research_articles
+    const [article] = await db.insert(researchArticles).values({
+      source,
+      title,
+      url:    cleanUrl,
+      author: null,
+      excerpt: notes?.trim() || null,
+      tags:   [],
+      raw:    null,
+    }).returning();
+
+    const articleId = article.id;
+
+    // Run triage synchronously (fast, CPU-only)
+    const triageResult = triageArticle({ title, excerpt: notes?.trim() || null, tags: [] });
+    await db.insert(researchReviews).values({ articleId, ...triageResult }).onConflictDoNothing();
+
+    // Respond immediately — pipeline runs in background
+    res.json({
+      ok:           true,
+      articleId,
+      duplicate:    false,
+      verdict:      triageResult.verdict,
+      score:        triageResult.relevanceScore,
+      pipelineStarted: true,
+      message:      `Article added (verdict: ${triageResult.verdict}). Pipeline running in background.`,
+    });
+
+    // Background: summarize + always run handoff (user explicitly submitted this)
+    setImmediate(async () => {
+      try {
+        await buildArticleSummary(articleId).catch(() => {});
+        // Always build handoff for manually submitted articles regardless of verdict
+        await buildAgentHandoff(articleId).catch((e: any) =>
+          console.error(`[submit-article] handoff failed for article ${articleId}:`, e?.message)
+        );
+        console.log(`[submit-article] pipeline complete for article ${articleId} (${title})`);
+      } catch (e: any) {
+        console.error(`[submit-article] background pipeline error for article ${articleId}:`, e?.message);
+      }
+    });
+
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
+
 // ── Scan saved lists (Medium saved list scraper) ──────────────────────────────
 
 router.post("/scan-lists", requireRole(["admin"]), async (_req, res) => {

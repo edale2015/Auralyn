@@ -601,6 +601,16 @@ export default function OperationsCockpit() {
             <svg className={`h-3 w-3 transition-transform ${showInbox ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
           </button>
 
+          {/* Add Article shortcut */}
+          <Link
+            href="/research-inbox"
+            data-testid="btn-add-article-cockpit"
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold border border-dashed border-violet-400 text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            Add Article
+          </Link>
+
           <div className="ml-auto text-xs text-gray-400 hidden md:block">
             Results → <Link href="/agent-handoff" className="text-blue-500 hover:underline">Agent Handoff Queue</Link>
           </div>
