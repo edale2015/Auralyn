@@ -169,6 +169,7 @@ const NAV_SECTIONS = [
       { path: "/system-control-tower", label: "System Control Tower", icon: Cpu },
       { path: "/integration-health", label: "Integration Health", icon: Activity },
       { path: "/engine-maintenance", label: "Engine Maintenance Console", icon: Settings },
+      { path: "/agent-brain", label: "Agentic Brain", icon: Brain },
       { path: "/agent-lab", label: "Agent & Skill Lab", icon: FlaskConical },
       { path: "/multi-patient-command", label: "Multi-Patient Command Grid", icon: Grid3X3 },
       { path: "/schema-validator", label: "Schema Validator", icon: ShieldCheck },

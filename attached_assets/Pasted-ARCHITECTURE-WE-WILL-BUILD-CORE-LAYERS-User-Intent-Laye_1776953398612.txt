@@ -1,0 +1,236 @@
+ARCHITECTURE WE WILL BUILD
+🔥 CORE LAYERS
+[User Intent Layer]
+    ↓
+[Agent Orchestrator]
+    ↓
+[Specialized Agents]
+    ↓
+[Decision Engine (Bayesian + Rules)]
+    ↓
+[Action Engine (EHR / Alerts / Ops)]
+    ↓
+[Learning Engine (RLHF + Feedback)]
+⚙️ PART 1 — AGENTIC SYSTEM (SELF-LEARNING + AUTONOMOUS)
+🧠 1. Agent Orchestrator
+// server/agents/orchestrator.ts
+
+import { RiskAgent } from "./riskAgent";
+import { OpsAgent } from "./opsAgent";
+import { InsightAgent } from "./insightAgent";
+import { ActionAgent } from "./actionAgent";
+
+export class AgentOrchestrator {
+  private agents;
+
+  constructor() {
+    this.agents = [
+      new RiskAgent(),
+      new OpsAgent(),
+      new InsightAgent(),
+      new ActionAgent()
+    ];
+  }
+
+  async runCycle(context: any) {
+    const results = [];
+
+    for (const agent of this.agents) {
+      try {
+        const res = await agent.run(context);
+        results.push(res);
+      } catch (err) {
+        console.error(`Agent failed: ${agent.constructor.name}`, err);
+      }
+    }
+
+    return results;
+  }
+}
+🧠 2. Risk Detection Agent
+// server/agents/riskAgent.ts
+
+import { getPatients } from "../db/patients";
+import { evaluateRisk } from "../engine/riskEngine";
+
+export class RiskAgent {
+  async run() {
+    const patients = await getPatients();
+    const risks = [];
+
+    for (const p of patients) {
+      const score = evaluateRisk(p);
+
+      if (score > 0.7) {
+        risks.push({
+          patientId: p.id,
+          riskScore: score,
+          reason: "High deterioration probability"
+        });
+      }
+    }
+
+    return { type: "RISKS", data: risks };
+  }
+}
+🧠 3. Insight Agent (REPLACES DASHBOARD)
+// server/agents/insightAgent.ts
+
+export class InsightAgent {
+  async run(context: any) {
+    const risks = context.find(r => r.type === "RISKS")?.data || [];
+
+    return {
+      type: "INSIGHTS",
+      data: risks.map(r => ({
+        message: `Patient ${r.patientId} is high risk`,
+        action: "Review immediately",
+        priority: "HIGH"
+      }))
+    };
+  }
+}
+🤖 4. Action Agent (AUTOMATION)
+// server/agents/actionAgent.ts
+
+import { sendAlert } from "../integrations/alerts";
+
+export class ActionAgent {
+  async run(context: any) {
+    const insights = context.find(i => i.type === "INSIGHTS")?.data || [];
+
+    for (const i of insights) {
+      if (i.priority === "HIGH") {
+        await sendAlert(i.message);
+      }
+    }
+
+    return { type: "ACTIONS_EXECUTED", count: insights.length };
+  }
+}
+🔁 5. Continuous Autonomous Loop
+// server/agents/loop.ts
+
+import { AgentOrchestrator } from "./orchestrator";
+
+const orchestrator = new AgentOrchestrator();
+
+export async function startAutonomousLoop() {
+  while (true) {
+    console.log("🔄 Running agent cycle...");
+
+    const results = await orchestrator.runCycle({});
+
+    console.log("Cycle results:", results);
+
+    await new Promise(r => setTimeout(r, 5000));
+  }
+}
+🧠 PART 2 — SELF-LEARNING ENGINE (RLHF LIGHT VERSION)
+// server/learning/rlhf.ts
+
+interface Feedback {
+  action: string;
+  success: boolean;
+}
+
+const weights: Record<string, number> = {};
+
+export function updateWeights(feedback: Feedback) {
+  const delta = feedback.success ? 0.02 : -0.02;
+
+  weights[feedback.action] = (weights[feedback.action] || 0) + delta;
+
+  // clamp safety
+  if (weights[feedback.action] > 1) weights[feedback.action] = 1;
+  if (weights[feedback.action] < -1) weights[feedback.action] = -1;
+}
+🧪 PART 3 — AUTOMATED BUTTON TESTING SYSTEM (CRITICAL)
+
+You asked for this explicitly. This is where most systems quietly fail.
+
+🧪 1. UI Button Scanner (Playwright)
+// tests/buttonTest.ts
+
+import { test, expect } from "@playwright/test";
+
+test("All buttons work", async ({ page }) => {
+  await page.goto("http://localhost:3000");
+
+  const buttons = await page.locator("button").all();
+
+  for (let i = 0; i < buttons.length; i++) {
+    const btn = buttons[i];
+
+    try {
+      const text = await btn.innerText();
+
+      await btn.click({ timeout: 2000 });
+
+      console.log(`✅ Button worked: ${text}`);
+
+    } catch (err) {
+      console.error(`❌ Button failed:`, err);
+
+      throw err;
+    }
+  }
+});
+🔍 2. API Health Validator
+// tests/apiTest.ts
+
+import axios from "axios";
+
+const endpoints = [
+  "/api/kb/health",
+  "/api/monitoring/health",
+  "/api/decision-tree",
+];
+
+export async function testAPIs() {
+  for (const ep of endpoints) {
+    try {
+      const res = await axios.get(`http://localhost:3000${ep}`);
+      console.log(`✅ ${ep} OK`);
+    } catch (err) {
+      console.error(`❌ ${ep} FAILED`, err.message);
+    }
+  }
+}
+🔧 3. Auto-Fix Agent (YES — THIS IS THE CRAZY PART)
+// server/agents/fixAgent.ts
+
+import { exec } from "child_process";
+
+export class FixAgent {
+  async run(errors: any[]) {
+    for (const e of errors) {
+      if (e.type === "API_FAIL") {
+        console.log("Attempting restart...");
+        exec("pm2 restart all");
+      }
+
+      if (e.type === "UI_FAIL") {
+        console.log("Flagging UI issue for patch");
+      }
+    }
+
+    return { fixed: true };
+  }
+}
+🧠 PART 4 — “NO DASHBOARD” INTERFACE (CHAT-FIRST)
+// server/api/query.ts
+
+import { AgentOrchestrator } from "../agents/orchestrator";
+
+export async function handleQuery(req, res) {
+  const orchestrator = new AgentOrchestrator();
+
+  const result = await orchestrator.runCycle({
+    intent: req.body.query
+  });
+
+  res.json({
+    answer: result
+  });
+}

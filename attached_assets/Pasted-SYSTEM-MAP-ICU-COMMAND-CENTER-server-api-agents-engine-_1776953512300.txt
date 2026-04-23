@@ -1,0 +1,232 @@
+SYSTEM MAP (ICU COMMAND CENTER)
+/server
+  /api
+  /agents
+  /engine
+  /ehr
+  /audit
+  /safety
+  /stream
+  /queue
+/client
+  /src
+    /components
+    /pages
+    /lib
+⚡ 1) BACKEND CORE (EXPRESS + WS)
+// server/index.ts
+import express from "express";
+import http from "http";
+import cors from "cors";
+import { startPatientStream } from "./stream/ws";
+import api from "./api/routes";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use("/api", api);
+
+const server = http.createServer(app);
+startPatientStream(server);
+
+server.listen(3000, () => console.log("🧠 Command Center running"));
+📡 2) LIVE PATIENT STREAM
+// server/stream/ws.ts
+import { WebSocketServer } from "ws";
+
+export function startPatientStream(server) {
+  const wss = new WebSocketServer({ server });
+
+  setInterval(() => {
+    const patient = {
+      id: Math.random().toString(36).slice(2),
+      hr: 60 + Math.random() * 80,
+      spo2: 85 + Math.random() * 15,
+      temp: 97 + Math.random() * 4,
+      ts: Date.now()
+    };
+
+    wss.clients.forEach(c => c.send(JSON.stringify(patient)));
+  }, 1000);
+}
+🧠 3) ORCHESTRATOR + AGENTS
+// server/agents/orchestrator.ts
+import { RiskAgent } from "./risk";
+import { ICUAgent } from "./icu";
+import { ActionAgent } from "./action";
+
+export async function runAgents(patient) {
+  const risk = await new RiskAgent().run(patient);
+  const icu = await new ICUAgent().run(patient, risk);
+  const action = await new ActionAgent().run(patient, icu);
+
+  return { risk, icu, action };
+}
+🔐 4) SAFETY GATE (PHYSICIAN REQUIRED)
+// server/safety/gate.ts
+export function enforceSafety(action) {
+  if (action.type === "ICU_TRANSFER") {
+    return {
+      allowed: false,
+      requiresApproval: true
+    };
+  }
+  return { allowed: true };
+}
+🧾 5) AUDIT HASH CHAIN (REPLAYABLE BRAIN)
+// server/audit/hashChain.ts
+import crypto from "crypto";
+
+let chain = [];
+
+export function logEvent(event) {
+  const prevHash = chain.length ? chain[chain.length - 1].hash : "GENESIS";
+
+  const payload = JSON.stringify(event);
+  const hash = crypto.createHash("sha256")
+    .update(prevHash + payload)
+    .digest("hex");
+
+  const entry = { ...event, prevHash, hash, ts: Date.now() };
+  chain.push(entry);
+
+  return entry;
+}
+
+export function getAuditChain() {
+  return chain;
+}
+🔁 6) AUDIT REPLAY ENGINE
+// server/audit/replay.ts
+import { getAuditChain } from "./hashChain";
+
+export function replayCase(patientId) {
+  const chain = getAuditChain();
+
+  return chain.filter(e => e.patientId === patientId);
+}
+🏥 7) FHIR WRITEBACK (SMART ON FHIR)
+// server/ehr/fhir.ts
+import axios from "axios";
+
+const FHIR_BASE = "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4";
+
+export async function writeObservation(patientId, data, token) {
+  return axios.post(
+    `${FHIR_BASE}/Observation`,
+    {
+      resourceType: "Observation",
+      subject: { reference: `Patient/${patientId}` },
+      valueString: JSON.stringify(data)
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+}
+⚙️ 8) ACTION ENGINE + QUEUE
+// server/queue/actions.ts
+let queue = [];
+
+export function enqueue(action) {
+  queue.push(action);
+}
+
+export function processQueue() {
+  queue.forEach(a => {
+    console.log("Executing:", a);
+  });
+  queue = [];
+}
+🌐 9) API ROUTES
+// server/api/routes.ts
+import express from "express";
+import { runAgents } from "../agents/orchestrator";
+import { logEvent } from "../audit/hashChain";
+import { replayCase } from "../audit/replay";
+
+const router = express.Router();
+
+router.post("/evaluate", async (req, res) => {
+  const patient = req.body;
+
+  const result = await runAgents(patient);
+
+  logEvent({ patientId: patient.id, result });
+
+  res.json(result);
+});
+
+router.get("/replay/:id", (req, res) => {
+  res.json(replayCase(req.params.id));
+});
+
+export default router;
+🖥️ FRONTEND (REACT ICU COMMAND CENTER)
+🔲 Patient Grid (ICU-style)
+// client/src/components/PatientGrid.tsx
+import { useEffect, useState } from "react";
+
+export default function PatientGrid() {
+  const [patients, setPatients] = useState([]);
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:3000");
+
+    ws.onmessage = (e) => {
+      const p = JSON.parse(e.data);
+      setPatients(prev => [p, ...prev.slice(0, 20)]);
+    };
+  }, []);
+
+  return (
+    <div className="grid grid-cols-4 gap-4">
+      {patients.map(p => (
+        <div key={p.id} className="p-3 border rounded">
+          <div>ID: {p.id}</div>
+          <div>HR: {p.hr}</div>
+          <div>SpO2: {p.spo2}</div>
+          <div>Temp: {p.temp}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+📈 Timeline Graph
+// client/src/components/Timeline.tsx
+import { LineChart, Line, XAxis, YAxis } from "recharts";
+
+export default function Timeline({ data }) {
+  return (
+    <LineChart width={400} height={200} data={data}>
+      <XAxis dataKey="ts" />
+      <YAxis />
+      <Line dataKey="hr" stroke="#8884d8" />
+    </LineChart>
+  );
+}
+🔍 Audit Replay Viewer
+// client/src/components/AuditReplay.tsx
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+export default function AuditReplay({ patientId }) {
+  const [events, setEvents] = useState([]);
+
+  useEffect(() => {
+    axios.get(`/api/replay/${patientId}`)
+      .then(res => setEvents(res.data));
+  }, [patientId]);
+
+  return (
+    <div>
+      {events.map((e, i) => (
+        <div key={i}>
+          {new Date(e.ts).toLocaleTimeString()} — {JSON.stringify(e.result)}
+        </div>
+      ))}
+    </div>
+  );
+}

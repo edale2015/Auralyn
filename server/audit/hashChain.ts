@@ -97,3 +97,39 @@ export function verifyChainLink(
     return false;
   }
 }
+
+// ── In-memory audit chain ─────────────────────────────────────────────────────
+// Lightweight append-only chain stored in memory.
+// On restart the chain is re-seeded from the genesis hash.
+// For production persistence, persist entries to the database and reload on start.
+
+export interface AuditEntry {
+  hash:      string;
+  prevHash:  string;
+  ts:        number;
+  [key: string]: unknown;
+}
+
+const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+const MAX_CHAIN = 500;
+
+let auditChain: AuditEntry[] = [];
+let chainHead = GENESIS_HASH;
+
+export function logEvent(data: Record<string, unknown>): AuditEntry {
+  const entry = { ...data, ts: data.ts ?? Date.now() } as Record<string, unknown>;
+  const hash  = computeChainHash(chainHead, entry);
+  const stored: AuditEntry = { ...entry, hash, prevHash: chainHead } as AuditEntry;
+  auditChain.push(stored);
+  if (auditChain.length > MAX_CHAIN) auditChain = auditChain.slice(-MAX_CHAIN);
+  chainHead = hash;
+  return stored;
+}
+
+export function getAuditChain(): AuditEntry[] {
+  return [...auditChain];
+}
+
+export function getChainHead(): string {
+  return chainHead;
+}

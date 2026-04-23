@@ -1,0 +1,210 @@
+1) DIGITAL TWIN SIMULATION ENGINE
+Concept
+
+Each patient gets a shadow version that runs forward in time:
+
+“If nothing changes → what happens?”
+“If we intervene → what changes?”
+🔬 Twin Model (lightweight but extensible)
+// server/twin/twinEngine.ts
+
+interface Patient {
+  id: string;
+  hr: number;
+  spo2: number;
+  temp: number;
+}
+
+interface TwinState {
+  t: number;
+  hr: number;
+  spo2: number;
+  temp: number;
+  risk: number;
+}
+
+export function simulateTwin(patient: Patient, steps = 10): TwinState[] {
+  let state = { ...patient };
+  const trajectory: TwinState[] = [];
+
+  for (let t = 0; t < steps; t++) {
+    // Simple progression model (replace later with ML)
+    state.hr += (Math.random() - 0.5) * 5;
+    state.spo2 += (Math.random() - 0.5) * 2;
+    state.temp += (Math.random() - 0.5) * 0.3;
+
+    const risk =
+      (state.spo2 < 90 ? 0.4 : 0) +
+      (state.hr > 120 ? 0.3 : 0) +
+      (state.temp > 101 ? 0.2 : 0);
+
+    trajectory.push({
+      t,
+      ...state,
+      risk
+    });
+  }
+
+  return trajectory;
+}
+🧠 Intervention Simulation
+// server/twin/intervention.ts
+
+export function applyOxygen(state) {
+  return {
+    ...state,
+    spo2: state.spo2 + 5
+  };
+}
+
+export function simulateWithIntervention(patient) {
+  const base = simulateTwin(patient);
+
+  const improved = base.map(s => applyOxygen(s));
+
+  return {
+    baseline: base,
+    intervention: improved
+  };
+}
+🌡️ 2) ICU RISK HEATMAP ENGINE
+
+Think: weather radar, but for patients
+
+🔢 Risk Aggregation
+// server/heatmap/heatmapEngine.ts
+
+export function computeRiskScore(p) {
+  let score = 0;
+
+  if (p.spo2 < 90) score += 40;
+  if (p.hr > 120) score += 30;
+  if (p.temp > 101) score += 20;
+
+  return score;
+}
+
+export function generateHeatmap(patients) {
+  return patients.map(p => ({
+    id: p.id,
+    risk: computeRiskScore(p),
+    level:
+      computeRiskScore(p) > 70 ? "CRITICAL" :
+      computeRiskScore(p) > 40 ? "HIGH" :
+      "MODERATE"
+  }));
+}
+🎨 Frontend Heatmap Grid
+// client/src/components/RiskHeatmap.tsx
+
+export default function RiskHeatmap({ data }) {
+  return (
+    <div className="grid grid-cols-6 gap-2">
+      {data.map(p => (
+        <div
+          key={p.id}
+          className={`p-2 text-white rounded ${
+            p.level === "CRITICAL"
+              ? "bg-red-600"
+              : p.level === "HIGH"
+              ? "bg-orange-500"
+              : "bg-yellow-400"
+          }`}
+        >
+          {p.id} — {p.risk}
+        </div>
+      ))}
+    </div>
+  );
+}
+🏥 3) MULTI-HOSPITAL COORDINATION ENGINE
+
+Now the system stops thinking “patient” and starts thinking network
+
+🏨 Hospital State Model
+// server/hospital/hospitalState.ts
+
+interface Hospital {
+  id: string;
+  icuBeds: number;
+  occupied: number;
+}
+
+export const hospitals: Hospital[] = [
+  { id: "A", icuBeds: 10, occupied: 8 },
+  { id: "B", icuBeds: 15, occupied: 5 },
+  { id: "C", icuBeds: 8, occupied: 7 }
+];
+🚑 Routing Engine
+// server/hospital/routing.ts
+
+import { hospitals } from "./hospitalState";
+
+export function findBestHospital() {
+  let best = null;
+  let maxFree = -1;
+
+  for (const h of hospitals) {
+    const free = h.icuBeds - h.occupied;
+
+    if (free > maxFree) {
+      maxFree = free;
+      best = h;
+    }
+  }
+
+  return best;
+}
+🤖 Auto-Transfer Suggestion Agent
+// server/agents/transferAgent.ts
+
+import { findBestHospital } from "../hospital/routing";
+
+export class TransferAgent {
+  async run(ctx, prev) {
+    const icu = prev.find(p => p.type === "ICU_DECISION");
+
+    if (!icu?.needsICU) return null;
+
+    const hospital = findBestHospital();
+
+    return {
+      type: "TRANSFER_SUGGESTION",
+      hospitalId: hospital.id
+    };
+  }
+}
+🔗 4) INTEGRATE INTO ORCHESTRATOR
+// server/agents/orchestrator.ts (update)
+
+import { TransferAgent } from "./transferAgent";
+import { simulateTwin } from "../twin/twinEngine";
+
+export async function runFullSystem(patient) {
+  const results = [];
+
+  // existing agents...
+  const twin = simulateTwin(patient);
+  results.push({ type: "TWIN", data: twin });
+
+  const transfer = await new TransferAgent().run(patient, results);
+  results.push(transfer);
+
+  return results;
+}
+🖥️ 5) DIGITAL TWIN VISUALIZATION
+// client/src/components/TwinViewer.tsx
+
+import { LineChart, Line, XAxis, YAxis } from "recharts";
+
+export default function TwinViewer({ data }) {
+  return (
+    <LineChart width={500} height={250} data={data}>
+      <XAxis dataKey="t" />
+      <YAxis />
+      <Line dataKey="spo2" stroke="blue" />
+      <Line dataKey="hr" stroke="red" />
+      <Line dataKey="risk" stroke="black" />
+    </LineChart>
+  );
+}

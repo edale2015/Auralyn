@@ -455,6 +455,7 @@ export default function OperationsCockpit() {
           { href: "/complaint-lab", label: "Complaint Lab", desc: "Run simulations, watch processing, edit KB rules live", color: "border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/20" },
           { href: "/simulation-lab", label: "Simulation Lab", desc: "Bulk case runs and failure analysis", color: "border-amber-200 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-900/20" },
           { href: "/knowledge-hub", label: "Knowledge Hub", desc: "Browse and manage the clinical KB", color: "border-green-200 dark:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/20" },
+          { href: "/agent-brain", label: "Agentic Brain", desc: "Live multi-agent loop — risk heatmap, digital twin, audit chain", color: "border-purple-200 dark:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-900/20" },
         ].map(({ href, label, desc, color }) => (
           <Link key={href} href={href} className={`block rounded-xl border p-4 cursor-pointer transition-colors ${color}`} data-testid={`quick-link-${label.toLowerCase().replace(/\s+/g, "-")}`}>
             <div className="font-semibold text-sm text-gray-800 dark:text-gray-100 mb-1">{label}</div>
