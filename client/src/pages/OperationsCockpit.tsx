@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import StatCard from "../components/ops/StatCard";
 import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Textarea } from "@/components/ui/textarea";
 
 type ServiceStatus = { ok: boolean; configured?: boolean; error?: string };
 type QueueStat = { waiting?: number; active?: number; completed?: number; failed?: number };
@@ -212,6 +213,29 @@ export default function OperationsCockpit() {
 
   // Research Inbox inline panel
   const [showInbox, setShowInbox] = useState(false);
+
+  // AI Ops Assistant
+  const [showAI,       setShowAI]       = useState(false);
+  const [aiInput,      setAiInput]      = useState("");
+  const [aiMessages,   setAiMessages]   = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const aiChatEndRef = useRef<HTMLDivElement>(null);
+
+  const askAI = useMutation({
+    mutationFn: (question: string) =>
+      apiRequest("POST", "/api/ops/ask", { question, history: aiMessages })
+        .then(r => r.json())
+        .then(d => { if (!d.ok) throw new Error(d.error); return d; }),
+    onSuccess: (d, question) => {
+      setAiMessages(prev => [
+        ...prev,
+        { role: "user" as const, content: question },
+        { role: "assistant" as const, content: d.answer },
+      ]);
+      setAiInput("");
+      setTimeout(() => aiChatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    },
+    onError: (e: any) => toast({ title: "AI error", description: e.message, variant: "destructive" }),
+  });
 
   // Review groups — fetched once to show slice counts in dropdown
   const { data: researchConfig } = useQuery<{
@@ -438,6 +462,147 @@ export default function OperationsCockpit() {
           </Link>
         ))}
       </div>
+
+      {/* ── AI Ops Assistant ────────────────────────────────────────────────── */}
+      <section>
+        <button
+          onClick={() => setShowAI(v => !v)}
+          data-testid="btn-toggle-ai-assistant"
+          className="w-full flex items-center justify-between rounded-xl border border-violet-200 dark:border-violet-800 bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30 px-5 py-3.5 hover:from-violet-100 hover:to-purple-100 dark:hover:from-violet-900/40 dark:hover:to-purple-900/40 transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center shrink-0">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+            </div>
+            <div className="text-left">
+              <p className="text-sm font-semibold text-violet-900 dark:text-violet-100">Ask Auralyn AI</p>
+              <p className="text-xs text-violet-600 dark:text-violet-400">
+                {aiMessages.length > 0 ? `${aiMessages.length} messages — click to continue` : "Ask anything about live ops · pipeline status · queue health"}
+              </p>
+            </div>
+          </div>
+          <svg className={`w-4 h-4 text-violet-500 transition-transform ${showAI ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+
+        {showAI && (
+          <div className="mt-2 rounded-xl border border-violet-200 dark:border-violet-800 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+
+            {/* Suggested questions */}
+            {aiMessages.length === 0 && (
+              <div className="px-4 pt-4 pb-2">
+                <p className="text-xs font-medium text-gray-400 mb-2 uppercase tracking-wide">Suggested questions</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "What needs my attention right now?",
+                    "How many handoffs are waiting for approval?",
+                    "Is there anything in the research pipeline I should know about?",
+                    "What's the current queue health?",
+                    "Are there any system issues?",
+                  ].map(q => (
+                    <button
+                      key={q}
+                      data-testid={`ai-suggestion-${q.slice(0, 20).replace(/\s/g, "-").toLowerCase()}`}
+                      onClick={() => askAI.mutate(q)}
+                      disabled={askAI.isPending}
+                      className="text-xs px-3 py-1.5 rounded-full border border-violet-200 dark:border-violet-700 text-violet-700 dark:text-violet-300 hover:bg-violet-50 dark:hover:bg-violet-900/30 transition-colors disabled:opacity-50"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Chat messages */}
+            {aiMessages.length > 0 && (
+              <div className="max-h-80 overflow-y-auto px-4 pt-4 space-y-3">
+                {aiMessages.map((m, i) => (
+                  <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
+                      m.role === "user"
+                        ? "bg-violet-600 text-white rounded-br-sm"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-bl-sm"
+                    }`}>
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+                {askAI.isPending && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-2.5">
+                      <div className="flex gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:0ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:150ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:300ms]" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={aiChatEndRef} />
+              </div>
+            )}
+
+            {/* Input area */}
+            <div className="p-4 border-t border-gray-100 dark:border-gray-800 flex gap-2">
+              <Textarea
+                data-testid="input-ai-question"
+                value={aiInput}
+                onChange={e => setAiInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && !e.shiftKey && aiInput.trim()) {
+                    e.preventDefault();
+                    askAI.mutate(aiInput.trim());
+                  }
+                }}
+                placeholder="Ask about queue health, pending approvals, pipeline status… (Enter to send)"
+                className="resize-none text-sm min-h-[40px] max-h-[100px]"
+                rows={1}
+                disabled={askAI.isPending}
+              />
+              <button
+                data-testid="btn-ai-send"
+                onClick={() => aiInput.trim() && askAI.mutate(aiInput.trim())}
+                disabled={!aiInput.trim() || askAI.isPending}
+                className="shrink-0 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+              >
+                {askAI.isPending ? (
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                )}
+              </button>
+            </div>
+
+            {/* Clear history */}
+            {aiMessages.length > 0 && (
+              <div className="px-4 pb-3 flex gap-2 flex-wrap">
+                <button
+                  data-testid="btn-ai-clear"
+                  onClick={() => setAiMessages([])}
+                  className="text-xs text-gray-400 hover:text-red-400 transition-colors"
+                >
+                  Clear conversation
+                </button>
+                <span className="text-xs text-gray-300 dark:text-gray-600">·</span>
+                {[
+                  "What needs my attention right now?",
+                  "Show me research pipeline status",
+                  "Any queue issues?",
+                ].map(q => (
+                  <button
+                    key={q}
+                    onClick={() => askAI.mutate(q)}
+                    disabled={askAI.isPending}
+                    className="text-xs text-violet-500 hover:text-violet-700 disabled:opacity-50 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Research Pipeline */}
       <section>
