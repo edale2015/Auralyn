@@ -303,3 +303,15 @@ export async function runAgents(context: AgentContext): Promise<RunAgentsResult>
     fingerprint,
   };
 }
+
+// ── Sepsis integration hook ───────────────────────────────────────────────────
+// Called from /api/sepsis-twin/* routes. Runs the sepsis agent + safety gate.
+export async function runWithSepsis(patient: Record<string, any>) {
+  const { SepsisAgent }    = await import("./sepsisAgent");
+  const { sepsisSafetyGate } = await import("../safety/sepsisGate");
+
+  const sepsis = await new SepsisAgent().run(patient as any);
+  const gate   = sepsisSafetyGate(sepsis);
+
+  return { sepsis, gate };
+}

@@ -1,0 +1,371 @@
+NEW MODULES
+/server
+  /physiology
+    sofa.ts
+    sepsis.ts
+    respiratory.ts
+    hemodynamics.ts
+  /twin
+    twinV2.ts
+    interventions.ts
+  /agents
+    sepsisAgent.ts
+🧮 1) SOFA SCORE (CORE PHYSIOLOGY)
+
+Uses standard bins; swap SpO₂→PaO₂/FiO₂ when available.
+
+// server/physiology/sofa.ts
+
+export interface Labs {
+  platelets?: number;      // x10^3/µL
+  bilirubin?: number;      // mg/dL
+  creatinine?: number;     // mg/dL
+  gcs?: number;            // 3–15
+}
+
+export interface Vitals {
+  map?: number;            // mmHg
+  spo2?: number;           // %
+  fio2?: number;           // 0–1 (optional)
+  onVent?: boolean;
+  vasopressors?: boolean;
+}
+
+function scoreResp(spo2?: number, onVent?: boolean): number {
+  if (spo2 == null) return 0;
+  if (spo2 >= 95) return 0;
+  if (spo2 >= 90) return 1;
+  if (spo2 >= 85) return 2;
+  if (spo2 >= 80) return onVent ? 4 : 3;
+  return 4;
+}
+
+function scoreCoag(platelets?: number): number {
+  if (platelets == null) return 0;
+  if (platelets >= 150) return 0;
+  if (platelets >= 100) return 1;
+  if (platelets >= 50)  return 2;
+  if (platelets >= 20)  return 3;
+  return 4;
+}
+
+function scoreLiver(bilirubin?: number): number {
+  if (bilirubin == null) return 0;
+  if (bilirubin < 1.2) return 0;
+  if (bilirubin < 2.0) return 1;
+  if (bilirubin < 6.0) return 2;
+  if (bilirubin < 12.0) return 3;
+  return 4;
+}
+
+function scoreCV(map?: number, vasopressors?: boolean): number {
+  if (vasopressors) return 3; // simplified; refine with doses later
+  if (map == null) return 0;
+  if (map >= 70) return 0;
+  return 1;
+}
+
+function scoreCNS(gcs?: number): number {
+  if (gcs == null) return 0;
+  if (gcs === 15) return 0;
+  if (gcs >= 13) return 1;
+  if (gcs >= 10) return 2;
+  if (gcs >= 6)  return 3;
+  return 4;
+}
+
+function scoreRenal(creatinine?: number): number {
+  if (creatinine == null) return 0;
+  if (creatinine < 1.2) return 0;
+  if (creatinine < 2.0) return 1;
+  if (creatinine < 3.5) return 2;
+  if (creatinine < 5.0) return 3;
+  return 4;
+}
+
+export function computeSOFA(v: Vitals, l: Labs) {
+  const components = {
+    resp: scoreResp(v.spo2, v.onVent),
+    coag: scoreCoag(l.platelets),
+    liver: scoreLiver(l.bilirubin),
+    cv: scoreCV(v.map, v.vasopressors),
+    cns: scoreCNS(l.gcs),
+    renal: scoreRenal(l.creatinine),
+  };
+
+  const total =
+    components.resp +
+    components.coag +
+    components.liver +
+    components.cv +
+    components.cns +
+    components.renal;
+
+  return { total, components };
+}
+🫀 2) HEMODYNAMICS + SHOCK MARKERS
+// server/physiology/hemodynamics.ts
+
+export interface Hemodynamics {
+  map?: number;
+  lactate?: number; // mmol/L
+  vasopressors?: boolean;
+}
+
+export function shockScore(h: Hemodynamics): number {
+  let s = 0;
+  if (h.map != null && h.map < 65) s += 0.4;
+  if (h.lactate != null && h.lactate >= 2) s += 0.3;
+  if (h.vasopressors) s += 0.3;
+  return Math.min(1, s);
+}
+🫁 3) RESPIRATORY STATUS (PLUGGABLE)
+// server/physiology/respiratory.ts
+
+export function respRisk(spo2?: number, onVent?: boolean): number {
+  if (spo2 == null) return 0;
+  let r = 0;
+  if (spo2 < 92) r += 0.3;
+  if (spo2 < 88) r += 0.3;
+  if (onVent) r += 0.3;
+  return Math.min(1, r);
+}
+🦠 4) SEPSIS RISK (TUNABLE LOGISTIC MODEL)
+
+Start simple, tune with your RLHF governor later.
+
+// server/physiology/sepsis.ts
+
+function sigmoid(x: number) {
+  return 1 / (1 + Math.exp(-x));
+}
+
+export interface SepsisInputs {
+  sofa: number;
+  lactate?: number;
+  map?: number;
+  temp?: number;
+  hr?: number;
+  rr?: number;
+}
+
+export function sepsisProbability(i: SepsisInputs) {
+  // Weights are conservative; tune with outcomes
+  const x =
+    0.25 * i.sofa +
+    0.8  * (i.lactate ?? 0) +
+    -0.05 * (i.map ?? 70) +
+    0.03 * ((i.temp ?? 98.6) - 98.6) +
+    0.01 * (i.hr ?? 80) +
+    0.02 * (i.rr ?? 16) -
+    5.0;
+
+  const p = sigmoid(x);
+  return Math.max(0, Math.min(1, p));
+}
+🔮 5) DIGITAL TWIN V2 (TIME-SERIES, BASELINE vs INTERVENTION)
+// server/twin/twinV2.ts
+
+import { computeSOFA } from "../physiology/sofa";
+import { shockScore } from "../physiology/hemodynamics";
+import { respRisk } from "../physiology/respiratory";
+import { sepsisProbability } from "../physiology/sepsis";
+
+export interface State {
+  t: number;
+  hr?: number;
+  rr?: number;
+  temp?: number;
+  map?: number;
+  spo2?: number;
+  lactate?: number;
+  onVent?: boolean;
+  vasopressors?: boolean;
+
+  labs: {
+    platelets?: number;
+    bilirubin?: number;
+    creatinine?: number;
+    gcs?: number;
+  };
+
+  sofa?: number;
+  sepsisProb?: number;
+  shock?: number;
+  resp?: number;
+}
+
+function stepDynamics(s: State): State {
+  // Simple physiologic drift; replace with learned model later
+  const n = (v: number, mag: number) => v + (Math.random() - 0.5) * mag;
+
+  return {
+    ...s,
+    t: s.t + 1,
+    hr: n(s.hr ?? 80, 4),
+    rr: n(s.rr ?? 16, 2),
+    temp: n(s.temp ?? 98.6, 0.2),
+    map: n(s.map ?? 75, 3),
+    spo2: n(s.spo2 ?? 95, 1.5),
+    lactate: Math.max(0, n(s.lactate ?? 1.5, 0.2)),
+    labs: {
+      ...s.labs,
+      creatinine: Math.max(0.5, n(s.labs.creatinine ?? 1.0, 0.1)),
+    },
+  };
+}
+
+function enrich(s: State): State {
+  const sofa = computeSOFA(
+    { map: s.map, spo2: s.spo2, onVent: s.onVent, vasopressors: s.vasopressors },
+    s.labs
+  ).total;
+
+  const shock = shockScore({ map: s.map, lactate: s.lactate, vasopressors: s.vasopressors });
+  const resp = respRisk(s.spo2, s.onVent);
+  const sepsisProb = sepsisProbability({
+    sofa,
+    lactate: s.lactate,
+    map: s.map,
+    temp: s.temp,
+    hr: s.hr,
+    rr: s.rr,
+  });
+
+  return { ...s, sofa, shock, resp, sepsisProb };
+}
+
+export function simulateTwinV2(initial: State, steps = 12) {
+  let s = enrich({ ...initial, t: 0 });
+  const out: State[] = [s];
+
+  for (let i = 0; i < steps; i++) {
+    s = enrich(stepDynamics(s));
+    out.push(s);
+  }
+  return out;
+}
+💉 6) INTERVENTIONS (SIMULATE EFFECTS)
+// server/twin/interventions.ts
+
+import { State, simulateTwinV2 } from "./twinV2";
+
+export function giveFluids(s: State): State {
+  return {
+    ...s,
+    map: (s.map ?? 70) + 5,
+    lactate: Math.max(0, (s.lactate ?? 2) - 0.3),
+  };
+}
+
+export function giveOxygen(s: State): State {
+  return {
+    ...s,
+    spo2: Math.min(100, (s.spo2 ?? 90) + 4),
+  };
+}
+
+export function startPressor(s: State): State {
+  return {
+    ...s,
+    vasopressors: true,
+    map: (s.map ?? 65) + 10,
+  };
+}
+
+export function compareScenarios(initial: State) {
+  const baseline = simulateTwinV2(initial);
+
+  const after = startPressor(giveFluids(giveOxygen(initial)));
+  const intervention = simulateTwinV2(after);
+
+  return { baseline, intervention };
+}
+🤖 7) SEPSIS AGENT (INTEGRATES INTO ORCHESTRATOR)
+// server/agents/sepsisAgent.ts
+
+import { simulateTwinV2 } from "../twin/twinV2";
+import { compareScenarios } from "../twin/interventions";
+
+export class SepsisAgent {
+  async run(patient: any) {
+    const twin = simulateTwinV2(patient, 8);
+    const last = twin[twin.length - 1];
+
+    const scenarios = compareScenarios(patient);
+
+    return {
+      type: "SEPSIS_ANALYSIS",
+      current: {
+        sofa: last.sofa,
+        sepsisProb: last.sepsisProb,
+        shock: last.shock,
+      },
+      trajectory: twin,
+      scenarios,
+      flags: {
+        highRisk: last.sepsisProb > 0.6,
+        septicShock: (last.sepsisProb ?? 0) > 0.6 && (last.shock ?? 0) > 0.6,
+      }
+    };
+  }
+}
+🔐 8) SAFETY GATES (NO AUTONOMOUS ORDERS)
+// server/safety/sepsisGate.ts
+
+export function sepsisSafetyGate(analysis: any) {
+  if (analysis.flags?.septicShock) {
+    return {
+      allowed: false,
+      requiresPhysician: true,
+      message: "Possible septic shock — physician approval required",
+      suggested: ["fluids", "pressors", "broad-spectrum antibiotics (review)"]
+    };
+  }
+
+  return { allowed: true };
+}
+🧵 9) ORCHESTRATOR HOOK
+// server/agents/orchestrator.ts (add)
+import { SepsisAgent } from "./sepsisAgent";
+import { sepsisSafetyGate } from "../safety/sepsisGate";
+
+export async function runWithSepsis(patient: any) {
+  const sepsis = await new SepsisAgent().run(patient);
+  const gate = sepsisSafetyGate(sepsis);
+
+  return { sepsis, gate };
+}
+🖥️ 10) FRONTEND: TWIN + RISK VISUALS
+// client/src/components/SepsisTwin.tsx
+import { LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
+
+export default function SepsisTwin({ data }) {
+  return (
+    <LineChart width={600} height={260} data={data}>
+      <XAxis dataKey="t" />
+      <YAxis />
+      <Tooltip />
+      <Line dataKey="sofa" stroke="#6b5cff" />
+      <Line dataKey="sepsisProb" stroke="#ff4d4f" />
+      <Line dataKey="map" stroke="#2ecc71" />
+      <Line dataKey="lactate" stroke="#f39c12" />
+    </LineChart>
+  );
+}
+🧪 11) QUICK VALIDATION HARNESS
+// server/tests/sepsisTest.ts
+
+import { runWithSepsis } from "../agents/orchestrator";
+
+(async () => {
+  const patient = {
+    hr: 120, rr: 24, temp: 101.5,
+    map: 60, spo2: 88, lactate: 3.2,
+    onVent: false, vasopressors: false,
+    labs: { platelets: 90, bilirubin: 2.5, creatinine: 2.2, gcs: 13 }
+  };
+
+  const res = await runWithSepsis(patient);
+  console.log(JSON.stringify(res, null, 2));
+})();
