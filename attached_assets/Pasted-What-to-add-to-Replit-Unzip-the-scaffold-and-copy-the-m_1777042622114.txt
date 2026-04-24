@@ -1,0 +1,119 @@
+What to add to Replit
+
+Unzip the scaffold and copy the medical_ai/ folder into your Replit project.
+
+Add this to your existing requirements.txt:
+
+requests>=2.32.0
+pinecone>=5.0.0
+
+Your app probably already has Flask. If not, add:
+
+flask>=3.0.0
+
+Then in your main Flask file, usually app.py or main.py, add:
+
+from medical_ai.routes import medical_ai_bp
+
+app.register_blueprint(medical_ai_bp)
+
+The scaffold adds these API routes:
+
+POST /api/medical-ai/chat
+POST /api/medical-ai/knowledge/ingest
+GET  /api/medical-ai/knowledge/search
+POST /api/medical-ai/artifact
+Replit Secrets to add
+
+Use Replit Secrets for these values. Replit documents that environment variables are accessible in Python through os.environ, which is how the scaffold reads configuration.
+
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma3
+OLLAMA_EMBED_MODEL=embeddinggemma
+MED_AI_LOCAL_DB=medical_ai.sqlite3
+ALLOW_CLOUD_PHI=false
+
+Optional Pinecone settings:
+
+PINECONE_API_KEY=your_key_here
+PINECONE_INDEX_NAME=your_index_here
+PINECONE_NAMESPACE=medical-assistant
+
+The code only uses Pinecone when ALLOW_CLOUD_PHI=true. Otherwise, it stores knowledge locally in SQLite. Pinecone’s Python SDK is distributed as pinecone, and its upsert/search flow stores vectors in namespaces, which is what the scaffold uses when cloud storage is explicitly enabled.
+
+Ollama/Gemma integration
+
+The scaffold calls Ollama’s local REST API. Ollama’s /api/generate endpoint supports structured JSON output, and /api/embed creates embeddings for RAG/search workflows.
+
+The LLM adapter is in:
+
+medical_ai/llm.py
+
+The knowledge/RAG layer is in:
+
+medical_ai/store.py
+
+The medical safety checks are in:
+
+medical_ai/safety.py
+
+The route integration is in:
+
+medical_ai/routes.py
+Quick test commands
+
+After copying the files into Replit, run:
+
+pip install -r requirements.txt
+
+Then test knowledge ingestion:
+
+curl -X POST "$REPLIT_DEV_DOMAIN/api/medical-ai/knowledge/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Clinic FAQ",
+    "text": "This clinic FAQ explains how patients should prepare for appointments, bring medication lists, and seek emergency care for severe symptoms.",
+    "source_type": "clinic_policy"
+  }'
+
+Test chat:
+
+curl -X POST "$REPLIT_DEV_DOMAIN/api/medical-ai/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "patient",
+    "message": "What should I prepare before my appointment?",
+    "patient_context": "I want to discuss recent headaches and my medication list."
+  }'
+
+Test an output artifact:
+
+curl -X POST "$REPLIT_DEV_DOMAIN/api/medical-ai/artifact" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "artifact_type": "doctor_questions",
+    "text": "I have had headaches for two weeks and want to ask my doctor what to track.",
+    "role": "patient"
+  }'
+Slice plan for the top-to-bottom review
+
+Send Slice 0 first:
+
+find . -maxdepth 3 -type f | sort
+
+Then send these slices:
+
+app.py, main.py, .replit, requirements.txt, and any config files.
+All route/controller files.
+All AI, Pinecone, vector DB, prompt, and medical-assistant logic files.
+Frontend templates/components, especially chat UI and upload UI.
+Error logs, console output, and Replit deployment logs.
+Database/schema files, but with all real patient data removed.
+
+Redact secrets like this:
+
+OPENAI_API_KEY=[REDACTED]
+PINECONE_API_KEY=[REDACTED]
+DATABASE_URL=[REDACTED]
+
+Send Slice 0 first, and I’ll review the repo from the roofline down to the basement pipes.
