@@ -1,27 +1,80 @@
 /**
  * server/routes/hardeningReviewRoutes.ts
  *
- * Hardening Review API — sends 15 slices + ChatGPT recommendations to Claude,
- * returns a phased integration plan.
+ * Hardening Review API
  *
- * POST /api/hardening-review/run        — synchronous (streams progress via SSE)
- * GET  /api/hardening-review/goals      — returns the preset ChatGPT hardening goals
- * GET  /api/hardening-review/last       — returns the last result (in-memory cache)
+ * GET  /api/hardening-review/goals                  — preset ChatGPT hardening goals
+ * GET  /api/hardening-review/last                   — last review result (in-memory cache)
+ * POST /api/hardening-review/run                    — SSE streaming review
+ * POST /api/hardening-review/run-sync               — synchronous review (no SSE)
+ *
+ * Webhook (for ChatGPT → Auralyn pipeline, no manual input):
+ * POST /api/hardening-review/webhook/upload-zip     — receive new ZIP bundle
+ * GET  /api/hardening-review/webhook/status         — list available bundles + last upload
  */
 
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
+import * as fs from "fs";
+import * as path from "path";
 import {
   runHardeningReview,
   CHATGPT_HARDENING_GOALS,
   summariseResult,
+  findNewestZip,
   type HardeningReviewResult,
 } from "../research/hardeningReviewAgent";
 
 const router = Router();
 
-// ── In-memory last result cache (single process, single result) ───────────────
+// ── In-memory last result cache ───────────────────────────────────────────────
 let _lastResult: HardeningReviewResult | null = null;
 let _running = false;
+
+// ── Hardening bundles directory ───────────────────────────────────────────────
+const BUNDLES_DIR = path.join(process.cwd(), "attached_assets", "hardening_bundles");
+if (!fs.existsSync(BUNDLES_DIR)) fs.mkdirSync(BUNDLES_DIR, { recursive: true });
+
+// ── Multer — disk storage, ZIP only, 50 MB cap ───────────────────────────────
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, BUNDLES_DIR),
+  filename: (_req, file, cb) => {
+    const ts   = Date.now();
+    const ext  = path.extname(file.originalname) || ".zip";
+    const base = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, "_");
+    cb(null, `${base}_${ts}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/zip" ||
+        file.mimetype === "application/x-zip-compressed" ||
+        file.originalname.endsWith(".zip")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only .zip files are accepted"));
+    }
+  },
+});
+
+// ── Webhook secret auth middleware ────────────────────────────────────────────
+function requireWebhookSecret(req: Request, res: Response, next: () => void) {
+  const secret = process.env.HARDENING_WEBHOOK_SECRET;
+  if (!secret) {
+    return res.status(503).json({
+      ok:    false,
+      error: "Webhook secret not configured — set HARDENING_WEBHOOK_SECRET env var",
+    });
+  }
+  const provided = req.headers["x-webhook-secret"] as string | undefined;
+  if (!provided || provided !== secret) {
+    return res.status(401).json({ ok: false, error: "Invalid or missing X-Webhook-Secret header" });
+  }
+  next();
+}
 
 // ── GET /api/hardening-review/goals ──────────────────────────────────────────
 router.get("/goals", (_req: Request, res: Response) => {
@@ -58,17 +111,13 @@ router.post("/run", async (req: Request, res: Response) => {
     return res.status(429).json({ ok: false, error: "A review is already running — check /api/hardening-review/last for the previous result" });
   }
 
-  // ── SSE setup ────────────────────────────────────────────────────────────
-  res.setHeader("Content-Type",  "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection",    "keep-alive");
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
-  const send = (data: object) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
+  const send = (data: object) => { res.write(`data: ${JSON.stringify(data)}\n\n`); };
   const gptRecommendations = req.body?.gpt_recommendations ?? undefined;
 
   _running = true;
@@ -77,16 +126,12 @@ router.post("/run", async (req: Request, res: Response) => {
 
     const result = await runHardeningReview({
       gptRecommendations,
-      onProgress: (msg: string) => {
-        send({ type: "progress", message: msg });
-      },
+      onProgress: (msg: string) => send({ type: "progress", message: msg }),
     });
 
     _lastResult = result;
-    const summary = summariseResult(result);
-
-    send({ type: "complete", result, summary });
-    console.log(`[hardeningReview] ${summary}`);
+    send({ type: "complete", result, summary: summariseResult(result) });
+    console.log(`[hardeningReview] ${summariseResult(result)}`);
   } catch (err: any) {
     console.error("[hardeningReview] Error:", err?.message);
     send({ type: "error", error: err?.message ?? "Review failed" });
@@ -96,7 +141,7 @@ router.post("/run", async (req: Request, res: Response) => {
   }
 });
 
-// ── POST /api/hardening-review/run-sync — non-SSE (shorter timeout) ──────────
+// ── POST /api/hardening-review/run-sync — non-SSE ────────────────────────────
 router.post("/run-sync", async (req: Request, res: Response) => {
   if (_running) {
     return res.status(429).json({ ok: false, error: "A review is already running" });
@@ -115,6 +160,96 @@ router.post("/run-sync", async (req: Request, res: Response) => {
   } finally {
     _running = false;
   }
+});
+
+// ── POST /api/hardening-review/webhook/upload-zip ────────────────────────────
+/**
+ * Called automatically by ChatGPT's code interpreter to deliver a new
+ * hardening bundle ZIP. No manual steps required on the Auralyn side.
+ *
+ * Required header:
+ *   X-Webhook-Secret: <HARDENING_WEBHOOK_SECRET>
+ *
+ * Body: multipart/form-data
+ *   bundle: <zip file>
+ *
+ * Response:
+ *   { ok: true, filename, path, sizeBytes, newestZip }
+ *
+ * ChatGPT Python example:
+ *   import requests
+ *   with open("hardening_bundle.zip", "rb") as f:
+ *       r = requests.post(
+ *           "https://<your-replit-url>/api/hardening-review/webhook/upload-zip",
+ *           headers={"X-Webhook-Secret": "<secret>"},
+ *           files={"bundle": f}
+ *       )
+ *   print(r.json())
+ */
+router.post(
+  "/webhook/upload-zip",
+  requireWebhookSecret as any,
+  upload.single("bundle"),
+  (req: Request, res: Response) => {
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "No file uploaded — include a ZIP as the 'bundle' field" });
+    }
+
+    const { filename, path: filePath, size } = req.file;
+    const newest = findNewestZip();
+
+    console.log(`[hardeningWebhook] New bundle received: ${filename} (${size.toLocaleString()} bytes)`);
+
+    res.json({
+      ok:        true,
+      filename,
+      path:      filePath,
+      sizeBytes: size,
+      message:   `Bundle saved. Next review run will use: ${newest ?? filename}`,
+      newestZip: newest,
+    });
+  }
+);
+
+// ── GET /api/hardening-review/webhook/status ─────────────────────────────────
+/**
+ * Lists all available hardening bundles and shows which one will be used
+ * by the next review run.
+ */
+router.get("/webhook/status", (_req: Request, res: Response) => {
+  const webhookConfigured = !!process.env.HARDENING_WEBHOOK_SECRET;
+
+  // Collect all ZIPs: root attached_assets + hardening_bundles subdir
+  const rootDir     = path.join(process.cwd(), "attached_assets");
+  const allZips: Array<{ file: string; dir: string; mtimeMs: number; sizeBytes: number }> = [];
+
+  for (const dir of [rootDir, BUNDLES_DIR]) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith(".zip")) continue;
+      const full  = path.join(dir, f);
+      const stat  = fs.statSync(full);
+      allZips.push({ file: f, dir, mtimeMs: stat.mtimeMs, sizeBytes: stat.size });
+    }
+  }
+
+  allZips.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  res.json({
+    ok:               true,
+    webhookConfigured,
+    webhookSecretSet: webhookConfigured,
+    uploadEndpoint:   "POST /api/hardening-review/webhook/upload-zip",
+    requiredHeader:   "X-Webhook-Secret: <HARDENING_WEBHOOK_SECRET>",
+    requiredField:    "bundle (multipart/form-data)",
+    newestZip:        findNewestZip(),
+    availableBundles: allZips.map(z => ({
+      filename:       z.file,
+      directory:      z.dir,
+      sizeBytes:      z.sizeBytes,
+      uploadedAt:     new Date(z.mtimeMs).toISOString(),
+    })),
+  });
 });
 
 export default router;

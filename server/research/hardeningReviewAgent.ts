@@ -30,14 +30,39 @@ const AdmZip  = require("adm-zip");
 
 const PROJECT_ROOT    = process.cwd();
 const SLICES_FILE     = path.join(PROJECT_ROOT, "AURALYN_CODE_REVIEW_SLICES.md");
-const ZIP_FILE        = path.join(PROJECT_ROOT, "attached_assets/auralyn_replit_update_1777078797019.zip");
 const SCHEMA_FILE     = path.join(PROJECT_ROOT, "shared/schema.ts");
 const SERVER_INDEX    = path.join(PROJECT_ROOT, "server/index.ts");
+
+// Directories searched for ZIP bundles (newest across both wins)
+const ZIP_SEARCH_DIRS = [
+  path.join(PROJECT_ROOT, "attached_assets", "hardening_bundles"),
+  path.join(PROJECT_ROOT, "attached_assets"),
+];
 
 const MAX_SLICE_CHARS  = 100_000; // reduced to make room for ZIP + schema
 const MAX_ZIP_CHARS    = 55_000;  // combined ZIP file contents
 const MAX_SCHEMA_CHARS = 8_000;   // schema table definitions
 const MAX_DIFF_CHARS   = 6_000;   // git diff output
+
+// ── Find the newest ZIP bundle ────────────────────────────────────────────────
+export function findNewestZip(): string | null {
+  const candidates: Array<{ file: string; mtimeMs: number }> = [];
+
+  for (const dir of ZIP_SEARCH_DIRS) {
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".zip")) continue;
+      const full = path.join(dir, name);
+      try {
+        candidates.push({ file: full, mtimeMs: fs.statSync(full).mtimeMs });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0].file;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -207,13 +232,14 @@ function loadSlices(): string {
   return content;
 }
 
-// ── Load ZIP bundle ───────────────────────────────────────────────────────────
+// ── Load ZIP bundle (auto-detects newest ZIP) ─────────────────────────────────
 function loadZipContents(): string {
-  if (!fs.existsSync(ZIP_FILE)) {
-    return "[ZIP bundle not found at attached_assets/auralyn_replit_update_1777078797019.zip]";
+  const zipPath = findNewestZip();
+  if (!zipPath) {
+    return "[No ZIP bundle found — upload one via POST /api/hardening-review/webhook/upload-zip]";
   }
   try {
-    const zip     = new AdmZip(ZIP_FILE);
+    const zip     = new AdmZip(zipPath);
     const entries = zip.getEntries() as Array<{ entryName: string; isDirectory: boolean; getData: () => Buffer }>;
     const parts: string[] = [];
     let totalChars = 0;
@@ -381,7 +407,8 @@ export async function runHardeningReview(options: {
   const slices = loadSlices();
   log(`Slices loaded: ${slices.length.toLocaleString()} chars`);
 
-  log("Reading hardening ZIP bundle…");
+  const activeZip = findNewestZip();
+  log(`Reading hardening ZIP bundle: ${activeZip ? path.basename(activeZip) : "none found"}…`);
   const zipContents = loadZipContents();
   log(`ZIP bundle loaded: ${zipContents.length.toLocaleString()} chars`);
 
