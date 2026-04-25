@@ -2,26 +2,42 @@
  * server/research/hardeningReviewAgent.ts
  *
  * Cross-slice hardening review agent.
- * Sends ALL 15 code review slices + ChatGPT's recommendations to Claude
- * using the exact prompt the user specified.
+ * Sends ALL 15 code review slices + ChatGPT's recommendations + ZIP patch bundle
+ * + git diff + Drizzle schema to Claude using the exact prompt the user specified.
  *
  * Claude's job: integration review before coding, then a phased implementation plan.
  *
  * Pipeline:
  *   1. Read AURALYN_CODE_REVIEW_SLICES.md (the 15 slices)
- *   2. Accept ChatGPT recommendations as structured text
- *   3. Send both to Claude with the hardening bundle prompt
- *   4. Return structured phase plan + file change list + remaining concerns
+ *   2. Read the hardening ZIP bundle (all patch/source files inside)
+ *   3. Run git diff HEAD to capture any uncommitted changes
+ *   4. Read shared/schema.ts (Drizzle schema — table definitions only)
+ *   5. Capture route registrations from server/index.ts
+ *   6. Accept ChatGPT recommendations as structured text
+ *   7. Send everything to Claude with the hardening bundle prompt
+ *   8. Return structured phase plan + file change list + remaining concerns
  */
 
 import * as fs      from "fs";
 import * as path    from "path";
+import { execSync } from "child_process";
 import Anthropic    from "@anthropic-ai/sdk";
 import OpenAI       from "openai";
+// adm-zip is a CommonJS module — use createRequire for safe ESM interop
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const AdmZip  = require("adm-zip");
 
-const PROJECT_ROOT  = process.cwd();
-const SLICES_FILE   = path.join(PROJECT_ROOT, "AURALYN_CODE_REVIEW_SLICES.md");
-const MAX_SLICE_CHARS = 120_000; // Claude's 200K context — leave room for prompt + response
+const PROJECT_ROOT    = process.cwd();
+const SLICES_FILE     = path.join(PROJECT_ROOT, "AURALYN_CODE_REVIEW_SLICES.md");
+const ZIP_FILE        = path.join(PROJECT_ROOT, "attached_assets/auralyn_replit_update_1777078797019.zip");
+const SCHEMA_FILE     = path.join(PROJECT_ROOT, "shared/schema.ts");
+const SERVER_INDEX    = path.join(PROJECT_ROOT, "server/index.ts");
+
+const MAX_SLICE_CHARS  = 100_000; // reduced to make room for ZIP + schema
+const MAX_ZIP_CHARS    = 55_000;  // combined ZIP file contents
+const MAX_SCHEMA_CHARS = 8_000;   // schema table definitions
+const MAX_DIFF_CHARS   = 6_000;   // git diff output
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,7 +76,6 @@ export interface HardeningReviewResult {
 }
 
 // ── Hardening goals (from Slice 15 + user prompt) ────────────────────────────
-// These are the 7 goals ChatGPT identified as the highest-risk gaps.
 export const CHATGPT_HARDENING_GOALS = `
 CHATGPT HARDENING RECOMMENDATIONS — Highest-risk gaps from Slice 15:
 
@@ -121,22 +136,30 @@ const SYSTEM_PROMPT = `You are reviewing and integrating a targeted hardening bu
 
 You are being provided:
 1. All 15 architecture/code review slices of the full Auralyn codebase.
-2. ChatGPT's hardening recommendations — a cross-slice hardening bundle focused on the highest-risk gaps from Slice 15.
+2. The hardening ZIP bundle — actual source files and .diff patches produced by the hardening implementation.
+3. The live git diff (HEAD uncommitted changes, if any).
+4. The Drizzle schema (shared/schema.ts) — all database table definitions.
+5. The route registration list (server/index.ts imports and app.use calls).
+6. ChatGPT's hardening recommendations — a cross-slice hardening bundle focused on the highest-risk gaps from Slice 15.
 
 Important:
 - Do NOT blindly replace the whole app.
 - Treat the 15 slices as architectural context.
-- Treat the ChatGPT recommendations as a targeted hardening patch.
+- Treat the ZIP bundle as the proposed hardening implementation — review each file carefully.
+- Treat the ChatGPT recommendations as the goals the ZIP is trying to achieve.
 - Preserve existing working code unless the patch clearly improves security, auditability, auth, or PHI handling.
 - This is clinical decision support, not autonomous medical care. Do not make the system independently authorize discharge, treatment, or routing without physician review gates.
 
 The ZIP/patch is NOT a full rewrite of all 15 slices. It is a cross-slice hardening bundle focused on the highest-risk gaps from Slice 15. Do not rewrite the whole app.
 
 Perform an integration review FIRST:
-- Compare each recommendation against the existing codebase slices.
-- Identify which changes can be implemented directly.
+- Compare each ZIP file against the existing codebase slices.
+- For each .diff patch file, identify where it applies and whether it applies cleanly.
+- Identify which changes can be implemented directly (file can be copied as-is).
 - Identify which changes need manual merge with existing code.
 - Identify missing imports, missing Drizzle schema definitions, or route registration changes required.
+- Check the schema (shared/schema.ts) for any missing tables or columns the ZIP assumes exist.
+- Check server/index.ts route list for any route registrations the ZIP requires but that are missing.
 - Identify any compile errors likely to occur.
 - Then produce a phased implementation plan.
 
@@ -184,6 +207,96 @@ function loadSlices(): string {
   return content;
 }
 
+// ── Load ZIP bundle ───────────────────────────────────────────────────────────
+function loadZipContents(): string {
+  if (!fs.existsSync(ZIP_FILE)) {
+    return "[ZIP bundle not found at attached_assets/auralyn_replit_update_1777078797019.zip]";
+  }
+  try {
+    const zip     = new AdmZip(ZIP_FILE);
+    const entries = zip.getEntries() as Array<{ entryName: string; isDirectory: boolean; getData: () => Buffer }>;
+    const parts: string[] = [];
+    let totalChars = 0;
+
+    for (const entry of entries) {
+      if (entry.isDirectory) continue;
+      const name    = entry.entryName;
+      const content = entry.getData().toString("utf-8");
+      const block   = `\n--- FILE: ${name} ---\n${content}\n--- END: ${name} ---\n`;
+
+      if (totalChars + block.length > MAX_ZIP_CHARS) {
+        parts.push(`\n[... remaining ZIP files omitted — context limit reached ...]`);
+        break;
+      }
+      parts.push(block);
+      totalChars += block.length;
+    }
+
+    return parts.join("");
+  } catch (err: any) {
+    return `[Failed to read ZIP: ${err?.message}]`;
+  }
+}
+
+// ── Load git diff ─────────────────────────────────────────────────────────────
+function loadGitDiff(): string {
+  try {
+    // Exclude auto-generated metrics file from diff noise
+    const diff = execSync(
+      "git diff HEAD -- ':!data/runtime/metrics.json' ':!data/runtime/*.json'",
+      { cwd: PROJECT_ROOT, encoding: "utf-8", timeout: 8000, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+
+    if (!diff) {
+      // Fall back to showing the last commit's diff (most recent hardening work)
+      const lastCommit = execSync(
+        "git diff HEAD~1 HEAD -- ':!data/runtime/metrics.json' ':!data/runtime/*.json'",
+        { cwd: PROJECT_ROOT, encoding: "utf-8", timeout: 8000, stdio: ["pipe", "pipe", "pipe"] }
+      ).trim();
+
+      if (!lastCommit) return "[No uncommitted changes and no recent commit diff available]";
+      const header = `[No uncommitted changes. Showing last commit diff (HEAD~1..HEAD)]\n\n`;
+      const body   = lastCommit.length > MAX_DIFF_CHARS
+        ? lastCommit.slice(0, MAX_DIFF_CHARS) + "\n\n[... diff truncated ...]"
+        : lastCommit;
+      return header + body;
+    }
+
+    return diff.length > MAX_DIFF_CHARS
+      ? diff.slice(0, MAX_DIFF_CHARS) + "\n\n[... diff truncated ...]"
+      : diff;
+  } catch (err: any) {
+    return `[git diff failed: ${err?.message}]`;
+  }
+}
+
+// ── Load Drizzle schema ───────────────────────────────────────────────────────
+function loadSchema(): string {
+  if (!fs.existsSync(SCHEMA_FILE)) {
+    return "[shared/schema.ts not found]";
+  }
+  const content = fs.readFileSync(SCHEMA_FILE, "utf-8");
+  if (content.length <= MAX_SCHEMA_CHARS) return content;
+  // Truncate but try to end at a clean pgTable boundary
+  const truncated = content.slice(0, MAX_SCHEMA_CHARS);
+  const lastTable = truncated.lastIndexOf("export const ");
+  return (lastTable > MAX_SCHEMA_CHARS * 0.8 ? truncated.slice(0, lastTable) : truncated)
+    + "\n\n[... schema truncated — remaining table definitions omitted ...]";
+}
+
+// ── Load route registrations ──────────────────────────────────────────────────
+function loadRouteList(): string {
+  if (!fs.existsSync(SERVER_INDEX)) {
+    return "[server/index.ts not found]";
+  }
+  const lines  = fs.readFileSync(SERVER_INDEX, "utf-8").split("\n");
+  const routes = lines.filter(l =>
+    l.includes("app.use") || l.includes("registerRoutes") || l.includes("Router") ||
+    l.includes("import {") || l.includes("import ")
+  ).slice(0, 80); // capture imports + use() calls
+  return routes.join("\n");
+}
+
 // ── Claude API ────────────────────────────────────────────────────────────────
 function getAnthropic(): Anthropic | null {
   const key = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
@@ -198,20 +311,51 @@ function getOpenAI(): OpenAI | null {
 }
 
 // ── Build user message ────────────────────────────────────────────────────────
-function buildUserMessage(slices: string, gptRecommendations: string): string {
+function buildUserMessage(opts: {
+  slices:           string;
+  zipContents:      string;
+  gitDiff:          string;
+  schema:           string;
+  routeList:        string;
+  gptRecommendations: string;
+}): string {
   return `=== AURALYN CODEBASE — ALL 15 ARCHITECTURE/CODE REVIEW SLICES ===
 
-${slices}
+${opts.slices}
 
 === END OF SLICES ===
 
+=== HARDENING ZIP BUNDLE — ALL SOURCE FILES AND PATCHES ===
+
+${opts.zipContents}
+
+=== END OF ZIP BUNDLE ===
+
+=== LIVE GIT DIFF (HEAD) ===
+
+${opts.gitDiff}
+
+=== END OF GIT DIFF ===
+
+=== DRIZZLE SCHEMA (shared/schema.ts) ===
+
+${opts.schema}
+
+=== END OF DRIZZLE SCHEMA ===
+
+=== ROUTE REGISTRATIONS (server/index.ts — imports + app.use) ===
+
+${opts.routeList}
+
+=== END OF ROUTE REGISTRATIONS ===
+
 === CHATGPT HARDENING RECOMMENDATIONS ===
 
-${gptRecommendations}
+${opts.gptRecommendations}
 
 === END OF CHATGPT RECOMMENDATIONS ===
 
-Now perform the integration review, then produce the phased implementation plan as described in your instructions. Return strict JSON only.`;
+Now perform the integration review (comparing the ZIP bundle against the existing slices and schema), then produce the phased implementation plan as described in your instructions. Return strict JSON only.`;
 }
 
 // ── Parse / validate result ───────────────────────────────────────────────────
@@ -229,15 +373,34 @@ export async function runHardeningReview(options: {
   gptRecommendations?: string;
   onProgress?:         (msg: string) => void;
 }): Promise<HardeningReviewResult> {
-  const start     = Date.now();
-  const gptRecs   = options.gptRecommendations ?? CHATGPT_HARDENING_GOALS;
-  const log       = options.onProgress ?? (() => {});
+  const start   = Date.now();
+  const gptRecs = options.gptRecommendations ?? CHATGPT_HARDENING_GOALS;
+  const log     = options.onProgress ?? (() => {});
 
   log("Loading 15 architecture slices…");
   const slices = loadSlices();
   log(`Slices loaded: ${slices.length.toLocaleString()} chars`);
 
-  const userMessage = buildUserMessage(slices, gptRecs);
+  log("Reading hardening ZIP bundle…");
+  const zipContents = loadZipContents();
+  log(`ZIP bundle loaded: ${zipContents.length.toLocaleString()} chars`);
+
+  log("Running git diff HEAD…");
+  const gitDiff = loadGitDiff();
+  log(`Git diff: ${gitDiff.length.toLocaleString()} chars`);
+
+  log("Loading Drizzle schema (shared/schema.ts)…");
+  const schema = loadSchema();
+  log(`Schema loaded: ${schema.length.toLocaleString()} chars`);
+
+  log("Loading route registrations (server/index.ts)…");
+  const routeList = loadRouteList();
+  log(`Route list: ${routeList.length.toLocaleString()} chars`);
+
+  const totalChars = slices.length + zipContents.length + gitDiff.length + schema.length + routeList.length;
+  log(`Total context assembled: ${totalChars.toLocaleString()} chars — sending to Claude…`);
+
+  const userMessage = buildUserMessage({ slices, zipContents, gitDiff, schema, routeList, gptRecommendations: gptRecs });
 
   // ── Path 1: Claude (preferred — most accurate for architecture review) ──────
   const claude = getAnthropic();
@@ -284,7 +447,7 @@ export async function runHardeningReview(options: {
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user",   content: userMessage.slice(0, 80_000) }, // GPT-4o has 128K context
+      { role: "user",   content: userMessage.slice(0, 80_000) }, // GPT-4o 128K context
     ],
   });
 
