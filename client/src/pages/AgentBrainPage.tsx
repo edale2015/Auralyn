@@ -31,6 +31,12 @@ import {
   TrendingUp,
   Eye,
   Hash,
+  GitBranch,
+  Send,
+  FileArchive,
+  Cpu,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 // ── Colour helpers ─────────────────────────────────────────────────────────────
@@ -232,6 +238,12 @@ export default function AgentBrainPage() {
   const [wsEvents, setWsEvents] = useState<string[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // ── Hardening Review state ───────────────────────────────────────────────────
+  const [hrLogs,    setHrLogs]    = useState<string[]>([]);
+  const [hrResult,  setHrResult]  = useState<any>(null);
+  const [hrRunning, setHrRunning] = useState(false);
+  const [hrOpen,    setHrOpen]    = useState(false);
+
   const { data: statusData } = useQuery<any>({
     queryKey: ["/api/agent-brain/status"],
     refetchInterval: 2000,
@@ -251,6 +263,58 @@ export default function AgentBrainPage() {
     queryKey: ["/api/agent-brain/audit"],
     refetchInterval: 5000,
   });
+
+  const { data: bundleStatus } = useQuery<any>({
+    queryKey: ["/api/hardening-review/webhook/status"],
+    refetchInterval: hrRunning ? false : 30_000,
+  });
+
+  const activeZip: string = bundleStatus?.newestZip
+    ? (bundleStatus.newestZip as string).split("/").pop() ?? ""
+    : "";
+
+  const startHardeningReview = useCallback(async () => {
+    setHrRunning(true);
+    setHrLogs(["Connecting to review pipeline…"]);
+    setHrResult(null);
+    setHrOpen(true);
+    try {
+      const res = await fetch("/api/hardening-review/run", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({}),
+      });
+      if (!res.body) throw new Error("No SSE body");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "progress") {
+              setHrLogs(l => [...l, ev.message].slice(-40));
+            } else if (ev.type === "complete") {
+              setHrResult(ev.result);
+              setHrLogs(l => [...l, `✓ Done — ${ev.summary}`]);
+            } else if (ev.type === "error") {
+              setHrLogs(l => [...l, `✗ Error: ${ev.error}`]);
+            }
+          } catch { /* malformed SSE line */ }
+        }
+      }
+    } catch (err: any) {
+      setHrLogs(l => [...l, `✗ Connection error: ${err?.message}`]);
+    } finally {
+      setHrRunning(false);
+    }
+  }, []);
 
   const startMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/agent-brain/loop/start"),
@@ -644,6 +708,69 @@ export default function AgentBrainPage() {
                 )}
               </div>
             </ScrollArea>
+          </div>
+
+          <Separator className="bg-slate-800/60" />
+
+          {/* ── Claude Hardening Review ──────────────────────────────────── */}
+          <div className="flex flex-col flex-shrink-0">
+            <button
+              className="px-3 py-2 flex items-center gap-2 w-full text-left hover:bg-slate-800/30 transition-colors"
+              onClick={() => setHrOpen(o => !o)}
+              data-testid="btn-toggle-hardening-panel"
+            >
+              <GitBranch size={13} className="text-violet-400 flex-shrink-0" />
+              <span className="text-xs font-semibold text-slate-300 flex-1">Claude Hardening Review</span>
+              {hrRunning && <RefreshCw size={11} className="text-violet-300 animate-spin" />}
+              {hrResult && !hrRunning && <CheckCircle2 size={11} className="text-emerald-400" />}
+              {hrOpen ? <ChevronUp size={11} className="text-slate-500" /> : <ChevronDown size={11} className="text-slate-500" />}
+            </button>
+
+            {hrOpen && (
+              <div className="px-2 pb-2 space-y-2">
+                <div className="flex items-center gap-1.5 bg-slate-800/40 rounded px-2 py-1.5">
+                  <FileArchive size={11} className="text-yellow-400 flex-shrink-0" />
+                  <span className="text-[10px] text-slate-400 truncate flex-1" data-testid="text-active-zip">
+                    {activeZip || (bundleStatus ? "No bundle found" : "Loading…")}
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  className="w-full h-7 text-xs bg-violet-700 hover:bg-violet-600 text-white"
+                  onClick={startHardeningReview}
+                  disabled={hrRunning}
+                  data-testid="btn-send-to-claude"
+                >
+                  {hrRunning
+                    ? <><Cpu size={12} className="mr-1.5 animate-pulse" />Sending to Claude…</>
+                    : <><Send size={12} className="mr-1.5" />Send to Claude</>}
+                </Button>
+                {hrLogs.length > 0 && (
+                  <ScrollArea className="h-28 rounded border border-slate-700/40 bg-slate-900/50 p-1.5">
+                    <div className="space-y-0.5">
+                      {hrLogs.map((l, i) => (
+                        <p key={i} className="text-[10px] font-mono text-slate-400 leading-relaxed">{l}</p>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
+                {hrResult && (
+                  <div className="rounded border border-emerald-700/40 bg-emerald-950/20 px-2 py-1.5 space-y-1">
+                    <p className="text-[10px] font-semibold text-emerald-300 flex items-center gap-1">
+                      <CheckCircle2 size={10} /> {hrResult.phases?.length ?? 0} phases · {hrResult.filesChanged?.length ?? 0} files
+                    </p>
+                    {hrResult.phases?.slice(0, 3).map((ph: any) => (
+                      <p key={ph.phase} className="text-[10px] text-slate-400">
+                        <span className="text-violet-400 font-mono">P{ph.phase}</span> {ph.title}
+                      </p>
+                    ))}
+                    {(hrResult.phases?.length ?? 0) > 3 && (
+                      <p className="text-[10px] text-slate-500">+{hrResult.phases.length - 3} more phases…</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <Separator className="bg-slate-800/60" />
