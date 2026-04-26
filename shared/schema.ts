@@ -1795,3 +1795,33 @@ export const agentHandoffs = pgTable("agent_handoffs", {
   createdAt:            timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 export type AgentHandoff = typeof agentHandoffs.$inferSelect;
+
+// ── Agent loop state (persistent across restarts) ─────────────────────────────
+export const agentLoopState = pgTable("agent_loop_state", {
+  id:          text("id").primaryKey().default("main"),
+  running:     boolean("running").notNull().default(false),
+  cycleCount:  integer("cycle_count").notNull().default(0),
+  lastCycleAt: timestamp("last_cycle_at"),
+  startedAt:   timestamp("started_at"),
+  errors:      integer("errors").notNull().default(0),
+  updatedAt:   timestamp("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentLoopState = typeof agentLoopState.$inferSelect;
+
+// ── Agent cycle results (persisted ring buffer) ───────────────────────────────
+export const agentCycleResults = pgTable("agent_cycle_results", {
+  id:             serial("id").primaryKey(),
+  patientId:      text("patient_id").notNull(),
+  clinicSiteId:   text("clinic_site_id"),
+  risk:           jsonb("risk").notNull().default({}),
+  icu:            jsonb("icu").notNull().default({}),
+  safety:         jsonb("safety").notNull().default({}),
+  routing:        jsonb("routing").notNull().default({}),
+  insights:       jsonb("insights").notNull().default([]),
+  auditHash:      text("audit_hash"),
+  resultRedacted: jsonb("result_redacted").notNull().default({}),
+  createdAt:      timestamp("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentCycleResult = typeof agentCycleResults.$inferSelect;

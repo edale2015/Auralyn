@@ -8,51 +8,52 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("app_auth_token");
-  return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    "x-correlation-id": getOrCreateCorrelationId(),
-  };
+export function getCsrfToken(): string | null {
+  const cookies = document.cookie.split(";");
+  for (const c of cookies) {
+    const [k, v] = c.trim().split("=");
+    const name = process.env.CSRF_COOKIE_NAME || "csrf_token";
+    if (k?.trim() === name && v) return decodeURIComponent(v);
+  }
+  return null;
 }
 
-export async function apiRequest(
-  method: string,
-  url: string,
-  data?: unknown | undefined,
-): Promise<Response> {
+function getHeaders(method: string, hasBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {
-    ...getAuthHeaders(),
-    ...(data ? { "Content-Type": "application/json" } : {}),
+    "x-correlation-id": getOrCreateCorrelationId(),
   };
+  if (hasBody) headers["Content-Type"] = "application/json";
 
+  const upper = method.toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(upper)) {
+    const csrf = getCsrfToken();
+    if (csrf) headers["x-csrf-token"] = csrf;
+  }
+
+  return headers;
+}
+
+export async function apiRequest(method: string, url: string, data?: unknown): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers,
-    body: data ? JSON.stringify(data) : undefined,
+    headers: getHeaders(method, data !== undefined),
+    body: data !== undefined ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
-
-  await throwIfResNotOk(res);
+  if (!res.ok) throw new Error(`${res.status}: ${(await res.text()) || res.statusText}`);
   return res;
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+
+export const getQueryFn: <T>(options: { on401: UnauthorizedBehavior }) => QueryFunction<T> =
+  ({ on401 }) => async ({ queryKey }) => {
     const res = await fetch(queryKey.join("/") as string, {
       credentials: "include",
-      headers: getAuthHeaders(),
+      headers: getHeaders("GET", false),
     });
-
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
-    }
-
-    await throwIfResNotOk(res);
+    if (on401 === "returnNull" && res.status === 401) return null as T;
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()) || res.statusText}`);
     return await res.json();
   };
 
@@ -65,8 +66,6 @@ export const queryClient = new QueryClient({
       staleTime: Infinity,
       retry: false,
     },
-    mutations: {
-      retry: false,
-    },
+    mutations: { retry: false },
   },
 });

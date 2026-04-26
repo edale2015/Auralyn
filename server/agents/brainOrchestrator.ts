@@ -12,8 +12,11 @@
  */
 
 import crypto from "crypto";
-import { logEvent } from "../audit/hashChain";
-import { runDigitalTwin } from "../simulation/digitalTwinEngine";
+import { appendAuditEvent }      from "../audit/hashChain";
+import { runDigitalTwin }        from "../simulation/digitalTwinEngine";
+import { runTrajectoryDigitalTwin } from "../simulation/trajectoryDigitalTwin";
+import { runClinicalDecisionBridge } from "./clinicalDecisionBridge";
+import { recordAgentCycleResult, saveLoopStateSnapshot } from "./persistentLoopState";
 import { broadcastPatientEvent } from "../ws/patientStream";
 
 // ── Patient vitals model ──────────────────────────────────────────────────────
@@ -185,25 +188,45 @@ export interface AgentCycleResult {
   auditHash:  string;
   durationMs: number;
   ts:         number;
+  trajectoryTwin?: ReturnType<typeof runTrajectoryDigitalTwin>;
+  clinicalDecision?: any;
 }
 
 export async function runAgentCycle(vitals: PatientVitals): Promise<AgentCycleResult> {
-  const start = Date.now();
-
-  const risk    = scoreRisk(vitals);
-  const icu     = icuDecision(risk);
-  const safety  = safetyGate(icu, risk);
-  const twin    = runDigitalTwin({ result: { trajectory: { riskScore: risk.score } } });
-  const routing = suggestRoute(risk, icu);
+  const start    = Date.now();
+  const risk     = scoreRisk(vitals);
+  const icu      = icuDecision(risk);
+  const safety   = safetyGate(icu, risk);
+  const clinicalDecision = await runClinicalDecisionBridge(vitals, risk);
+  const twin     = runDigitalTwin({ result: { trajectory: { riskScore: risk.score } } });
+  const trajectoryTwin = runTrajectoryDigitalTwin({ current: vitals, priorVitals: [], baseRisk: risk.score });
+  const routing  = suggestRoute(risk, icu);
   const insights = generateInsights(vitals, risk, icu);
 
-  const entry = logEvent({
-    patientId: vitals.patientId,
-    risk:      { level: risk.level, score: risk.score },
-    icu:       { needsICU: icu.needsICU, urgency: icu.urgency },
-    safety:    { allowed: safety.allowed },
-    routing:   { destination: routing.destination },
-    ts:        Date.now(),
+  const entry = await appendAuditEvent({
+    traceId: `patient:${vitals.patientId}`,
+    step: "agent_cycle",
+    input: {
+      patientId: vitals.patientId,
+      vitals: { hr: vitals.hr, spo2: vitals.spo2, temp: vitals.temp, sbp: vitals.sbp, dbp: vitals.dbp, rr: vitals.rr },
+      complaintPresent: !!vitals.complaint,
+    },
+    output: {
+      risk: { level: risk.level, score: risk.score, flags: risk.flags },
+      icu: { needsICU: icu.needsICU, urgency: icu.urgency },
+      safety: { allowed: safety.allowed, requiresApproval: safety.requiresApproval },
+      routing: { destination: routing.destination, urgency: routing.urgency },
+      clinicalDecision: {
+        mode: clinicalDecision.mode,
+        finalRisk: clinicalDecision.finalRisk,
+        requiresPhysicianReview: clinicalDecision.requiresPhysicianReview,
+      },
+    },
+    metadata: {
+      orchestrator: "brainOrchestrator",
+      riskPolicyVersion: "rule-score-v1",
+      intendedUse: clinicalDecision.basis.intendedUse,
+    },
   });
 
   const result: AgentCycleResult = {
@@ -215,14 +238,15 @@ export async function runAgentCycle(vitals: PatientVitals): Promise<AgentCycleRe
     twin,
     routing,
     insights,
+    trajectoryTwin,
+    clinicalDecision,
     auditHash: entry.hash,
     durationMs: Date.now() - start,
     ts: Date.now(),
   };
 
-  // Broadcast to any WebSocket subscribers
+  void recordAgentCycleResult(result).catch(() => undefined);
   broadcastPatientEvent({ type: "agent_cycle", ...result });
-
   return result;
 }
 
@@ -238,7 +262,6 @@ export function generateSimulatedPatient(seed?: number): PatientVitals {
   const r = seed !== undefined ? Math.sin(seed + Date.now() / 10000) * 0.5 + 0.5 : Math.random();
   const idx = Math.floor(r * 9999) % DEMO_NAMES.length;
 
-  // Occasionally generate abnormal vitals to make the demo interesting
   const isAbnormal = Math.random() < 0.25;
   const isCritical = Math.random() < 0.08;
 
@@ -291,7 +314,6 @@ async function runLoopCycle() {
   if (!loopState.running) return;
 
   try {
-    // Generate 3-5 patients per cycle for a busy clinic feel
     const count = 3 + Math.floor(Math.random() * 3);
     for (let i = 0; i < count; i++) {
       const vitals = generateSimulatedPatient(i);
@@ -304,13 +326,15 @@ async function runLoopCycle() {
     }
     loopState.cycleCount++;
     loopState.lastCycleMs = Date.now();
+    void saveLoopStateSnapshot(loopState).catch(() => undefined);
   } catch (e: any) {
     loopState.errors++;
+    void saveLoopStateSnapshot(loopState).catch(() => undefined);
     console.error("[AgentBrain] Loop cycle error:", e?.message);
   }
 
   if (loopState.running) {
-    loopTimer = setTimeout(runLoopCycle, 4000); // Every 4 seconds
+    loopTimer = setTimeout(runLoopCycle, 4000);
   }
 }
 
@@ -319,6 +343,7 @@ export function startLoop(): { started: boolean; message: string } {
   loopState.running   = true;
   loopState.startedAt = Date.now();
   loopTimer = setTimeout(runLoopCycle, 100);
+  void saveLoopStateSnapshot(loopState).catch(() => undefined);
   console.log("[AgentBrain] Autonomous loop started");
   return { started: true, message: "Autonomous agent loop started" };
 }
@@ -327,6 +352,7 @@ export function stopLoop(): { stopped: boolean; message: string } {
   if (!loopState.running) return { stopped: false, message: "Loop not running" };
   loopState.running = false;
   if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
+  void saveLoopStateSnapshot(loopState).catch(() => undefined);
   console.log("[AgentBrain] Autonomous loop stopped");
   return { stopped: true, message: "Loop stopped" };
 }
