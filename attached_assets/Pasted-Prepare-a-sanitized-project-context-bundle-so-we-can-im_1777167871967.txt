@@ -1,0 +1,266 @@
+Prepare a sanitized project context bundle so we can improve our CLAUDE.md file for this medical system.
+
+Do NOT include:
+- API keys
+- passwords
+- JWT secrets
+- database URLs with credentials
+- production patient data
+- real PHI/ePHI
+- private tokens
+- OAuth secrets
+- Stripe keys or webhook secrets
+- Twilio/SendGrid/Supabase/Firebase/OpenAI/Anthropic keys
+- session secrets
+- encryption keys
+
+Do include names of environment variables, but redact their values.
+
+Please output the following sections clearly:
+
+1. CURRENT PROJECT SUMMARY
+- What this medical system does
+- Who uses it: patients, providers, admins, staff, etc.
+- The main workflows
+- The highest-risk areas of the app
+
+2. TECH STACK
+- Frontend framework
+- Backend framework
+- Database
+- ORM/query layer
+- Auth system
+- Hosting/deployment setup
+- Payment system, if any
+- Email/SMS provider, if any
+- File storage provider, if any
+- AI/LLM providers, if any
+- Any medical/healthcare APIs or integrations
+
+3. REPO STRUCTURE
+Provide the file/folder tree up to a useful depth.
+Include short explanations for important folders.
+
+4. EXISTING CLAUDE.md
+Paste the current CLAUDE.md file exactly as it exists.
+
+5. PACKAGE AND CONFIG FILES
+Paste the contents of relevant files, redacting secrets:
+- package.json
+- tsconfig.json
+- vite.config / next.config / remix config, if present
+- tailwind config, if present
+- eslint/prettier config, if present
+- pyproject.toml / requirements.txt, if Python is used
+- Dockerfile / docker-compose.yml, if present
+- replit.nix / .replit
+- README.md
+- any CI/CD config
+
+6. BUILD, RUN, TEST, AND DEPLOY COMMANDS
+List the exact commands for:
+- installing dependencies
+- running locally
+- running frontend only
+- running backend only
+- running tests
+- running lint/typecheck
+- running database migrations
+- seeding data
+- deploying
+- checking logs
+
+7. DATABASE AND DATA MODEL
+Describe or paste sanitized versions of:
+- database schema
+- ORM models
+- migration files
+- patient-related tables
+- user/provider/admin tables
+- appointment tables
+- clinical note tables
+- prescription/medication tables, if any
+- audit log tables
+- file/document tables
+- consent tables
+- billing tables, if any
+
+8. AUTHORIZATION AND ROLES
+Explain:
+- user roles
+- permission model
+- how patients/providers/admins are separated
+- route protection
+- API protection
+- session handling
+- password reset flow
+- MFA, if any
+- organization/tenant separation, if any
+
+9. PHI / HIPAA / MEDICAL SAFETY AREAS
+Explain:
+- where PHI/ePHI is stored
+- where PHI/ePHI is displayed
+- where PHI/ePHI is sent externally
+- audit logging behavior
+- access logging behavior
+- encryption approach
+- file upload/download safeguards
+- data retention/deletion rules
+- consent handling
+- emergency access, if any
+- whether this system must be HIPAA-ready, HIPAA-compliant, or just privacy-conscious
+
+10. API ROUTES
+List all backend/API routes with:
+- method
+- path
+- what it does
+- required role/auth
+- whether it touches PHI
+- request/response examples using fake data only
+
+11. FRONTEND ROUTES AND SCREENS
+List all major screens/pages:
+- path
+- user type
+- purpose
+- data shown
+- whether PHI is displayed
+- important components
+
+12. AI / CLINICAL DECISION SUPPORT
+Explain any AI features:
+- what the AI does
+- whether it uses patient data
+- whether it gives medical advice
+- whether it summarizes, triages, recommends, diagnoses, drafts notes, or flags risks
+- whether output is provider-reviewed
+- prompts/system messages, sanitized
+- model/provider used
+- safety constraints currently implemented
+
+13. THIRD-PARTY INTEGRATIONS
+For each integration, explain:
+- provider name
+- purpose
+- data sent
+- data received
+- whether PHI is involved
+- webhook routes
+- failure behavior
+- retry behavior
+
+14. TESTING STATUS
+Explain:
+- test framework
+- existing tests
+- important untested areas
+- how to run tests
+- known flaky tests
+- minimum tests required before deployment
+- whether there are integration/e2e tests
+
+15. SECURITY RULES ALREADY IMPLEMENTED
+Explain current handling for:
+- input validation
+- output escaping
+- CSRF
+- CORS
+- rate limiting
+- audit logs
+- access control
+- file upload validation
+- encryption
+- backups
+- secret management
+- dependency scanning
+- error handling
+- logging redaction
+
+16. CODING CONVENTIONS
+Explain:
+- naming conventions
+- component patterns
+- API handler patterns
+- service layer patterns
+- database access patterns
+- error handling style
+- validation library
+- state management
+- form handling
+- preferred testing style
+
+17. KNOWN ISSUES AND ROADMAP
+List:
+- current bugs
+- incomplete features
+- planned features
+- areas developers should not touch casually
+- areas that need refactoring
+- areas where changes are dangerous
+
+18. TOP IMPORTANT FILES
+Paste sanitized excerpts of the most important files:
+- main app entry
+- router files
+- auth files
+- database/schema files
+- API route files
+- patient/provider/admin dashboard files
+- audit logging files
+- AI/LLM files
+- medical workflow files
+- validation files
+
+19. WHAT CLAUDE SHOULD NEVER DO
+List project-specific forbidden actions, such as:
+- never expose PHI in logs
+- never bypass authorization checks
+- never modify migrations casually
+- never invent clinical logic
+- never send patient data to external APIs unless explicitly approved
+- never change billing/security/auth without tests
+- never delete audit logs
+- never weaken validation
+
+20. WHAT “DONE” MEANS FOR THIS PROJECT
+Define success criteria for coding tasks:
+- tests pass
+- lint passes
+- typecheck passes
+- no PHI leaks
+- authorization verified
+- audit logging preserved
+- migrations reviewed
+- no unnecessary files changed
+- medical/clinical behavior manually reviewed when relevant
+The most important things Replit should send
+
+The highest-value items are:
+
+The current repo file tree
+The current CLAUDE.md
+package.json and config files
+Database schema/models/migrations
+Auth and role/permission logic
+API route list
+Frontend route/screen list
+Medical workflows
+AI/CDS behavior, if any
+Exact commands for test, lint, typecheck, migrate, and deploy
+
+Those are the ingredients that let me make the file precise instead of generic.
+
+What not to send
+
+Do not send real patient data. Do not send secrets. Do not send production credentials.
+
+For environment variables, send this style:
+
+DATABASE_URL=[REDACTED]
+JWT_SECRET=[REDACTED]
+OPENAI_API_KEY=[REDACTED]
+SENDGRID_API_KEY=[REDACTED]
+
+That tells me what the system depends on without spilling the crown jewels into the lava moat 🜂.
