@@ -156,6 +156,11 @@ import RegionalCommand from "@/pages/RegionalCommand";
 import GlobalCommand   from "@/pages/GlobalCommand";
 import AuditReplay     from "@/pages/AuditReplay";
 import ClinicalTrials  from "@/pages/ClinicalTrials";
+import ReviewQueueV2    from "@/pages/ReviewQueueV2";
+import CaseReview        from "@/pages/CaseReview";
+import PhysicianDashboard from "@/pages/PhysicianDashboard";
+import ClinicalValidation from "@/pages/ClinicalValidation";
+import OutcomeMonitoring  from "@/pages/OutcomeMonitoring";
 
 validateRoutes();
 
@@ -172,6 +177,13 @@ function WorkbenchRouter() {
         <Route path={ROUTES.SETTINGS} component={SettingsWorkbench} />
         <Route path={ROUTES.WORKERS} component={WorkerMonitor} />
         <Route path={ROUTES.CLINIC} component={ClinicHealthDashboard} />
+        <Route path="/review" component={ReviewQueueV2} />
+        <Route path="/review/:caseId" component={CaseReview} />
+        <Route path="/cases" component={ProviderCaseView} />
+        <Route path="/physician-dashboard" component={PhysicianDashboard} />
+        <Route path="/clinical-validation" component={ClinicalValidation} />
+        <Route path="/outcome-monitoring" component={OutcomeMonitoring} />
+        <Route path="/operations-cockpit" component={OperationsCockpit} />
         <Route path={ROUTES.AUTOMATION} component={AutomationDashboard} />
         <Route path="/automation/runs/:runId" component={AutomationRunDetail} />
         <Route path="/automation/studio" component={AutomationStudio} />

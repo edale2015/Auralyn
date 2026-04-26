@@ -12,7 +12,7 @@ export function getCsrfToken(): string | null {
   const cookies = document.cookie.split(";");
   for (const c of cookies) {
     const [k, v] = c.trim().split("=");
-    const name = process.env.CSRF_COOKIE_NAME || "csrf_token";
+    const name = (import.meta.env.VITE_CSRF_COOKIE_NAME as string) || "csrf_token";
     if (k?.trim() === name && v) return decodeURIComponent(v);
   }
   return null;
