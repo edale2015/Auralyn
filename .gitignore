@@ -1,10 +1,60 @@
 node_modules
 dist
+build
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gz
+
+# Environment and secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Database files
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Logs
+*.log
+logs/
+
+# Uploads and patient data
+uploads/
+patient_exports/
+
+# Generated reports and coverage
+reports/
+coverage/
+
+# Build artifacts and profiling
 artifacts/
-stress_results.jsonserver/data/csv/_tx_backups/
+stress_results.json
 scripts/profile_apply_runs/
+server/data/csv/_tx_backups/
 server/data/csv/CASE_ANALYTICS_LOG.csv
+data/
+
+# Infrastructure / IaC state
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+*.tfstate
+*.tfstate.*
+
+# Private keys and certs
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Firebase service accounts
+firebase-adminsdk*.json
+*service-account*.json
+*serviceAccount*.json
+*private_key*.json
+
+# Archives
+*.tar.gz
+auralyn-sanitized-review.zip
