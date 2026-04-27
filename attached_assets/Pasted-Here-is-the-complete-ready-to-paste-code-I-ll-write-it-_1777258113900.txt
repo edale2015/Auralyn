@@ -1,0 +1,103 @@
+Here is the complete, ready-to-paste code. I'll write it in two parts: the component file and the exact insertion into CaseReview.tsx.
+
+Part 1 — New File: client/src/components/DischargeInstructionPanel.tsx
+Create this as a new file in your components folder:Discharge instruction panel component for CaseReview pageDischarge instruction panel component for CaseReview pageDischarge instruction panel component for CaseReview pageDischargeInstructionPanel.tsxDone
+Part 2 — Exact Changes to CaseReview.tsx
+Make these three targeted edits to your existing file. Don't replace the whole file — just add these pieces:
+Edit 1 — Add to your imports at the top of CaseReview.tsx:
+tsximport { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
+Edit 2 — Add this state variable inside your component, near your other useState calls:
+tsxconst [dischargeText, setDischargeText] = useState<string>("");
+Edit 3 — Insert the panel between the Scoring Explanation card and the Physician Review card. Find the closing </Card> of your scoring explanation section and add this immediately after it:
+tsx{/* ── Discharge Instructions ── */}
+<DischargeInstructionPanel
+  caseId={c.id}           {/* swap c.id for the telemed session ID field once confirmed */}
+  patientName={c.patientName ?? c.answers?.structured?.name ?? "Patient"}
+  onInstructionsReady={(text) => setDischargeText(text)}
+/>
+
+The One Thing Still Needed
+Before this works end-to-end, confirm one thing from the case object shape — paste the first ~30 lines of CaseReview.tsx showing the useQuery call and how c is typed. I need to know:
+
+The exact field name for the case ID that the review page uses (is it c.id, c.caseId, c.encounterId?)
+Whether the case object has any field that contains a telemed session ID — something like c.telemedSessionId, c.sessionId, or similar
+
+If there's no telemed session ID on the case object yet, I'll write a small backend patch that looks it up from the encounters table by triage case ID so the mapping happens server-side — you won't need to change the frontend call at all.Presented filePresented fileTo install this: In Replit, create a new file at client/src/components/DischargeInstructionPanel.tsx and paste the contents. Then make the three targeted edits to CaseReview.tsx above.
+Once you share the top of CaseReview.tsx, I'll confirm the exact ID field to use and if needed write the backend patch so the telemed session lookup is seamless.DischargeinstructionpanelCode · TSX DownloadYou said: ere are both exact excerpts:ere are both exact excerpts:
+1. POST /api/telemed/analyze — first 15 lines of handlerrouter.post("/api/telemed/analyze", (req, res) => {try {
+const {
+caseId,           // required — string, same ID as CaseReview uses
+complaint,        // optional — string
+symptoms = [],    // optional — string[]
+patientText = "", // optional — string
+disposition,      // optional — string
+patientMedications = [],  // optional — string[]
+allergies = [],   // optional — string[]
+conditions = [],  // optional — string[]
+} = req.body;
+if (!caseId) return res.status(400).json({ error: "caseId required" });
+const session = getSession(caseId);  // auto-creates if not found
+2. telemedicineReturnPrecautionService.ts — first 30 lines// Complaint keys are lowercase_underscore: "sore_throat", "cough", "uti", etc.// Disposition keys are Title Case strings: "Prescription", "Home Care", "Urgent Care"
+// Lookup: RETURN_PRECAUTIONS[complaint]?.[disposition] ?? DEFAULT_RETURN_PRECAUTIONS
+const RETURN_PRECAUTIONS: Record<string, Record<string, ReturnPrecautionSet>> = {
+sore_throat: {
+Prescription: { ... },
+"Home Care":  { ... },
+},
+cough: {
+"Home Care":  { ... },
+"Urgent Care":{ ... },
+},
+uti:          { Prescription: { ... } },
+fever:        { "Home Care":  { ... } },
+chest_pain:   { ... },
+rash:         { "Urgent Care":{ ... } },
+ear_pain:     { Prescription: { ... } },
+sinus_pressure:{ "Home Care": { ... } },
+abdominal_pain:{ "Home Care": { ... } },
+};
+The mismatch Claude needs to handle — critical
+The CaseDoc stores disposition as: "er_send" | "urgent_care" | "pcp" | "self_care" (snake_case enum values).
+The RETURN_PRECAUTIONS map keys its dispositions as: "Prescription", "Home Care", "Urgent Care" (Title Case human labels).
+These do not match. getReturnPrecautions("sore_throat", "pcp") falls through to DEFAULT_RETURN_PRECAUTIONS because "pcp" is not a key in the map — it expects "Prescription".
+Claude's component will need a translation map on line 6 before calling /api/telemed/analyze or the discharge endpoint:const DISPOSITION_MAP: Record<string, string> = {er_send:      "Urgent Care",
+urgent_care:  "Urgent Care",
+pcp:          "Prescription",
+self_care:    "Home Care",
+};
+// then pass: disposition: DISPOSITION_MAP[c.triage.disposition] ?? "Home Care"
+The complaint key is already correct — c.complaint.slug comes back as "sore_throat" which matches the map key exactly.Show more10:44 PM2 / 2Claude responded: Perfect.Perfect. Now I have everything needed. The ID is the same across both systems, the complaint slug matches directly, and the only translation needed is the disposition map you've already written. Let me produce the final, complete versions of both files.Created 2 files, ran a command, read a fileCreated 2 files, ran a command, read a file
+Exact Instructions for Replit
+Step 1 — Create the new component file
+In Replit, create a new file at:
+client/src/components/DischargeInstructionPanel.tsx
+Paste the entire downloaded file contents into it.
+Step 2 — Three targeted edits to CaseReview.tsx
+Edit A — Add one import at the top with your other imports:
+tsximport { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
+Edit B — Add one state variable near your other useState declarations inside the component:
+tsxconst [dischargeText, setDischargeText] = useState<string>("");
+Edit C — Insert the panel between the closing </Card> of your Scoring Explanation card and the opening <Card> of your Physician Review card:
+tsx{/* ── Discharge Instructions ── */}
+<DischargeInstructionPanel
+  caseId={c.id}
+  patientName={c.patientName ?? c.answers?.structured?.name ?? "Patient"}
+  complaint={c.complaint?.slug}
+  disposition={c.triage?.disposition}
+  onInstructionsReady={(text) => setDischargeText(text)}
+/>
+
+What This Does When Running
+
+Physician opens a case — panel appears showing "Not generated"
+Physician clicks Generate — calls the discharge endpoint with correct complaint slug and translated disposition (e.g. "pcp" → "Prescription" so return precautions resolve properly)
+Loading skeleton pulses while AI generates
+Editable text appears — physician reads, edits if needed
+Any edit clears approval forcing a deliberate re-review
+Physician clicks Approve Instructions — green badge appears, dischargeText is live in the parent ready for the WhatsApp send trigger
+Physician then hits their normal Approve / Sign-off button below
+
+
+What's Next After You Test This
+Once you confirm this renders and the API call returns text, the next step is wiring the WhatsApp delivery. That's a small addition to your existing case action handler — when status becomes "APPROVED" or "SIGNED_OFF" and dischargeText is non-empty, fire POST /api/whatsapp/send. I'll write that patch next.
+Then we move to Win 2: the CDS sidebar.

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { caseId }     = params;
@@ -25,6 +26,7 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { toast }      = useToast();
   const [notes, setNotes]               = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [dischargeText, setDischargeText] = useState<string>("");
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: c, isLoading, error } = useQuery<any>({
@@ -258,6 +260,15 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
             </pre>
           </CardContent>
         </Card>
+
+        {/* Discharge Instructions */}
+        <DischargeInstructionPanel
+          caseId={c.caseId}
+          patientName={c.answers?.structured?.name as string | undefined ?? "Patient"}
+          complaint={c.complaint?.slug}
+          disposition={c.triage?.disposition}
+          onInstructionsReady={(text) => setDischargeText(text)}
+        />
 
         {/* Review actions */}
         <Card>
