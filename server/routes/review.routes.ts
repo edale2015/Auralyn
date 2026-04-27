@@ -5,6 +5,8 @@ import {
   listReviewQueue,
   setPhysicianReview,
 } from "../services/caseService";
+import { sendWhatsAppMessage } from "../whatsapp/send";
+import { appendAuditEvent }    from "../governance/audit";
 
 export const reviewRouter = Router();
 
@@ -56,6 +58,43 @@ reviewRouter.post("/api/review/case/:caseId", async (req, res) => {
       },
       nextState
     );
+
+    // ── Discharge instruction delivery ──────────────────────────────────────
+    const dischargeText: string | undefined = req.body.dischargeText;
+
+    if (
+      dischargeText?.trim() &&
+      (status === "APPROVED" || status === "SIGNED_OFF")
+    ) {
+      const doc      = await getCase(req.params.caseId);
+      const phone    = doc?.source?.threadId;
+      const isWA     = doc?.source?.channel === "whatsapp";
+
+      if (isWA && phone) {
+        sendWhatsAppMessage(phone, dischargeText).catch((err: Error) =>
+          console.error("[Review] Discharge WA send failed", {
+            caseId: req.params.caseId, error: err.message,
+          })
+        );
+
+        appendAuditEvent({
+          actor:      reviewer?.id ?? "phys1",
+          action:     "DISCHARGE_INSTRUCTIONS_SENT",
+          entityId:   req.params.caseId,
+          entityType: "case",
+          details: {
+            channel:   "whatsapp",
+            phone,
+            status,
+            charCount: dischargeText.length,
+          },
+        }).catch(() =>
+          console.error("[Review] Discharge audit event write failed", {
+            caseId: req.params.caseId,
+          })
+        );
+      }
+    }
 
     res.json({ ok: true, nextState });
   } catch (e: any) {

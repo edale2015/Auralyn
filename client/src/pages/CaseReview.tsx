@@ -47,6 +47,7 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
         finalDisposition: c?.triage?.disposition ?? null,
         finalDx:          c?.triage?.topCluster  ?? null,
         reviewer:         { id: "phys1", name: "Physician" },
+        dischargeText:    dischargeText || undefined,
       });
     },
     onSuccess: (_data, status) => {
