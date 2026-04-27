@@ -161,6 +161,7 @@ import CaseReview        from "@/pages/CaseReview";
 import PhysicianDashboard from "@/pages/PhysicianDashboard";
 import ClinicalValidation from "@/pages/ClinicalValidation";
 import OutcomeMonitoring  from "@/pages/OutcomeMonitoring";
+import ClinicalICUMonitor from "@/pages/ClinicalICUMonitor";
 
 validateRoutes();
 
@@ -309,6 +310,7 @@ function WorkbenchRouter() {
         <Route path="/kb-review-dashboard" component={KBReviewDashboard} />
         <Route path="/deep-agent" component={DeepAgentDashboard} />
         <Route path="/communication" component={CommunicationDashboard} />
+        <Route path="/clinical-icu-monitor" component={ClinicalICUMonitor} />
         <Route>
           {() => (
             <div className="p-6" data-testid="not-found">

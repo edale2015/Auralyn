@@ -1796,6 +1796,124 @@ export const agentHandoffs = pgTable("agent_handoffs", {
 });
 export type AgentHandoff = typeof agentHandoffs.$inferSelect;
 
+// ── Lab panels (CBC / CMP / ABG) ──────────────────────────────────────────────
+export const labPanels = pgTable("lab_panels", {
+  id:                    serial("id").primaryKey(),
+  encounterId:           integer("encounter_id").references(() => encounters.id),
+  clinicEncounterId:     integer("clinic_encounter_id").references(() => clinicEncounters.id),
+  panelType:             text("panel_type").notNull(),           // "CBC" | "CMP" | "ABG" | "MIXED"
+  collectedAt:           timestamp("collected_at").notNull(),
+  // CBC
+  wbc:                   real("wbc"),                            // ×10³/µL
+  rbc:                   real("rbc"),                            // ×10⁶/µL
+  hgb:                   real("hgb"),                            // g/dL
+  hct:                   real("hct"),                            // %
+  plt:                   real("plt"),                            // ×10³/µL
+  neutPct:               real("neut_pct"),                       // %
+  bandPct:               real("band_pct"),                       // %
+  // CMP
+  sodium:                real("sodium"),                         // mEq/L
+  potassium:             real("potassium"),                      // mEq/L
+  chloride:              real("chloride"),                       // mEq/L
+  bicarbonate:           real("bicarbonate"),                    // mEq/L
+  bun:                   real("bun"),                            // mg/dL
+  creatinine:            real("creatinine"),                     // mg/dL
+  glucose:               real("glucose"),                        // mg/dL
+  calcium:               real("calcium"),                        // mg/dL
+  albumin:               real("albumin"),                        // g/dL
+  totalBilirubin:        real("total_bilirubin"),                // mg/dL
+  alt:                   real("alt"),                            // U/L
+  ast:                   real("ast"),                            // U/L
+  // ABG
+  ph:                    real("ph"),
+  pco2:                  real("pco2"),                           // mmHg
+  po2:                   real("po2"),                            // mmHg
+  hco3:                  real("hco3"),                           // mEq/L
+  baseExcess:            real("base_excess"),                    // mEq/L
+  sao2:                  real("sao2"),                           // %
+  lactate:               real("lactate"),                        // mmol/L
+  fio2:                  real("fio2"),                           // fraction 0–1
+  // Extras
+  procalcitonin:         real("procalcitonin"),                  // ng/mL
+  crp:                   real("crp"),                            // mg/dL
+  inrPt:                 real("inr_pt"),                         // INR
+  notes:                 text("notes"),
+  createdBy:             text("created_by"),
+  createdAt:             timestamp("created_at").notNull().defaultNow(),
+});
+export const insertLabPanelSchema = createInsertSchema(labPanels).omit({ id: true, createdAt: true });
+export type InsertLabPanel = z.infer<typeof insertLabPanelSchema>;
+export type LabPanel = typeof labPanels.$inferSelect;
+
+// ── Ventilator snapshots ────────────────────────────────────────────────────
+export const ventilatorSnapshots = pgTable("ventilator_snapshots", {
+  id:                    serial("id").primaryKey(),
+  encounterId:           integer("encounter_id").references(() => encounters.id),
+  clinicEncounterId:     integer("clinic_encounter_id").references(() => clinicEncounters.id),
+  recordedAt:            timestamp("recorded_at").notNull(),
+  mode:                  text("mode"),                           // AC/VC | SIMV | PSV | CPAP | BiPAP
+  fiO2:                  real("fi_o2"),                          // 0.21–1.0
+  peep:                  real("peep"),                           // cmH₂O
+  tidalVolume:           real("tidal_volume"),                   // mL
+  setRate:               real("set_rate"),                       // /min
+  peakPressure:          real("peak_pressure"),                  // cmH₂O
+  plateauPressure:       real("plateau_pressure"),               // cmH₂O
+  meanAirwayPressure:    real("mean_airway_pressure"),           // cmH₂O
+  dynamicCompliance:     real("dynamic_compliance"),             // mL/cmH₂O
+  resistance:            real("resistance"),                     // cmH₂O/L/s
+  minuteVentilation:     real("minute_ventilation"),             // L/min
+  pfRatio:               real("pf_ratio"),                       // PaO₂/FiO₂ — computed
+  drivingPressure:       real("driving_pressure"),               // plateau − PEEP
+  pvLoopPoints:          jsonb("pv_loop_points"),                // [{v,p}] for curve rendering
+  createdAt:             timestamp("created_at").notNull().defaultNow(),
+});
+export const insertVentilatorSnapshotSchema = createInsertSchema(ventilatorSnapshots).omit({ id: true, createdAt: true });
+export type InsertVentilatorSnapshot = z.infer<typeof insertVentilatorSnapshotSchema>;
+export type VentilatorSnapshot = typeof ventilatorSnapshots.$inferSelect;
+
+// ── SOFA score time series ──────────────────────────────────────────────────
+export const sofaScores = pgTable("sofa_scores", {
+  id:                    serial("id").primaryKey(),
+  encounterId:           integer("encounter_id").references(() => encounters.id),
+  clinicEncounterId:     integer("clinic_encounter_id").references(() => clinicEncounters.id),
+  scoredAt:              timestamp("scored_at").notNull(),
+  // Component scores 0–4
+  respiratoryScore:      integer("respiratory_score").notNull(),
+  coagulationScore:      integer("coagulation_score").notNull(),
+  liverScore:            integer("liver_score").notNull(),
+  cardiovascularScore:   integer("cardiovascular_score").notNull(),
+  cnsScore:              integer("cns_score").notNull(),
+  renalScore:            integer("renal_score").notNull(),
+  totalScore:            integer("total_score").notNull(),
+  delta:                 integer("delta"),                        // vs. prior score
+  interpretation:        text("interpretation"),                  // LOW_RISK | MODERATE | HIGH | CRITICAL
+  pfRatio:               real("pf_ratio"),
+  createdAt:             timestamp("created_at").notNull().defaultNow(),
+});
+export const insertSofaScoreSchema = createInsertSchema(sofaScores).omit({ id: true, createdAt: true });
+export type InsertSofaScore = z.infer<typeof insertSofaScoreSchema>;
+export type SofaScore = typeof sofaScores.$inferSelect;
+
+// ── Bayesian trajectory records ─────────────────────────────────────────────
+export const bayesianTrajectoryRecords = pgTable("bayesian_trajectory_records", {
+  id:                    serial("id").primaryKey(),
+  encounterId:           integer("encounter_id").references(() => encounters.id),
+  computedAt:            timestamp("computed_at").notNull(),
+  priorMean:             real("prior_mean").notNull(),            // prior Β(α,β) mean
+  posteriorMean:         real("posterior_mean").notNull(),        // updated mean
+  posteriorLower:        real("posterior_lower").notNull(),       // 95% CI lower
+  posteriorUpper:        real("posterior_upper").notNull(),       // 95% CI upper
+  observations:          jsonb("observations").notNull().default([]),
+  trend:                 text("trend").notNull(),                 // improving|stable|worsening|rapidly_worsening
+  horizonRisk:           jsonb("horizon_risk").notNull().default({}), // {h1,h4,h12,h24} probs
+  sofaDelta:             integer("sofa_delta"),
+  flags:                 jsonb("flags").notNull().default([]),
+  createdAt:             timestamp("created_at").notNull().defaultNow(),
+});
+export const insertBayesianTrajectorySchema = createInsertSchema(bayesianTrajectoryRecords).omit({ id: true, createdAt: true });
+export type InsertBayesianTrajectory = z.infer<typeof insertBayesianTrajectorySchema>;
+export type BayesianTrajectoryRecord = typeof bayesianTrajectoryRecords.$inferSelect;
+
 // ── Agent loop state (persistent across restarts) ─────────────────────────────
 export const agentLoopState = pgTable("agent_loop_state", {
   id:          text("id").primaryKey().default("main"),
