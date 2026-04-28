@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./context/AuthContext";
+import { AuralynCommandInterface } from "@/components/AuralynCommandInterface";
 
 import AppLayout from "./layouts/AppLayout";
 import { ROUTES } from "./routes/routeRegistry";
@@ -368,6 +369,7 @@ export default function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <AuralynCommandInterface physicianId="phys1" />
         </TooltipProvider>
       </AuthProvider>
     </QueryClientProvider>
