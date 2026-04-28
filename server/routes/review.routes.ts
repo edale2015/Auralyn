@@ -7,6 +7,7 @@ import {
 } from "../services/caseService";
 import { sendWhatsAppMessage } from "../whatsapp/send";
 import { appendAuditEvent }    from "../governance/audit";
+import { generateChartNote }   from "../assistant/telemedicineNoteService";
 
 export const reviewRouter = Router();
 
@@ -102,3 +103,50 @@ reviewRouter.post("/api/review/case/:caseId", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── POST /api/review/case/:caseId/soap ────────────────────────────────────────
+// Generates a SOAP ChartNote from CaseDoc fields. Called by AmbientNotePanel's
+// "Stamp SOAP Note" button. Synchronous — no LLM call, pure extraction.
+reviewRouter.post(
+  "/api/review/case/:caseId/soap",
+  requireReviewAuth,
+  async (req, res) => {
+    try {
+      const { caseId } = req.params;
+      if (!caseId) return res.status(400).json({ ok: false, error: "caseId required" });
+
+      const doc = await getCase(caseId);
+      if (!doc) return res.status(404).json({ ok: false, error: "Case not found" });
+
+      const sessionLike = {
+        complaint:         doc.complaint?.slug    ?? doc.complaint ?? "",
+        disposition:       doc.triage?.disposition ?? "",
+        returnPrecautions: doc.triage?.returnPrecautions ?? {},
+        medications:       doc.answers?.structured?.medications  ?? [],
+        allergies:         doc.answers?.structured?.allergies    ?? [],
+        conditions:        doc.answers?.structured?.conditions   ?? [],
+        differential:      doc.triage?.differential ?? [],
+        safetyAlerts:      doc.triage?.safetyAlerts ?? [],
+        patientName:       doc.answers?.structured?.name ?? "Patient",
+        answers:           doc.answers?.structured ?? {},
+      };
+
+      const note = generateChartNote(sessionLike as any);
+
+      appendAuditEvent({
+        actor:      (req as any).user?.id ?? "phys1",
+        action:     "SOAP_NOTE_GENERATED",
+        entityId:   caseId,
+        entityType: "case",
+        details: { charCount: note.rawText?.length ?? 0 },
+      }).catch(() => {
+        console.error("[Review] SOAP audit event write failed", { caseId });
+      });
+
+      return res.json({ ok: true, note });
+    } catch (e: any) {
+      console.error("[Review] SOAP generation failed", e?.message);
+      return res.status(500).json({ ok: false, error: e?.message ?? "SOAP generation failed" });
+    }
+  }
+);

@@ -20,6 +20,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
 import { CDSSidebarPanel } from "@/components/CDSSidebarPanel";
+import { AmbientNotePanel } from "@/components/AmbientNotePanel";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { caseId }     = params;
@@ -270,6 +271,14 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
           complaint={c.complaint?.slug}
           disposition={c.triage?.disposition}
           onInstructionsReady={(text) => setDischargeText(text)}
+        />
+
+        {/* Ambient note capture */}
+        <AmbientNotePanel
+          caseId={c.caseId}
+          complaint={c.complaint?.slug}
+          onTranscript={(text) => setNotes(prev => prev ? prev + "\n" + text : text)}
+          onStamp={(soapText) => setNotes(soapText)}
         />
 
         {/* Review actions */}
