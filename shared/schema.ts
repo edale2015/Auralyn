@@ -1943,3 +1943,5 @@ export const agentCycleResults = pgTable("agent_cycle_results", {
 });
 
 export type AgentCycleResult = typeof agentCycleResults.$inferSelect;
+
+export * from "./followUpSchema";

@@ -160,6 +160,7 @@ import ReviewQueueV2    from "@/pages/ReviewQueueV2";
 import CaseReview        from "@/pages/CaseReview";
 import PhysicianDashboard from "@/pages/PhysicianDashboard";
 import ProviderFeedbackDashboard from "@/pages/ProviderFeedbackDashboard";
+import FollowUpMonitoringDashboard from "@/pages/FollowUpMonitoringDashboard";
 import TelemedicineDoctorDashboard from "@/pages/TelemedicineDoctorDashboard";
 import ClinicalValidation from "@/pages/ClinicalValidation";
 import OutcomeMonitoring  from "@/pages/OutcomeMonitoring";
@@ -185,6 +186,7 @@ function WorkbenchRouter() {
         <Route path="/cases" component={ProviderCaseView} />
         <Route path="/physician-dashboard" component={PhysicianDashboard} />
         <Route path="/physician-feedback" component={ProviderFeedbackDashboard} />
+        <Route path="/follow-up-monitoring" component={FollowUpMonitoringDashboard} />
         <Route path="/telemed-doctor-dashboard" component={TelemedicineDoctorDashboard} />
         <Route path="/clinical-validation" component={ClinicalValidation} />
         <Route path="/outcome-monitoring" component={OutcomeMonitoring} />

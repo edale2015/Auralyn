@@ -32,5 +32,16 @@ export function buildWhatsAppFlow(packId: string, title: string, questions: What
 
 export async function whatsappWebhookHandler(req: Request, res: Response) {
   const body = req.body;
+
+  // Wire follow-up response processing — no-op if sender has no active enrollment
+  const inboundFrom = body?.From ?? body?.from ?? "";
+  const inboundBody = body?.Body ?? body?.body ?? "";
+  if (inboundFrom && inboundBody) {
+    const { processPatientResponse } = await import("../followup/followUpService");
+    processPatientResponse(inboundFrom, inboundBody).catch((err: Error) =>
+      console.error("[WhatsApp] Follow-up response processing failed", err.message)
+    );
+  }
+
   res.json({ ok: true, received: !!body });
 }

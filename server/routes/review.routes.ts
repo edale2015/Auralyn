@@ -11,6 +11,7 @@ import { sendWhatsAppMessage } from "../whatsapp/send";
 import { appendAuditEvent }    from "../governance/audit";
 import { generateChartNote }      from "../assistant/telemedicineNoteService";
 import { routeToSpecialtyCouncil } from "../assistant/specialtyRouter";
+import { enrollInFollowUp }        from "../followup/followUpService";
 
 export const reviewRouter = Router();
 
@@ -101,6 +102,26 @@ reviewRouter.post("/api/review/case/:caseId", async (req, res) => {
           console.error("[Review] Discharge audit event write failed", {
             caseId: req.params.caseId,
           })
+        );
+      }
+    }
+
+    // ── Auto-enroll in follow-up if complaint has a protocol ──────────────────
+    if (status === "APPROVED" || status === "SIGNED_OFF") {
+      const followUpDoc  = await getCase(req.params.caseId);
+      const phone        = followUpDoc?.source?.threadId;
+      const slug         = followUpDoc?.complaint?.slug ?? followUpDoc?.complaint;
+      const isWhatsApp   = followUpDoc?.source?.channel === "whatsapp";
+
+      if (isWhatsApp && phone && slug) {
+        enrollInFollowUp({
+          caseId:        req.params.caseId,
+          complaintSlug: slug,
+          patientPhone:  phone,
+          patientName:   followUpDoc?.answers?.structured?.name ?? "Patient",
+          physicianId:   reviewer?.id ?? (req as any).user?.id,
+        }).catch((err: Error) =>
+          console.error("[Review] Follow-up enrollment failed", { caseId: req.params.caseId, err: err.message })
         );
       }
     }

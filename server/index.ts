@@ -33,6 +33,8 @@ import complaintIntakeRoutes from "./routes/complaintIntake.routes";
 import { casesRouter } from "./routes/cases.routes";
 import { reviewRouter } from "./routes/review.routes";
 import { providerFeedbackRouter } from "./routes/providerFeedback.routes";
+import { followUpRouter }          from "./routes/followUp.routes";
+import { registerFollowUpWorker }  from "./followup/followUpService";
 import { telegramRouter } from "./routes/telegram.routes";
 import { reviewQueueRouter } from "./routes/reviewQueue";
 import { signoffRouter } from "./routes/signoff";
@@ -548,6 +550,7 @@ console.log("[ComplaintIntake] Conversational intake endpoints registered at /ap
 app.use(casesRouter);
 app.use(reviewRouter);
 app.use(providerFeedbackRouter);
+app.use(followUpRouter);
 app.use("/api/reviewQueue", reviewQueueRouter);
 app.use("/api/signoff", signoffRouter);
 app.use("/api/noteDraft", noteDraftRouter);
@@ -1107,6 +1110,7 @@ app.use((req, res, next) => {
       initAsyncWorkerHandlers();
       startAutonomousLoop(60_000);
       startEngines();
+      registerFollowUpWorker().catch(console.error);
       // Warm KB runtime cache — loads diagnosis priors, red flag rules, and treatment rules
       // from Postgres into memory so all pipeline entry-points read from the KB.
       import("./kb/kbRuntime").then(({ warmKbCache }) => warmKbCache()).catch(() => {});
