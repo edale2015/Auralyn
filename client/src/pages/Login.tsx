@@ -84,7 +84,7 @@ export default function Login() {
             <Stethoscope className="w-8 h-8 text-primary" />
           </div>
           <div>
-            <CardTitle className="text-2xl font-semibold">ENT Flu Slice</CardTitle>
+            <CardTitle className="text-2xl font-semibold">Auralyn</CardTitle>
             <CardDescription className="mt-2">Medical Triage System</CardDescription>
           </div>
         </CardHeader>

@@ -41,10 +41,10 @@ const DEFAULT_TENANTS: Tenant[] = [
   {
     id: "ten_001",
     siteId: "site_main",
-    name: "ENT Flu Slice Main Clinic",
+    name: "Auralyn Main Clinic",
     plan: "enterprise",
     status: "active",
-    adminEmail: "admin@entfluslice.com",
+    adminEmail: "admin@auralyn.com",
     region: "us-east-1",
     config: {
       maxCasesPerMonth: 5000,
@@ -53,7 +53,7 @@ const DEFAULT_TENANTS: Tenant[] = [
       maxCostPerCase: 0.12,
       retentionDays: 2555,
       features: ["graph_mode", "telemedicine", "outcome_tracking", "population_health", "clinical_coding", "multi_site"],
-      branding: { clinicName: "ENT Flu Slice", primaryColor: "#2563eb", logoUrl: "" },
+      branding: { clinicName: "Auralyn", primaryColor: "#2563eb", logoUrl: "" },
       allowedComplaints: ["cough", "sore_throat", "uti", "ear_pain", "sinus_pressure", "fever", "rash", "chest_pain", "abdominal_pain"],
       channels: ["whatsapp", "telegram", "web"],
     },

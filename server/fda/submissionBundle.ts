@@ -35,7 +35,7 @@ export async function createSubmissionBundle(
   const manifest = {
     bundleType: "FDA SaMD Validation Submission",
     generatedAt: createdAt,
-    systemName: "Auralyn Clinical AI (ENT Flu Slice)",
+    systemName: "Auralyn Clinical AI",
     systemVersion: "1.0.0",
     engineCount: 100,
     complianceStandards: ["FDA 21 CFR Part 11", "ISO 13485", "IEC 62304"],

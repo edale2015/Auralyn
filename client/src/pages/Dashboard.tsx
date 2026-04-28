@@ -101,7 +101,7 @@ export default function Dashboard() {
                 <Stethoscope className="w-5 h-5 text-primary-foreground" />
               </div>
               <div className="flex-1 min-w-0">
-                <h1 className="text-sm font-semibold truncate">ENT Flu Slice</h1>
+                <h1 className="text-sm font-semibold truncate">Auralyn</h1>
                 <p className="text-xs text-muted-foreground truncate">Medical Triage</p>
               </div>
             </div>

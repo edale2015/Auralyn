@@ -96,7 +96,7 @@ function buildMermaid(): string {
 
 function buildAscii(): string {
   const lines: string[] = [];
-  lines.push('ENT Flu Slice — Clinical Intelligence Architecture');
+  lines.push('Auralyn — Clinical Intelligence Architecture');
   lines.push('═'.repeat(52));
   lines.push('');
   lines.push('  PATIENT INPUT');
@@ -146,7 +146,7 @@ function buildDot(): string {
 
 function buildJson() {
   return {
-    architecture: 'ENT Flu Slice Clinical Intelligence Platform',
+    architecture: 'Auralyn Clinical Intelligence Platform',
     version: '10.0',
     generatedAt: new Date().toISOString(),
     stats: getEngineStats(),

@@ -308,7 +308,7 @@ router.get("/fda-report", async (_req, res) => {
     const report = {
       report_type: "FDA 510(k) Performance Summary",
       generated_at: new Date().toISOString(),
-      system: "Auralyn ENT Flu Slice – HIPAA/FDA Triage Platform",
+      system: "Auralyn – HIPAA/FDA Triage Platform",
       version: "66-layer KB v3.1",
       performance: {
         total_sessions: totalSessions,

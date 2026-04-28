@@ -51,7 +51,7 @@ router.post("/report", auth as any, (req: Request, res: Response) => {
     const input: CausalInput = {
       aiGroup: req.body?.aiGroup ?? DEMO_AI_GROUP,
       controlGroup: req.body?.controlGroup ?? DEMO_CONTROL_GROUP,
-      studyLabel: req.body?.studyLabel ?? "Auralyn ENT Flu Slice — Causal Impact Study",
+      studyLabel: req.body?.studyLabel ?? "Auralyn — Causal Impact Study",
       minSampleSize: req.body?.minSampleSize ?? 5,
     };
     const report = buildCausalReport(input);

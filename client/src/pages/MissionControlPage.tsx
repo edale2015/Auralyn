@@ -303,7 +303,7 @@ export default function MissionControlPage() {
             <h1 className="text-2xl font-bold tracking-tight">Mission Control</h1>
           </div>
           <p className="text-sm text-muted-foreground max-w-xl mx-auto">
-            Unified command center for Auralyn / ENT Flu Slice — monitor, update, troubleshoot, govern, and simulate from one place.
+            Unified command center for Auralyn — monitor, update, troubleshoot, govern, and simulate from one place.
           </p>
           <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
             {health && (
