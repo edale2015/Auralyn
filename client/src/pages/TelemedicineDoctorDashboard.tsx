@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { COMPLAINTS } from "@shared/complaints";
+import { ConversationPanel } from "@/components/ConversationPanel";
 
 const DISPOSITION_COLORS: Record<string, string> = {
   active: "bg-blue-100 text-blue-800 border-blue-200",
@@ -75,9 +76,10 @@ type Session = {
   caseId: string;
   startedAt: string;
   updatedAt: string;
-  status: string;
+  status: "active" | "completed" | "discharged";
   complaint?: string;
   disposition?: string;
+  draftReply?: string;
   differential?: { diagnosis: string; confidence: number }[];
   safetyAlerts?: string[];
   redFlags?: string[];
@@ -264,7 +266,7 @@ function SessionDetailPanel({ session }: { session: Session }) {
   const [dischargeData, setDischargeData] = useState<any>(null);
   const [genningNote, setGenningNote] = useState(false);
   const [genningDisch, setGenningDisch] = useState(false);
-  const [tab, setTab] = useState<"overview" | "meds" | "codes" | "precautions" | "note" | "discharge">("overview");
+  const [tab, setTab] = useState<"chat" | "overview" | "meds" | "codes" | "precautions" | "note" | "discharge">("chat");
 
   async function generateNote() {
     setGenningNote(true);
@@ -287,12 +289,13 @@ function SessionDetailPanel({ session }: { session: Session }) {
   }
 
   const tabs = [
-    { id: "overview", label: "Overview" },
-    { id: "meds", label: "Medications" },
-    { id: "codes", label: "ICD / CPT" },
+    { id: "chat",        label: "Chat" },
+    { id: "overview",    label: "Overview" },
+    { id: "meds",        label: "Medications" },
+    { id: "codes",       label: "ICD / CPT" },
     { id: "precautions", label: "Precautions" },
-    { id: "note", label: "Chart Note" },
-    { id: "discharge", label: "Discharge" },
+    { id: "note",        label: "Chart Note" },
+    { id: "discharge",   label: "Discharge" },
   ] as const;
 
   return (
@@ -320,8 +323,11 @@ function SessionDetailPanel({ session }: { session: Session }) {
       <div className="flex gap-1.5 flex-wrap">
         {tabs.map(t => (
           <button key={t.id} data-testid={`button-tab-${t.id}`} onClick={() => setTab(t.id)}
-            className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition-all ${tab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition-all flex items-center gap-1 ${tab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
             {t.label}
+            {t.id === "chat" && session.draftReply && (
+              <span className="inline-block w-2 h-2 rounded-full bg-purple-500 shrink-0" />
+            )}
           </button>
         ))}
       </div>
@@ -516,6 +522,12 @@ function SessionDetailPanel({ session }: { session: Session }) {
             )}
           </Panel>
         </div>
+      )}
+
+      {tab === "chat" && (
+        <Panel>
+          <ConversationPanel caseId={session.caseId} />
+        </Panel>
       )}
 
       {tab === "discharge" && (
