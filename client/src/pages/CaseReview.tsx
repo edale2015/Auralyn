@@ -19,6 +19,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
+import { CDSSidebarPanel } from "@/components/CDSSidebarPanel";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { caseId }     = params;
@@ -388,6 +389,15 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── CDS Sidebar ── */}
+      <CDSSidebarPanel
+        caseId={c.caseId}
+        complaint={c.complaint?.slug}
+        disposition={c.triage?.disposition}
+        patientMedications={c.answers?.structured?.medications as string[] ?? []}
+        allergies={c.answers?.structured?.allergies as string[] ?? []}
+      />
     </div>
   );
 }
