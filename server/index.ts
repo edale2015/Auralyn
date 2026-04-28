@@ -32,6 +32,7 @@ import { registerAdminRoutes } from "./routes/admin.routes";
 import complaintIntakeRoutes from "./routes/complaintIntake.routes";
 import { casesRouter } from "./routes/cases.routes";
 import { reviewRouter } from "./routes/review.routes";
+import { providerFeedbackRouter } from "./routes/providerFeedback.routes";
 import { telegramRouter } from "./routes/telegram.routes";
 import { reviewQueueRouter } from "./routes/reviewQueue";
 import { signoffRouter } from "./routes/signoff";
@@ -546,6 +547,7 @@ console.log("[ComplaintIntake] Conversational intake endpoints registered at /ap
 
 app.use(casesRouter);
 app.use(reviewRouter);
+app.use(providerFeedbackRouter);
 app.use("/api/reviewQueue", reviewQueueRouter);
 app.use("/api/signoff", signoffRouter);
 app.use("/api/noteDraft", noteDraftRouter);
