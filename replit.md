@@ -27,7 +27,8 @@ Data management uses Firebase Firestore, SQLite, and PostgreSQL, with PHI retent
 *   **Data Configuration**: Google Sheets
 *   **Cloud Storage**: Firebase Storage, AWS S3
 *   **Authentication**: Google OAuth2
-*   **EHR Systems**: Epic (FHIR), Athena Health, eClinicalWorks (ECW)
+*   **EHR Systems**: Epic (FHIR + SMART on FHIR skeleton), Athena Health (proprietary REST), eClinicalWorks (SMART on FHIR complete)
+*   **Win 9 (FHIR/EHR Context Layer)**: `server/integrations/ehr/fhirPatientContext.ts` (unified PatientContext fetcher — ecw/athena/epic/mock), `epicConnector.ts` (SMART auth skeleton), `intakePrePopulationService.ts` (EHR pre-population of answers.structured), `priorAuthSkeleton.ts` (CMS-style prior auth assessment), `server/routes/fhirContext.routes.ts` (registered at `/api/ehr/*`), `client/src/components/PatientContextPanel.tsx` (physician-triggered EHR context panel in CaseReview). Key API: `GET /api/ehr/context/:patientId?vendor=mock|ecw|epic|athena`, `POST /api/ehr/prior-auth`, `POST /api/ehr/prepopulate`. Auth: `x-review-token` header (requireReviewAuth).
 *   **Monitoring**: Prometheus, Grafana, LangSmith
 *   **Version Control**: GitHub
 *   **External APIs**: NCBI (PubMed), ClinicalTrials.gov, Payer APIs

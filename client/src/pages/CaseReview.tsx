@@ -21,7 +21,8 @@ import { useToast } from "@/hooks/use-toast";
 import { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
 import { CDSSidebarPanel } from "@/components/CDSSidebarPanel";
 import { AmbientNotePanel } from "@/components/AmbientNotePanel";
-import { EConsultPanel } from "@/components/EConsultPanel";
+import { EConsultPanel }          from "@/components/EConsultPanel";
+import { PatientContextPanel }    from "@/components/PatientContextPanel";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { caseId }     = params;
@@ -258,6 +259,14 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
             allergies={c.answers?.structured?.allergies as string[] ?? []}
           />
         )}
+
+        {/* EHR Patient Context — physician manually triggers fetch */}
+        <PatientContextPanel
+          caseId={c.caseId}
+          patientId={(c.answers?.structured as any)?._ehr_patient_id}
+          vendor={(c.answers?.structured as any)?._ehr_vendor ?? "mock"}
+          manualTrigger
+        />
 
         {/* Answers */}
         <Card>
