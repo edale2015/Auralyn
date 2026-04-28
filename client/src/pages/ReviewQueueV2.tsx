@@ -52,6 +52,7 @@ export default function ReviewQueueV2() {
   const [error, setError] = useState("");
   const [stateFilter, setStateFilter] = useState<QueueState>("NEEDS_REVIEW");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [asyncOnly, setAsyncOnly] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   function connect(filter: QueueState) {
@@ -136,6 +137,18 @@ export default function ReviewQueueV2() {
             </SelectContent>
           </Select>
 
+          <button
+            onClick={() => setAsyncOnly(prev => !prev)}
+            className={`h-8 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+              asyncOnly
+                ? "bg-green-600 text-white border-green-600"
+                : "bg-background text-muted-foreground border-input hover:bg-accent"
+            }`}
+            data-testid="button-async-filter"
+          >
+            {asyncOnly ? "● Async only" : "All cases"}
+          </button>
+
           <Button variant="ghost" size="sm" className="h-8 px-2" onClick={() => connect(stateFilter)} data-testid="button-refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </Button>
@@ -168,7 +181,7 @@ export default function ReviewQueueV2() {
         </p>
       ) : (
         <div className="space-y-2">
-          {snapshots.map((snapshot: any) => (
+          {(asyncOnly ? snapshots.filter((s: any) => s.caseType === "Async Safe") : snapshots).map((snapshot: any) => (
             <div key={snapshot.caseId} className="relative">
               {snapshot._severity === "critical" && (
                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-destructive rounded-l-md" />

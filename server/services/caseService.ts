@@ -143,6 +143,13 @@ export async function setPhysicianReview(
   });
 }
 
+export async function patchCaseDoc(
+  caseId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  await cases().doc(caseId).update({ ...patch, updatedAt: nowIso() });
+}
+
 export async function listReviewQueue(params: {
   state?: "NEEDS_REVIEW" | "TRIAGED";
   limit?: number;

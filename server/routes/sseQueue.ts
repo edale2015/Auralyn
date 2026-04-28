@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { requireRole } from "../middleware/requireRole";
 import { firestoreCaseStore } from "../services/firestoreCaseStore";
+import { classifyAndPersist } from "../services/caseTypeClassifier";
+import { patchCaseDoc } from "../services/caseService";
 
 export const sseQueueRouter = Router();
 
@@ -99,10 +101,13 @@ sseQueueRouter.get("/api/sse/queue", requireRole(["admin", "physician"]), (req: 
       const stateFilter = (req.query.state as string) || "NEEDS_REVIEW";
       const raw = await firestoreCaseStore.listCases({ status: stateFilter as any, limit: 200 });
 
-      // Annotate with severity + priority
+      // Annotate with severity + priority + caseType
       const annotated = raw.map((c: any) => {
         const severity = getSeverityFromCase(c);
-        return { ...c, _severity: severity, _priority: getPriorityLabel(severity) };
+        const withSev = { ...c, _severity: severity, _priority: getPriorityLabel(severity) };
+        if (withSev.caseType) return { ...withSev, caseTypePending: false };
+        classifyAndPersist(c.caseId, c, patchCaseDoc).catch(() => {});
+        return { ...withSev, caseTypePending: true };
       });
 
       // Sort by severity order then by createdAt desc

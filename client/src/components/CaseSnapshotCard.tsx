@@ -8,6 +8,7 @@ import {
   FileText,
   Shield,
 } from "lucide-react";
+import { CaseTypePill } from "@/components/CaseTypePill";
 
 export interface CaseSnapshot {
   caseId: string;
@@ -26,6 +27,14 @@ export interface CaseSnapshot {
   createdAt?: string;
   updatedAt?: string;
   patientName?: string;
+  caseType?: string;
+  caseTypePending?: boolean;
+  caseTypeMeta?: {
+    label:     string;
+    asyncSafe: boolean;
+    color:     string;
+    priority:  number;
+  };
 }
 
 type Props = {
@@ -58,8 +67,8 @@ export function CaseSnapshotCard({ snapshot, showOpenLink = true }: Props) {
     <Card className="mb-3" data-testid={`snapshot-card-${snapshot.caseId}`}>
       <CardContent className="pt-4 space-y-2">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-muted-foreground" />
+          <div className="flex items-center gap-2 flex-wrap">
+            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="font-medium text-sm">
               {snapshot.complaintLabel || snapshot.complaintId}
             </span>
@@ -68,6 +77,11 @@ export function CaseSnapshotCard({ snapshot, showOpenLink = true }: Props) {
                 — {snapshot.patientName}
               </span>
             )}
+            <CaseTypePill
+              label={snapshot.caseType}
+              pending={snapshot.caseTypePending}
+              color={snapshot.caseTypeMeta?.color}
+            />
           </div>
           {showOpenLink && (
             <Link href={`/review/${snapshot.caseId}`}>

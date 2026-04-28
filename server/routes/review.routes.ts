@@ -3,8 +3,10 @@ import { requireReviewAuth } from "../middleware/reviewAuth";
 import {
   getCase,
   listReviewQueue,
+  patchCaseDoc,
   setPhysicianReview,
 } from "../services/caseService";
+import { classifyAndPersist } from "../services/caseTypeClassifier";
 import { sendWhatsAppMessage } from "../whatsapp/send";
 import { appendAuditEvent }    from "../governance/audit";
 import { generateChartNote }      from "../assistant/telemedicineNoteService";
@@ -20,7 +22,12 @@ reviewRouter.get("/api/review/queue", async (req, res) => {
       (req.query.state as "NEEDS_REVIEW" | "TRIAGED") ?? "NEEDS_REVIEW";
     const limit = req.query.limit ? Number(req.query.limit) : 50;
     const cases = await listReviewQueue({ state, limit });
-    res.json(cases);
+    const enriched = cases.map((c: any) => {
+      if (c.caseType) return { ...c, caseTypePending: false };
+      classifyAndPersist(c.caseId, c, patchCaseDoc).catch(() => {});
+      return { ...c, caseTypePending: true };
+    });
+    res.json(enriched);
   } catch (e: any) {
     console.error("[Review] queue error:", e);
     res.status(500).json({ error: e.message });
