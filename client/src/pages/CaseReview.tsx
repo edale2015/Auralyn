@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { DischargeInstructionPanel } from "@/components/DischargeInstructionPanel";
 import { CDSSidebarPanel } from "@/components/CDSSidebarPanel";
 import { AmbientNotePanel } from "@/components/AmbientNotePanel";
+import { EConsultPanel } from "@/components/EConsultPanel";
 
 export default function CaseReview({ params }: { params: { caseId: string } }) {
   const { caseId }     = params;
@@ -243,6 +244,20 @@ export default function CaseReview({ params }: { params: { caseId: string } }) {
             </div>
           </CardContent>
         </Card>
+
+        {/* eConsult panel — shown for pcp and urgent_care dispositions only */}
+        {(c.triage?.disposition === "pcp" || c.triage?.disposition === "urgent_care") && (
+          <EConsultPanel
+            caseId={c.caseId}
+            complaint={c.complaint?.slug}
+            disposition={c.triage?.disposition}
+            topCluster={c.triage?.topCluster}
+            differential={c.triage?.differential ?? []}
+            confidence={c.triage?.confidence}
+            patientMedications={c.answers?.structured?.medications as string[] ?? []}
+            allergies={c.answers?.structured?.allergies as string[] ?? []}
+          />
+        )}
 
         {/* Answers */}
         <Card>
