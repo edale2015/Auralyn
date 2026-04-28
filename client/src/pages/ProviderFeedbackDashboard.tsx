@@ -9,6 +9,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { DashboardContextPrompt } from "@/components/DashboardContextPrompt";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -265,6 +266,17 @@ export default function ProviderFeedbackDashboard() {
         </div>
 
         {isLoading && <DashboardSkeleton />}
+
+        {!isLoading && summary && (
+          <DashboardContextPrompt
+            context="performance"
+            data={{
+              grade:        summary.grade,
+              overrideRate: summary.overrideRate,
+              totalCases:   summary.totalCases,
+            }}
+          />
+        )}
 
         {!isLoading && summary && (
           <>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DashboardContextPrompt } from "@/components/DashboardContextPrompt";
 import { CaseSnapshotCard, type CaseSnapshot } from "../components/CaseSnapshotCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,6 +100,8 @@ export default function ReviewQueueV2() {
   }, [stateFilter]);
 
   const criticalCount = buckets?.critical ?? 0;
+  const urgentCount   = snapshots.filter((s: any) => s._severity === "critical" || s._severity === "high").length;
+  const asyncCount    = snapshots.filter((s: any) => s.caseType === "Async Safe").length;
 
   return (
     <div className="p-4 sm:p-6 space-y-4" data-testid="page-review-queue-v2">
@@ -154,6 +157,15 @@ export default function ReviewQueueV2() {
           </Button>
         </div>
       </div>
+
+      <DashboardContextPrompt
+        context="queue"
+        data={{
+          urgent: urgentCount,
+          async:  asyncCount,
+          total:  snapshots.length,
+        }}
+      />
 
       {/* ── Severity buckets ── */}
       {buckets && <SeverityBucketBar buckets={buckets} />}

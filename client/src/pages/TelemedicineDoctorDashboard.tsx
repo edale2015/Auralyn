@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DashboardContextPrompt } from "@/components/DashboardContextPrompt";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { COMPLAINTS } from "@shared/complaints";
 import { ConversationPanel } from "@/components/ConversationPanel";
@@ -595,8 +596,9 @@ export default function TelemedicineDoctorDashboard() {
 
   const qc = useQueryClient();
 
-  const sessions = showAll ? (allData?.sessions ?? []) : (sessionData?.sessions ?? []);
-  const selected = sessions.find(s => s.caseId === selectedId) ?? null;
+  const sessions          = showAll ? (allData?.sessions ?? []) : (sessionData?.sessions ?? []);
+  const selected          = sessions.find(s => s.caseId === selectedId) ?? null;
+  const pendingDraftCount = sessions.filter(s => s.draftReply?.trim()).length;
 
   async function startNewSession() {
     if (!newId.trim()) return;
@@ -626,6 +628,16 @@ export default function TelemedicineDoctorDashboard() {
             <span className="text-xs font-medium text-slate-600">{sessionData?.sessions.length ?? 0} active</span>
           </div>
         </div>
+      </div>
+
+      <div className="mx-auto max-w-screen-2xl px-6 pt-4">
+        <DashboardContextPrompt
+          context="telemed"
+          data={{
+            active:        sessions.filter(s => s.status === "active").length,
+            pendingDrafts: pendingDraftCount,
+          }}
+        />
       </div>
 
       <div className="mx-auto max-w-screen-2xl p-6">

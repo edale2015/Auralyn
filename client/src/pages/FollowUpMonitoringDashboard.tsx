@@ -6,6 +6,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { DashboardContextPrompt } from "@/components/DashboardContextPrompt";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -214,6 +215,15 @@ export default function FollowUpMonitoringDashboard() {
             Refresh
           </button>
         </div>
+
+        <DashboardContextPrompt
+          context="followup"
+          data={{
+            escalated: escalated.length,
+            active:    active.length,
+            completed: completed.length,
+          }}
+        />
 
         {enrollments.length > 0 && (
           <div className="grid grid-cols-3 gap-2">

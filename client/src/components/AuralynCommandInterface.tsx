@@ -121,8 +121,23 @@ export function AuralynCommandInterface({ physicianId }: { physicianId?: string 
       }
       if (e.key === "Escape") setIsOpen(false);
     };
+
+    // Listen for pre-fill events from DashboardContextPrompt "Ask agent" buttons
+    const prefillHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.prefill) {
+        setInput(detail.prefill);
+        setIsOpen(true);
+        setTimeout(() => inputRef.current?.focus(), 80);
+      }
+    };
+
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("auralyn:open-command", prefillHandler);
+    return () => {
+      window.removeEventListener("keydown", handler);
+      window.removeEventListener("auralyn:open-command", prefillHandler);
+    };
   }, []);
 
   useEffect(() => {
