@@ -423,6 +423,11 @@ import { registerLoop, heartbeatLoop, stopLoop } from "./monitoring/loopRegistry
 import { runDriftCheck }                     from "./harness/driftCheck";
 import { evaluateCase }                     from "./hybrid-reasoning/hybridController";
 import { runWeeklyResearchRadar, getRadarStatus } from "./harness/researchRadar";
+import { specRouter }              from "./harness/specDrivenDevelopment";
+import { runPeriodicSkillNudge, activateSkill, retireSkill } from "./learning/clinicalSkillsSystem";
+import { db }                      from "./db";
+import { sql }                     from "drizzle-orm";
+import { requireReviewAuth }       from "./middleware/reviewAuth";
 
 const config = loadConfig();
 
@@ -1019,6 +1024,38 @@ app.post("/api/research-radar/run", async (_req, res) => {
   }
 });
 
+// ── Clinical Skills: CRUD routes ──────────────────────────────────────────────
+app.use(specRouter);
+
+app.get("/api/clinical-skills", requireReviewAuth, async (_req, res) => {
+  try {
+    const rows = await db.execute(sql`SELECT * FROM clinical_skills ORDER BY created_at DESC`);
+    res.json({ skills: rows.rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/clinical-skills/:id/activate", requireReviewAuth, async (req, res) => {
+  try {
+    const ok = await activateSkill(req.params.id, (req as any).user?.id ?? "phys1");
+    res.json({ ok });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/clinical-skills/:id/retire", requireReviewAuth, async (req, res) => {
+  try {
+    const ok = await retireSkill(req.params.id, (req as any).user?.id ?? "phys1", req.body.reason ?? "");
+    res.json({ ok });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+console.log("[ClinicalSkills] /api/clinical-skills routes registered");
+
 // ── Research Radar: weekly self-rescheduling scheduler ────────────────────────
 function scheduleResearchRadar(): void {
   const msUntilNextSunday4amUtc = (): number => {
@@ -1044,6 +1081,26 @@ function scheduleResearchRadar(): void {
   const delay = msUntilNextSunday4amUtc();
   console.log(`[ResearchRadar] Scheduler armed — first run in ${Math.round(delay / 60_000)} minutes (next Sunday 4am UTC)`);
   setTimeout(runAndReschedule, delay);
+}
+
+// ── Clinical Skills: nightly 3am UTC nudge scheduler ─────────────────────────
+function scheduleSkillNudge(): void {
+  const now     = new Date();
+  const next3am = new Date();
+  next3am.setUTCHours(3, 0, 0, 0);
+  if (next3am <= now) next3am.setUTCDate(next3am.getUTCDate() + 1);
+  const ms = next3am.getTime() - now.getTime();
+  console.log(`[ClinicalSkills] Nudge scheduler armed — first run in ${Math.round(ms / 60_000)} minutes (next 3am UTC)`);
+  setTimeout(async () => {
+    console.log("[ClinicalSkills] Running nightly skill nudge at", new Date().toISOString());
+    try {
+      const result = await runPeriodicSkillNudge();
+      console.log(`[ClinicalSkills] ✅ Nudge complete — ${result.skillsGenerated} new, ${result.skillsPending} pending`);
+    } catch (err: any) {
+      console.error("[ClinicalSkills] ❌ Nudge threw:", err.message);
+    }
+    scheduleSkillNudge();
+  }, ms);
 }
 
 // ── Drift canary: daily 2am UTC scheduler ────────────────────────────────────
@@ -1310,6 +1367,7 @@ app.use((req, res, next) => {
       startProductionScheduler();
       scheduleDriftCheck();
       scheduleResearchRadar();
+      scheduleSkillNudge();
 
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);

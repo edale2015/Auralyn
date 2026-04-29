@@ -94,6 +94,7 @@ import ClinicalDecisionPipelinePage from "@/pages/ClinicalDecisionPipelinePage";
 import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
 import GovernanceCommandCenterPage from "@/pages/GovernanceCommandCenterPage";
 import ResearchRadarDashboard      from "@/pages/ResearchRadarDashboard";
+import ClinicalSkillsDashboard    from "@/pages/ClinicalSkillsDashboard";
 import SkillMapPage from "@/pages/SkillMapPage";
 import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
 import SkillEvolutionLabPage from "@/pages/SkillEvolutionLabPage";
@@ -237,6 +238,7 @@ function WorkbenchRouter() {
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
         <Route path="/research-radar">{() => <RoleGuard allowedRoles={["admin"]}><ResearchRadarDashboard /></RoleGuard>}</Route>
+        <Route path="/clinical-skills">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalSkillsDashboard /></RoleGuard>}</Route>
         <Route path="/scope-command-center"  component={ScopeCommandCenter} />
         <Route path="/command-wall"          component={CommandWall} />
         <Route path="/regional-command"      component={RegionalCommand} />

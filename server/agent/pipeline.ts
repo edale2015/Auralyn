@@ -19,6 +19,7 @@ import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator
 import { assessUncertainty }    from "../reasoning/dualModelUncertaintySampler";
 import { OntologyFirewall }     from "../ontology/ontologyFirewall";
 import { OntologyFieldMapper }  from "../ontology/ontologyFieldMapper";
+import { retrieveRelevantSkills } from "../learning/clinicalSkillsSystem";
 
 export interface PipelineResult {
   state: CaseState;
@@ -400,6 +401,35 @@ export async function initializePipeline(
         type:     "HARNESS_CONTEXT_ERROR",
         severity: "warn",
         message:  `buildClinicalContext failed: ${harnessErr.message}`,
+      });
+    }
+
+    // ── Win 15: Clinical Skills — Tier 1 memory injection ────────────────────
+    // Retrieve active physician-approved playbooks for this complaint slug
+    // and prepend them to the system prompt so the LLM applies learned corrections.
+    try {
+      const complaintSlug = (updated as any)._ont?.complaintSlug ?? updated.normalizedComplaint ?? "";
+      if (complaintSlug) {
+        const skillResult = await retrieveRelevantSkills(complaintSlug, 3)
+          .catch(() => ({ skills: [], promptInjection: "", tokenEstimate: 0 }));
+
+        if (skillResult.promptInjection) {
+          (updated as any).systemPromptAdditions = [
+            ...((updated as any).systemPromptAdditions ?? []),
+            skillResult.promptInjection,
+          ];
+          events.push({
+            type:     "SKILLS_INJECTED",
+            severity: "info",
+            message:  `${skillResult.skills.length} clinical skills injected (~${skillResult.tokenEstimate} tokens) for complaint: ${complaintSlug}`,
+          });
+        }
+      }
+    } catch (skillErr: any) {
+      events.push({
+        type:     "SKILLS_INJECTION_ERROR",
+        severity: "warn",
+        message:  `retrieveRelevantSkills failed: ${skillErr.message}`,
       });
     }
 

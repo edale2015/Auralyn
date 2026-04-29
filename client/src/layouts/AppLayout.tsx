@@ -75,6 +75,7 @@ const NAV_ITEMS = [
   { path: ROUTES.AI_INTERACTION_MONITOR, label: "Interaction Monitor", icon: Eye },
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },
   { path: "/research-radar",            label: "Research Radar",            icon: Radar },
+  { path: "/clinical-skills",           label: "Clinical Skills",           icon: Brain },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },
