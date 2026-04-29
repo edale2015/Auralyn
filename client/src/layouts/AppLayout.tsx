@@ -32,6 +32,7 @@ import {
   BarChart3,
   Landmark,
   Package,
+  Radar,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -73,6 +74,7 @@ const NAV_ITEMS = [
   { path: "/care-pathway-optimizer", label: "Care Pathway Optimizer", icon: GitBranch },
   { path: ROUTES.AI_INTERACTION_MONITOR, label: "Interaction Monitor", icon: Eye },
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },
+  { path: "/research-radar",            label: "Research Radar",            icon: Radar },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },

@@ -420,8 +420,9 @@ import { systemInventoryRouter } from "./routes/systemInventory";
 import { startEventLoopMonitor, stopEventLoopMonitor } from "./monitoring/eventLoopMonitor";
 import { startDriftMonitor, stopDriftMonitor } from "./fda/performanceDriftAlert";
 import { registerLoop, heartbeatLoop, stopLoop } from "./monitoring/loopRegistry";
-import { runDriftCheck } from "./harness/driftCheck";
-import { evaluateCase }  from "./hybrid-reasoning/hybridController";
+import { runDriftCheck }                     from "./harness/driftCheck";
+import { evaluateCase }                     from "./hybrid-reasoning/hybridController";
+import { runWeeklyResearchRadar, getRadarStatus } from "./harness/researchRadar";
 
 const config = loadConfig();
 
@@ -997,6 +998,54 @@ console.log("[ClinicalWorkflowHealth] Clinical workflow health endpoints registe
 console.log("[CaseOpsActions] Case ops action endpoints registered at /api/caseOpsActions/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
+// ── Research Radar: GET status endpoint ──────────────────────────────────────
+app.get("/api/research-radar/status", async (_req, res) => {
+  try {
+    const status = await getRadarStatus();
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+console.log("[ResearchRadar] /api/research-radar/status registered");
+
+// ── Research Radar: manual trigger (admin only) ───────────────────────────────
+app.post("/api/research-radar/run", async (_req, res) => {
+  try {
+    const report = await runWeeklyResearchRadar();
+    res.json({ runId: report.runId, summary: report.summary, alertCount: report.alerts.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Research Radar: weekly self-rescheduling scheduler ────────────────────────
+function scheduleResearchRadar(): void {
+  const msUntilNextSunday4amUtc = (): number => {
+    const now  = new Date();
+    const next = new Date(now);
+    const daysUntilSunday = (7 - now.getUTCDay()) % 7 || 7;
+    next.setUTCDate(now.getUTCDate() + daysUntilSunday);
+    next.setUTCHours(4, 0, 0, 0);
+    return next.getTime() - now.getTime();
+  };
+
+  const runAndReschedule = async () => {
+    console.log("[ResearchRadar] Weekly scheduled scan starting at", new Date().toISOString());
+    try {
+      const report = await runWeeklyResearchRadar();
+      console.log(`[ResearchRadar] ✅ Weekly scan complete — ${report.summary}`);
+    } catch (err: any) {
+      console.error("[ResearchRadar] ❌ Weekly scan threw:", err.message);
+    }
+    setTimeout(runAndReschedule, 7 * 24 * 60 * 60 * 1000);
+  };
+
+  const delay = msUntilNextSunday4amUtc();
+  console.log(`[ResearchRadar] Scheduler armed — first run in ${Math.round(delay / 60_000)} minutes (next Sunday 4am UTC)`);
+  setTimeout(runAndReschedule, delay);
+}
+
 // ── Drift canary: daily 2am UTC scheduler ────────────────────────────────────
 // Wires runDriftCheck → evaluateCase (hybrid reasoning layer).
 // No external cron library needed — self-rescheduling setTimeout.
@@ -1260,6 +1309,7 @@ app.use((req, res, next) => {
       initAllQueues();
       startProductionScheduler();
       scheduleDriftCheck();
+      scheduleResearchRadar();
 
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);

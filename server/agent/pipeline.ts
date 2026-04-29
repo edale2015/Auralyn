@@ -16,6 +16,7 @@ import { runCrossoverHooks } from "../agents/crossoverHooks";
 import { runClinicalBrain } from "../core/clinicalBrainEngine";
 import { buildClinicalContext } from "../harness/harnessEnforcer";
 import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator";
+import { assessUncertainty }    from "../reasoning/dualModelUncertaintySampler";
 
 export interface PipelineResult {
   state: CaseState;
@@ -448,6 +449,45 @@ export async function initializePipeline(
       severity: "info",
       message: `Brain: ${brainOutput.differentials?.length ?? 0} differentials, disposition=${brainOutput.disposition ?? "none"}, nextQ=${brainOutput.nextQuestion ?? "none"}`,
     });
+
+    // ── Rec 4: Dual-Model Uncertainty Sampling ─────────────────────────────
+    // Runs a second LLM call at different temperature when primary confidence
+    // is in the 40-75% uncertainty zone. Surfaces LOW_AGREEMENT / CRITICAL_DIVERGENCE
+    // flags to the physician BEFORE they open the case.
+    try {
+      const primaryConf    = typeof brainOutput.calibration?.confidence === "number"
+        ? brainOutput.calibration.confidence
+        : 0.50;
+      const primaryTopDx   = brainOutput.differentials?.[0]?.diagnosis
+        ?? brainOutput.aggregatedDifferentials?.[0]?.diagnosis
+        ?? "Unknown";
+      const primaryDisp    = brainOutput.disposition ?? "routine_urgent";
+      const primaryDiff    = brainOutput.differentials ?? brainOutput.aggregatedDifferentials ?? [];
+
+      const caseIdForAudit = (updated as any).caseId ?? (updated as any).sessionId ?? "unknown";
+      const complaintSlug  = updated.normalizedComplaint ?? updated.chiefComplaint ?? "";
+      const systemPrompt   = `You are a clinical AI triage system. Analyze the patient presentation and return a structured differential assessment. Be conservative and flag any red flags or high-urgency conditions.`;
+
+      const uncertainty = await assessUncertainty(
+        { topDiagnosis: primaryTopDx, confidence: primaryConf, disposition: primaryDisp, differential: primaryDiff },
+        { caseId: caseIdForAudit, complaint: { slug: complaintSlug }, answers: { structured: (updated.answers as any) ?? {} } },
+        systemPrompt
+      );
+
+      (updated as any).uncertaintyAssessment = uncertainty;
+
+      events.push({
+        type:     "UNCERTAINTY_SAMPLED",
+        severity: uncertainty.flag === "CRITICAL_DIVERGENCE" ? "warn" : "info",
+        message:  `Uncertainty: flag=${uncertainty.flag}, divergence=${Math.round(uncertainty.divergenceScore * 100)}%, applied=${uncertainty.samplingApplied}`,
+      });
+    } catch (uncertErr: any) {
+      events.push({
+        type:     "UNCERTAINTY_SAMPLING_ERROR",
+        severity: "warn",
+        message:  `assessUncertainty failed: ${uncertErr.message}`,
+      });
+    }
   } catch (err: any) {
     events.push({
       type: "CLINICAL_BRAIN_ERROR",
