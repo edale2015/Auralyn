@@ -14,6 +14,7 @@ import { registerDynamicQuestion } from "./router";
 import { buildClinicalState } from "../services/clinicalStateBuilder";
 import { runCrossoverHooks } from "../agents/crossoverHooks";
 import { runClinicalBrain } from "../core/clinicalBrainEngine";
+import { buildClinicalContext } from "../harness/harnessEnforcer";
 
 export interface PipelineResult {
   state: CaseState;
@@ -326,10 +327,42 @@ export async function initializePipeline(
       .filter((q) => !q.answered)
       .map((q) => q.questionId);
 
+    // ── Harness Addition 3: inject EHR clinical context before LLM call ──
+    // GP-05: EHR wins for medications/allergies; LOW_CONTEXT flagged if absent.
+    let harnessContext: Awaited<ReturnType<typeof buildClinicalContext>> | null = null;
+    try {
+      harnessContext = await buildClinicalContext(
+        {
+          caseId:    (updated as any).caseId ?? (updated as any).sessionId ?? "unknown",
+          complaint: updated.normalizedComplaint ?? updated.chiefComplaint,
+          answers:   { structured: {
+            age:         updated.demographics?.age,
+            sex:         updated.demographics?.sex,
+            medications: updated.modifiers?.meds      ?? [],
+            allergies:   updated.modifiers?.allergies ?? [],
+            conditions:  updated.modifiers?.pmh       ?? [],
+          }},
+        },
+        { ehrVendor: "mock" }   // real vendor + token injected when FHIR token is present
+      );
+      (updated as any).harnessContext = harnessContext;
+      events.push({
+        type:     "HARNESS_CONTEXT_INJECTED",
+        severity: "info",
+        message:  `Harness context: level=${harnessContext.dataQuality.contextLevel}, meds=${harnessContext.medications.length}, allergies=${harnessContext.allergies.length}`,
+      });
+    } catch (harnessErr: any) {
+      events.push({
+        type:     "HARNESS_CONTEXT_ERROR",
+        severity: "warn",
+        message:  `buildClinicalContext failed: ${harnessErr.message}`,
+      });
+    }
+
     const brainOutput = await runClinicalBrain({
       complaint: updated.chiefComplaint ?? updated.normalizedComplaint ?? "",
       answers: updated.answers || {},
-      state: updated,
+      state: updated,  // harnessContext is now on updated.harnessContext
       differentialCandidates,
       availableQuestions,
     });

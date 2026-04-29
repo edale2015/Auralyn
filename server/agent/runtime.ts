@@ -3,6 +3,13 @@ import type { AgentRunResponse, NormalizedResult, TraceEvent, TraceStep } from "
 import { routeNextAction } from "./router";
 import { executeAction, hashNormalized } from "./executors";
 import { initializePipeline } from "./pipeline";
+import {
+  createAgentState,
+  enforceAgentCaps,
+  incrementStep,
+  incrementLlmCall,
+  HarnessCapExceeded,
+} from "../harness/harnessEnforcer";
 
 function nowISO() {
   return new Date().toISOString();
@@ -64,13 +71,36 @@ export async function runAgentLoop(initial: CaseState, cfg: AgentRunConfig): Pro
 
   let stopReason = "MAX_STEPS";
 
+  // ── Harness: initialise agent state for safety caps enforcement ───────────
+  const caseId = (initial as any).caseId ?? (initial as any).sessionId ?? "unknown";
+  let agentState = createAgentState(caseId);
+
   for (let i = 1; i <= cfg.maxSteps; i++) {
+    // ── Harness: enforce caps at the top of every cycle (GP-01, AGENTS.md §SAFETY_CAPS) ──
+    try {
+      enforceAgentCaps(agentState);
+    } catch (err) {
+      if (err instanceof HarnessCapExceeded) {
+        events.push({
+          type: "HARNESS_CAP_EXCEEDED",
+          severity: "error",
+          message: err.message,
+        } as any);
+        stopReason = `HARNESS_CAP_EXCEEDED:${err.cap}`;
+        break;
+      }
+      throw err;
+    }
+
     const next = routeNextAction(state, cfg);
     const exec = await executeAction(state, next.action, cfg, i);
 
     state = exec.state;
     if (exec.step) steps.push(exec.step);
     if (exec.events) events.push(...exec.events);
+
+    // ── Harness: increment counters after each cycle ──────────────────────
+    agentState = incrementStep(incrementLlmCall(agentState, 0.02));
 
     if (exec.stop) {
       stopReason = exec.stop.reason;

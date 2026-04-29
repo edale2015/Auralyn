@@ -420,6 +420,8 @@ import { systemInventoryRouter } from "./routes/systemInventory";
 import { startEventLoopMonitor, stopEventLoopMonitor } from "./monitoring/eventLoopMonitor";
 import { startDriftMonitor, stopDriftMonitor } from "./fda/performanceDriftAlert";
 import { registerLoop, heartbeatLoop, stopLoop } from "./monitoring/loopRegistry";
+import { runDriftCheck } from "./harness/driftCheck";
+import { evaluateCase }  from "./hybrid-reasoning/hybridController";
 
 const config = loadConfig();
 
@@ -995,6 +997,58 @@ console.log("[ClinicalWorkflowHealth] Clinical workflow health endpoints registe
 console.log("[CaseOpsActions] Case ops action endpoints registered at /api/caseOpsActions/*");
 console.log("[Telegram] Generic triage webhook registered at /telegram/webhook");
 
+// ── Drift canary: daily 2am UTC scheduler ────────────────────────────────────
+// Wires runDriftCheck → evaluateCase (hybrid reasoning layer).
+// No external cron library needed — self-rescheduling setTimeout.
+function scheduleDriftCheck(): void {
+  const msUntilNext2amUtc = (): number => {
+    const now   = new Date();
+    const next  = new Date(now);
+    next.setUTCHours(2, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+    return next.getTime() - now.getTime();
+  };
+
+  const driftTriageFn = async (
+    complaint: string,
+    symptoms:  string[],
+    ctx?:      { age?: number; sex?: string; allergies?: string[]; medications?: string[] }
+  ) => {
+    const result = await evaluateCase({
+      caseId:    `drift-canary-${Date.now()}`,
+      complaint,
+      features:  symptoms,
+      age:       ctx?.age,
+      sex:       ctx?.sex,
+    });
+    return {
+      disposition:  result.disposition,
+      topDiagnosis: result.layer3_ensemble_differential?.[0]?.diagnosis
+                    ?? result.layer3_probabilistic?.topDiagnosis
+                    ?? "unknown",
+      confidence:   result.confidence,
+      redFlagFired: result.layer1_safety?.override === true,
+    };
+  };
+
+  const runAndReschedule = async () => {
+    console.log("[DriftCanary] Running daily drift check at", new Date().toISOString());
+    try {
+      const summary = await runDriftCheck(driftTriageFn);
+      console.log(`[DriftCanary] ✅ Done — ${summary.passed}/${summary.passed + summary.failed} passed`);
+    } catch (err: any) {
+      console.error("[DriftCanary] ❌ runDriftCheck threw:", err.message);
+    }
+    setTimeout(runAndReschedule, 24 * 60 * 60 * 1000);  // refire in exactly 24h
+  };
+
+  const delay = msUntilNext2amUtc();
+  console.log(`[DriftCanary] Scheduler armed — first run in ${Math.round(delay / 60_000)} minutes (next 2am UTC)`);
+  setTimeout(runAndReschedule, delay);
+}
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -1205,6 +1259,7 @@ app.use((req, res, next) => {
 
       initAllQueues();
       startProductionScheduler();
+      scheduleDriftCheck();
 
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);
