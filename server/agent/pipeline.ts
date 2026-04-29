@@ -15,6 +15,7 @@ import { buildClinicalState } from "../services/clinicalStateBuilder";
 import { runCrossoverHooks } from "../agents/crossoverHooks";
 import { runClinicalBrain } from "../core/clinicalBrainEngine";
 import { buildClinicalContext } from "../harness/harnessEnforcer";
+import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator";
 
 export interface PipelineResult {
   state: CaseState;
@@ -356,6 +357,49 @@ export async function initializePipeline(
         type:     "HARNESS_CONTEXT_ERROR",
         severity: "warn",
         message:  `buildClinicalContext failed: ${harnessErr.message}`,
+      });
+    }
+
+    // ── Win 12: Geometric Reasoning — runs before LLM proposal ───────────────
+    // Geometry (ClinicalKnowledgeGraph) + Metric (BayesianConfidenceUpdater)
+    // produce a promptEnrichment block that is prepended to the system prompt,
+    // giving the LLM structured pre-analysis instead of flat symptom text.
+    try {
+      const complaintSlug = updated.normalizedComplaint ?? updated.chiefComplaint ?? "";
+      const rawAnswers    = (updated.answers as Record<string, any>) ?? {};
+
+      const geoResult = await runGeometricReasoning(
+        complaintSlug,
+        rawAnswers,
+        {
+          patientAge:       updated.demographics?.age,
+          patientSex:       updated.demographics?.sex,
+          knownMedications: updated.modifiers?.meds      ?? [],
+          knownConditions:  updated.modifiers?.pmh       ?? [],
+        }
+      );
+
+      (updated as any).geometricReasoning = geoResult;
+
+      // Inject prompt enrichment so runClinicalBrain receives pre-structured analysis
+      if (!(updated as any).systemPromptAdditions) {
+        (updated as any).systemPromptAdditions = [];
+      }
+      (updated as any).systemPromptAdditions.push(geoResult.promptEnrichment);
+
+      events.push({
+        type:     "GEOMETRIC_REASONING_INJECTED",
+        severity: "info",
+        message:  `GeoReasoning: combined=${Math.round(geoResult.combinedConfidence * 100)}%, ` +
+                  `redFlags=${geoResult.redFlagSignals.length}, ` +
+                  `clusters=${geoResult.graphAnalysis.activatedClusters.length}, ` +
+                  `topDx=${geoResult.beliefState.topDiagnosis?.diagnosis ?? "none"}`,
+      });
+    } catch (geoErr: any) {
+      events.push({
+        type:     "GEOMETRIC_REASONING_ERROR",
+        severity: "warn",
+        message:  `runGeometricReasoning failed: ${geoErr.message}`,
       });
     }
 
