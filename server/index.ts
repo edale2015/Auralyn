@@ -425,6 +425,7 @@ import { evaluateCase }                     from "./hybrid-reasoning/hybridContr
 import { runWeeklyResearchRadar, getRadarStatus } from "./harness/researchRadar";
 import { specRouter }              from "./harness/specDrivenDevelopment";
 import { runPeriodicSkillNudge, activateSkill, retireSkill } from "./learning/clinicalSkillsSystem";
+import { SelfHealingMonitor, recordSchedulerHeartbeat } from "./infra/selfHealingMonitor";
 import { db }                      from "./db";
 import { sql }                     from "drizzle-orm";
 import { requireReviewAuth }       from "./middleware/reviewAuth";
@@ -1056,6 +1057,44 @@ app.post("/api/clinical-skills/:id/retire", requireReviewAuth, async (req, res) 
 
 console.log("[ClinicalSkills] /api/clinical-skills routes registered");
 
+// ── Infrastructure status route ───────────────────────────────────────────────
+app.get("/api/infra/status", requireReviewAuth, async (_req, res) => {
+  try {
+    const services = SelfHealingMonitor.getHealthSummary();
+
+    const incidents = await db.execute(sql`
+      SELECT
+        event_data->>'incidentId'       AS "incidentId",
+        event_data->>'service'          AS service,
+        timestamp                        AS "detectedAt",
+        event_data->>'succeeded'        AS succeeded,
+        event_data->>'requiresHuman'    AS "requiresHuman",
+        event_data->>'diagnosisSummary' AS "diagnosisSummary"
+      FROM audit_hash_chain
+      WHERE event_type IN ('SELF_HEAL_SUCCEEDED', 'SELF_HEAL_FAILED')
+      ORDER BY timestamp DESC
+      LIMIT 10
+    `).catch(() => ({ rows: [] }));
+
+    const serviceList = Object.values(services);
+    const allHealthy  = serviceList.length > 0 && serviceList.every(s => s.status === "healthy");
+
+    res.json({
+      services,
+      lastRunAt:  new Date().toISOString(),
+      allHealthy,
+      incidents:  (incidents.rows as any[]).map(r => ({
+        ...r,
+        succeeded:     r.succeeded === "true",
+        requiresHuman: r.requiresHuman === "true",
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+console.log("[SelfHealing] /api/infra/status registered");
+
 // ── Research Radar: weekly self-rescheduling scheduler ────────────────────────
 function scheduleResearchRadar(): void {
   const msUntilNextSunday4amUtc = (): number => {
@@ -1068,6 +1107,7 @@ function scheduleResearchRadar(): void {
   };
 
   const runAndReschedule = async () => {
+    recordSchedulerHeartbeat("research_radar");
     console.log("[ResearchRadar] Weekly scheduled scan starting at", new Date().toISOString());
     try {
       const report = await runWeeklyResearchRadar();
@@ -1092,6 +1132,7 @@ function scheduleSkillNudge(): void {
   const ms = next3am.getTime() - now.getTime();
   console.log(`[ClinicalSkills] Nudge scheduler armed — first run in ${Math.round(ms / 60_000)} minutes (next 3am UTC)`);
   setTimeout(async () => {
+    recordSchedulerHeartbeat("skill_nudge");
     console.log("[ClinicalSkills] Running nightly skill nudge at", new Date().toISOString());
     try {
       const result = await runPeriodicSkillNudge();
@@ -1140,6 +1181,7 @@ function scheduleDriftCheck(): void {
   };
 
   const runAndReschedule = async () => {
+    recordSchedulerHeartbeat("drift_canary");
     console.log("[DriftCanary] Running daily drift check at", new Date().toISOString());
     try {
       const summary = await runDriftCheck(driftTriageFn);
@@ -1368,6 +1410,11 @@ app.use((req, res, next) => {
       scheduleDriftCheck();
       scheduleResearchRadar();
       scheduleSkillNudge();
+
+      SelfHealingMonitor.start();
+      SelfHealingMonitor.registerSchedulerRearm("drift_canary_scheduler",   () => scheduleDriftCheck());
+      SelfHealingMonitor.registerSchedulerRearm("research_radar_scheduler", () => scheduleResearchRadar());
+      SelfHealingMonitor.registerSchedulerRearm("skill_nudge_scheduler",    () => scheduleSkillNudge());
 
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);

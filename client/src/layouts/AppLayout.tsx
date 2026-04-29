@@ -76,6 +76,7 @@ const NAV_ITEMS = [
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },
   { path: "/research-radar",            label: "Research Radar",            icon: Radar },
   { path: "/clinical-skills",           label: "Clinical Skills",           icon: Brain },
+  { path: "/infra-status",             label: "Infrastructure",             icon: Activity },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },
