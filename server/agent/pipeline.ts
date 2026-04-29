@@ -17,6 +17,8 @@ import { runClinicalBrain } from "../core/clinicalBrainEngine";
 import { buildClinicalContext } from "../harness/harnessEnforcer";
 import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator";
 import { assessUncertainty }    from "../reasoning/dualModelUncertaintySampler";
+import { OntologyFirewall }     from "../ontology/ontologyFirewall";
+import { OntologyFieldMapper }  from "../ontology/ontologyFieldMapper";
 
 export interface PipelineResult {
   state: CaseState;
@@ -322,6 +324,46 @@ export async function initializePipeline(
     }
   }
 
+  // ── Win 14 Gate 1: Ontology Intake Firewall ─────────────────────────────────
+  // Validates the case structure BEFORE any LLM call.
+  // Blocks malformed/unsafe cases, enriches all downstream consumers via _ont.
+  const _caseDocForOntology = {
+    caseId:    (updated as any).caseId ?? (updated as any).sessionId ?? "unknown",
+    complaint: updated.normalizedComplaint ?? updated.chiefComplaint,
+    triage:    (updated as any).triage,
+    source:    (updated as any).source,
+    answers:   { structured: (updated.answers as any) ?? {} },
+  };
+  try {
+    const intakeGate = await OntologyFirewall.guardIntake(_caseDocForOntology);
+    if (intakeGate.blocked) {
+      events.push({
+        type:     "ONTOLOGY_INTAKE_BLOCKED",
+        severity: "warn",
+        message:  `Ontology Gate 1 blocked: ${intakeGate.reason}`,
+      });
+      // Degrade gracefully — log the violation but continue pipeline
+    } else {
+      if (intakeGate.warnings.length > 0) {
+        (updated as any).ontologyWarnings = intakeGate.warnings;
+      }
+    }
+    // Enrich with canonical _ont fields — available to all downstream consumers
+    const _enriched = OntologyFieldMapper.enrichCaseDoc(_caseDocForOntology);
+    (updated as any)._ont = _enriched._ont;
+    events.push({
+      type:     "ONTOLOGY_GATE1_PASSED",
+      severity: "info",
+      message:  `Ontology: disposition=${_enriched._ont.disposition ?? "unset"}, complaint=${_enriched._ont.complaintSlug ?? "undifferentiated"}, urgency=${_enriched._ont.urgencyLevel}`,
+    });
+  } catch (ontGate1Err: any) {
+    events.push({
+      type:     "ONTOLOGY_GATE1_ERROR",
+      severity: "warn",
+      message:  `ontologyFirewall.guardIntake threw: ${ontGate1Err.message}`,
+    });
+  }
+
   // ─── CLINICAL BRAIN ENGINE ────────────────────────────────────────────────
   try {
     const differentialCandidates = updated.activeClusters.map((id) => ({ clusterId: id, score: 1 }));
@@ -449,6 +491,45 @@ export async function initializePipeline(
       severity: "info",
       message: `Brain: ${brainOutput.differentials?.length ?? 0} differentials, disposition=${brainOutput.disposition ?? "none"}, nextQ=${brainOutput.nextQuestion ?? "none"}`,
     });
+
+    // ── Win 14 Gate 2: Ontology Triage Output Firewall ─────────────────────
+    // Catches ontologically impossible AI outputs before the physician sees them.
+    // Key rule: red flag + SELF_CARE disposition is a hard violation → force URGENT_CARE.
+    try {
+      const triageGate = await OntologyFirewall.guardTriageOutput({
+        caseId:       _caseDocForOntology.caseId,
+        disposition:  brainOutput.disposition ?? "self_care",
+        confidence:   brainOutput.calibration?.confidence ?? 0.5,
+        topDiagnosis: brainOutput.differentials?.[0]?.diagnosis
+                      ?? brainOutput.aggregatedDifferentials?.[0]?.diagnosis
+                      ?? "",
+        redFlagFired: (brainOutput as any).redFlagFired ?? false,
+        redFlags:     (brainOutput as any).redFlags ?? [],
+        differential: brainOutput.differentials ?? brainOutput.aggregatedDifferentials ?? [],
+      });
+      if (triageGate.blocked) {
+        events.push({
+          type:     "ONTOLOGY_TRIAGE_BLOCKED",
+          severity: "warn",
+          message:  `Triage Gate 2 blocked: ${triageGate.reason} — forced URGENT_CARE`,
+        });
+        brainOutput.disposition = "urgent_care";
+        (updated as any).triageOntologyViolation = triageGate.reason;
+      } else if (triageGate.warnings.length > 0) {
+        (updated as any).triageOntologyWarnings = triageGate.warnings;
+        events.push({
+          type:     "ONTOLOGY_TRIAGE_WARNINGS",
+          severity: "info",
+          message:  `Triage Gate 2 warnings: ${triageGate.warnings.join(" | ")}`,
+        });
+      }
+    } catch (ontGate2Err: any) {
+      events.push({
+        type:     "ONTOLOGY_GATE2_ERROR",
+        severity: "warn",
+        message:  `ontologyFirewall.guardTriageOutput threw: ${ontGate2Err.message}`,
+      });
+    }
 
     // ── Rec 4: Dual-Model Uncertainty Sampling ─────────────────────────────
     // Runs a second LLM call at different temperature when primary confidence

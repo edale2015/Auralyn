@@ -12,6 +12,8 @@ import { appendAuditEvent }    from "../governance/audit";
 import { generateChartNote }      from "../assistant/telemedicineNoteService";
 import { routeToSpecialtyCouncil } from "../assistant/specialtyRouter";
 import { enrollInFollowUp }        from "../followup/followUpService";
+import { OntologyFirewall }         from "../ontology/ontologyFirewall";
+import { OntologyFieldMapper }      from "../ontology/ontologyFieldMapper";
 
 export const reviewRouter = Router();
 
@@ -24,9 +26,13 @@ reviewRouter.get("/api/review/queue", async (req, res) => {
     const limit = req.query.limit ? Number(req.query.limit) : 50;
     const cases = await listReviewQueue({ state, limit });
     const enriched = cases.map((c: any) => {
-      if (c.caseType) return { ...c, caseTypePending: false };
-      classifyAndPersist(c.caseId, c, patchCaseDoc).catch(() => {});
-      return { ...c, caseTypePending: true };
+      const withCaseType = c.caseType
+        ? { ...c, caseTypePending: false }
+        : (() => { classifyAndPersist(c.caseId, c, patchCaseDoc).catch(() => {}); return { ...c, caseTypePending: true }; })();
+      // ── Win 14 Step 7: Enrich every queued case with ontology _ont fields ──
+      // Frontend CaseSnapshotCard.tsx can use c._ont.returnPrecautionsKey,
+      // c._ont.dispositionLabel, c._ont.isAsyncSafe, etc.
+      return OntologyFieldMapper.enrichCaseDoc(withCaseType);
     });
     res.json(enriched);
   } catch (e: any) {
@@ -81,28 +87,49 @@ reviewRouter.post("/api/review/case/:caseId", async (req, res) => {
       const isWA     = doc?.source?.channel === "whatsapp";
 
       if (isWA && phone) {
-        sendWhatsAppMessage(phone, dischargeText).catch((err: Error) =>
-          console.error("[Review] Discharge WA send failed", {
-            caseId: req.params.caseId, error: err.message,
-          })
-        );
-
-        appendAuditEvent({
-          actor:      reviewer?.id ?? "phys1",
-          action:     "DISCHARGE_INSTRUCTIONS_SENT",
-          entityId:   req.params.caseId,
-          entityType: "case",
-          details: {
-            channel:   "whatsapp",
-            phone,
-            status,
-            charCount: dischargeText.length,
-          },
-        }).catch(() =>
-          console.error("[Review] Discharge audit event write failed", {
-            caseId: req.params.caseId,
-          })
-        );
+        // ── Win 14 Gate 3: Discharge Ontology Firewall ──────────────────────
+        const dischargeGate = await OntologyFirewall.guardDischarge({
+          caseId:        req.params.caseId,
+          dischargeText: dischargeText!,
+          physicianId:   reviewer?.id,
+          patientPhone:  phone,
+          channel:       "whatsapp",
+        });
+        if (dischargeGate.blocked) {
+          console.error(`[OntologyFirewall] Discharge blocked for ${req.params.caseId}: ${dischargeGate.reason}`);
+          appendAuditEvent({
+            actor:      reviewer?.id ?? "system",
+            action:     "DISCHARGE_ONTOLOGY_BLOCKED",
+            entityId:   req.params.caseId,
+            entityType: "case",
+            details:    { reason: dischargeGate.reason, violations: dischargeGate.violations.map(v => v.constraint) },
+          }).catch(() => {});
+        } else {
+          if (dischargeGate.warnings.length > 0) {
+            console.warn(`[OntologyFirewall] Discharge warnings for ${req.params.caseId}:`, dischargeGate.warnings);
+          }
+          sendWhatsAppMessage(phone, dischargeText!).catch((err: Error) =>
+            console.error("[Review] Discharge WA send failed", {
+              caseId: req.params.caseId, error: err.message,
+            })
+          );
+          appendAuditEvent({
+            actor:      reviewer?.id ?? "phys1",
+            action:     "DISCHARGE_INSTRUCTIONS_SENT",
+            entityId:   req.params.caseId,
+            entityType: "case",
+            details: {
+              channel:   "whatsapp",
+              phone,
+              status,
+              charCount: dischargeText!.length,
+            },
+          }).catch(() =>
+            console.error("[Review] Discharge audit event write failed", {
+              caseId: req.params.caseId,
+            })
+          );
+        }
       }
     }
 
@@ -114,15 +141,29 @@ reviewRouter.post("/api/review/case/:caseId", async (req, res) => {
       const isWhatsApp   = followUpDoc?.source?.channel === "whatsapp";
 
       if (isWhatsApp && phone && slug) {
-        enrollInFollowUp({
+        // ── Win 14 Gate 4: Follow-Up Ontology Firewall ─────────────────────
+        const followUpGate = await OntologyFirewall.guardFollowUpEnrollment({
           caseId:        req.params.caseId,
-          complaintSlug: slug,
+          complaintSlug: typeof slug === "string" ? slug : (slug?.slug ?? ""),
           patientPhone:  phone,
-          patientName:   followUpDoc?.answers?.structured?.name ?? "Patient",
-          physicianId:   reviewer?.id ?? (req as any).user?.id,
-        }).catch((err: Error) =>
-          console.error("[Review] Follow-up enrollment failed", { caseId: req.params.caseId, err: err.message })
-        );
+          disposition:   followUpDoc?.triage?.disposition,
+        });
+        if (followUpGate.blocked) {
+          console.error(`[OntologyFirewall] Follow-up enrollment blocked for ${req.params.caseId}: ${followUpGate.reason}`);
+        } else {
+          if (followUpGate.warnings.length > 0) {
+            console.warn(`[OntologyFirewall] Follow-up warnings for ${req.params.caseId}:`, followUpGate.warnings);
+          }
+          enrollInFollowUp({
+            caseId:        req.params.caseId,
+            complaintSlug: typeof slug === "string" ? slug : (slug?.slug ?? ""),
+            patientPhone:  phone,
+            patientName:   followUpDoc?.answers?.structured?.name ?? "Patient",
+            physicianId:   reviewer?.id ?? (req as any).user?.id,
+          }).catch((err: Error) =>
+            console.error("[Review] Follow-up enrollment failed", { caseId: req.params.caseId, err: err.message })
+          );
+        }
       }
     }
 
