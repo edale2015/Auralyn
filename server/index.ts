@@ -1095,6 +1095,34 @@ app.get("/api/infra/status", requireReviewAuth, async (_req, res) => {
 });
 console.log("[SelfHealing] /api/infra/status registered");
 
+// ── CME Quiz route ─────────────────────────────────────────────────────────────
+app.post("/api/cme/chat", requireReviewAuth, async (req, res) => {
+  try {
+    const { messages, systemPrompt } = req.body as {
+      messages:     Array<{ role: "user" | "assistant"; content: string }>;
+      systemPrompt: string;
+    };
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages array required" });
+    }
+
+    const { llmGateway } = await import("./gateway/llmGateway");
+    const result = await llmGateway.complete({
+      purpose:  "cme_quiz",
+      messages,
+      system:   systemPrompt,
+      maxTokens: 800,
+    });
+
+    res.json({ response: result.content });
+  } catch (err: any) {
+    console.error("[CME] Chat error:", err.message);
+    res.status(500).json({ error: "Quiz generation failed" });
+  }
+});
+console.log("[CME] /api/cme/chat registered");
+
 // ── Research Radar: weekly self-rescheduling scheduler ────────────────────────
 function scheduleResearchRadar(): void {
   const msUntilNextSunday4amUtc = (): number => {

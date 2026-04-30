@@ -33,6 +33,7 @@ import {
   Landmark,
   Package,
   Radar,
+  GraduationCap,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -76,6 +77,7 @@ const NAV_ITEMS = [
   { path: "/governance-command-center", label: "Governance Command Center", icon: ShieldCheck },
   { path: "/research-radar",            label: "Research Radar",            icon: Radar },
   { path: "/clinical-skills",           label: "Clinical Skills",           icon: Brain },
+  { path: "/cme-quiz",                 label: "CME Quiz",                   icon: GraduationCap },
   { path: "/infra-status",             label: "Infrastructure",             icon: Activity },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
