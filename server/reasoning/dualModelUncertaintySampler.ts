@@ -17,10 +17,8 @@
  * High-confidence cases skip the second call.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { llmGateway } from "../gateway/llmGateway";
 import { appendAuditEvent } from "../governance/audit";
-
-const anthropic = new Anthropic();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -124,17 +122,18 @@ async function runSample(
   _temperature: number,
   label:        string
 ): Promise<ModelSample> {
-  const response = await anthropic.messages.create({
-    model:      "claude-opus-4-5",
-    max_tokens: 600,
-    system:     systemPrompt + `\n\nReturn ONLY valid JSON: { "topDiagnosis": string, "confidence": number, "disposition": string, "differentialTop3": string[], "rawSummary": string }`,
-    messages: [{
+  const gatewayResult = await llmGateway.complete({
+    purpose:   "uncertainty_sampler",
+    messages:  [{
       role:    "user",
       content: `Analyze this clinical case and return your assessment:\n\n${caseContext}\n\nReturn JSON only.`,
     }],
+    system:    systemPrompt + `\n\nReturn ONLY valid JSON: { "topDiagnosis": string, "confidence": number, "disposition": string, "differentialTop3": string[], "rawSummary": string }`,
+    maxTokens: 600,
+    skipCache: true,
   });
 
-  const text  = response.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+  const text  = gatewayResult.content;
   const clean = text.replace(/```json|```/g, "").trim();
 
   try {

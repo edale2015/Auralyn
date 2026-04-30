@@ -20,14 +20,12 @@
  *   Tier 4 → KB rules + ontology (Win 14 layer)
  */
 
-import Anthropic         from "@anthropic-ai/sdk";
+import { llmGateway }    from "../gateway/llmGateway";
 import { db }            from "../db";
 import { sql }           from "drizzle-orm";
 import { appendAuditEvent } from "../governance/audit";
 import * as fs           from "fs";
 import * as path         from "path";
-
-const anthropic = new Anthropic();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -132,20 +130,8 @@ export async function generateSkillFromOverrides(overrideData: {
 
   if (overrideData.overrideCount < 3) return null;
 
-  const response = await anthropic.messages.create({
-    model:      "claude-opus-4-20250514",
-    max_tokens: 1500,
-    system: `You are generating a Clinical Skill document for Auralyn, an urgent care AI triage system.
-A Clinical Skill is a concise, actionable playbook that corrects a known AI reasoning failure.
-
-The skill will be injected into the AI's system prompt to prevent future errors.
-It must be:
-- Specific (not vague clinical advice)
-- Actionable (the AI must know exactly what to do differently)
-- Evidence-based (grounded in clinical guidelines)
-- Concise (the entire skill injects as <200 tokens)
-
-Return ONLY valid JSON matching the ClinicalSkill structure. No markdown.`,
+  const gatewayResult = await llmGateway.complete({
+    purpose:  "skill_generator",
     messages: [{
       role:    "user",
       content: `Generate a Clinical Skill from this override pattern:
@@ -169,9 +155,22 @@ Return JSON:
   "evidenceBasis": "which guideline or clinical rule supports this (1 sentence)"
 }`,
     }],
+    system:    `You are generating a Clinical Skill document for Auralyn, an urgent care AI triage system.
+A Clinical Skill is a concise, actionable playbook that corrects a known AI reasoning failure.
+
+The skill will be injected into the AI's system prompt to prevent future errors.
+It must be:
+- Specific (not vague clinical advice)
+- Actionable (the AI must know exactly what to do differently)
+- Evidence-based (grounded in clinical guidelines)
+- Concise (the entire skill injects as <200 tokens)
+
+Return ONLY valid JSON matching the ClinicalSkill structure. No markdown.`,
+    maxTokens: 1500,
+    cacheKey:  `skill-generate:${overrideData.complaintSlug}:${overrideData.overrideCount}`,
   });
 
-  const text  = response.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+  const text  = gatewayResult.content;
   const clean = text.replace(/```json|```/g, "").trim();
 
   let parsed: any;

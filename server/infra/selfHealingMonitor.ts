@@ -36,9 +36,7 @@
 import { db }            from "../db";
 import { sql }           from "drizzle-orm";
 import { appendAuditEvent } from "../governance/audit";
-import Anthropic          from "@anthropic-ai/sdk";
-
-const anthropic = new Anthropic();
+import { llmGateway }    from "../gateway/llmGateway";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,12 +247,8 @@ async function diagnoseFailure(health: ServiceHealth): Promise<string> {
     .map(r => `${r.timestamp}: ${r.event_type} (actor: ${r.actor})`)
     .join("\n");
 
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-20250514",
-    max_tokens: 500,
-    system: `You are diagnosing a service failure in Auralyn, a clinical AI triage system.
-Be concise and specific. Identify the most likely root cause and the safest remediation.
-Focus on non-destructive, reversible actions. Never suggest actions that could affect patient data.`,
+  const gatewayResult = await llmGateway.complete({
+    purpose:  "retrieval_pruner",
     messages: [{
       role:    "user",
       content: `Service failure detected:
@@ -271,9 +265,14 @@ ${eventSummary || "No recent events found"}
 Diagnose the most likely root cause and suggest the safest automated remediation.
 Keep response under 200 words.`,
     }],
+    system:    `You are diagnosing a service failure in Auralyn, a clinical AI triage system.
+Be concise and specific. Identify the most likely root cause and the safest remediation.
+Focus on non-destructive, reversible actions. Never suggest actions that could affect patient data.`,
+    maxTokens: 500,
+    cacheKey:  `diagnose:${health.service}:${health.failureCount}`,
   });
 
-  return response.content.filter(b => b.type === "text").map(b => (b as any).text).join("").trim();
+  return gatewayResult.content.trim();
 }
 
 // ─── Safe remediations ────────────────────────────────────────────────────────

@@ -16,11 +16,9 @@
  *   After:   One Sonnet retrieval call + one Opus reasoning call (~$0.04/case)
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { db }   from "../db";
-import { sql }  from "drizzle-orm";
-
-const anthropic = new Anthropic();
+import { llmGateway } from "../gateway/llmGateway";
+import { db }         from "../db";
+import { sql }        from "drizzle-orm";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -157,20 +155,21 @@ async function pruneIrrelevantChunks(
     `[${i}] ID:${c.id} TYPE:${c.type}\n${c.content.slice(0, 200)}`
   ).join("\n\n");
 
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-20250514",
-    max_tokens: 300,
-    system: `You are a clinical KB context pruner. Given a list of KB chunks and a patient's symptoms,
-identify which chunks are IRRELEVANT to this specific presentation.
-Be aggressive — if a chunk wouldn't change the clinical assessment for these symptoms, prune it.
-Return ONLY a JSON array of indices to PRUNE (remove). Return [] if all chunks are relevant.`,
-    messages: [{
+  const gatewayResult = await llmGateway.complete({
+    purpose:   "retrieval_pruner",
+    messages:  [{
       role:    "user",
       content: `Complaint: ${complaintSlug}\nSymptoms: ${symptoms.join(", ")}\n\nChunks:\n${chunkList}\n\nReturn JSON array of indices to prune:`,
     }],
+    system:    `You are a clinical KB context pruner. Given a list of KB chunks and a patient's symptoms,
+identify which chunks are IRRELEVANT to this specific presentation.
+Be aggressive — if a chunk wouldn't change the clinical assessment for these symptoms, prune it.
+Return ONLY a JSON array of indices to PRUNE (remove). Return [] if all chunks are relevant.`,
+    maxTokens: 300,
+    cacheKey:  `prune:${complaintSlug}:${symptoms.slice(0, 3).sort().join(",")}`,
   });
 
-  const text  = response.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+  const text  = gatewayResult.content;
   const clean = text.replace(/```json|```/g, "").trim();
 
   let pruneIndices: number[] = [];

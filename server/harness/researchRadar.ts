@@ -104,12 +104,18 @@ interface RadarScanResult {
 }
 
 async function scanTarget(target: ResearchTarget): Promise<RadarScanResult> {
-  const scannedAt = new Date().toISOString();
+  const scannedAt   = new Date().toISOString();
+  const scanStartMs = Date.now();
+  let textContent   = "";
 
-  const response = await anthropic.messages.create({
-    model:      "claude-opus-4-5",
-    max_tokens: 1500,
-    system: `You are a research radar agent for Auralyn, a clinical AI system for urgent care.
+  // TODO Win 19 partial: researchRadar uses web_search tool which requires
+  // direct SDK access. Migrate to llmGateway when llmGateway adds tool-use support.
+  // For now: audit every radar scan call for visibility.
+  try {
+    const response = await anthropic.messages.create({
+      model:      "claude-opus-4-5",
+      max_tokens: 1500,
+      system: `You are a research radar agent for Auralyn, a clinical AI system for urgent care.
 Your job: scan for evidence that a specific technology is now production-ready for a medical AI system.
 
 Be conservative. Medical AI readiness requires:
@@ -126,9 +132,9 @@ Score readiness:
 
 Return ONLY valid JSON:
 {"readinessScore": number, "findings": string[], "readyToImplement": boolean, "report": string, "sources": string[]}`,
-    messages: [{
-      role:    "user",
-      content: `Assess production readiness of this technology for a clinical AI system.
+      messages: [{
+        role:    "user",
+        content: `Assess production readiness of this technology for a clinical AI system.
 
 TARGET: ${target.name}
 DESCRIPTION: ${target.description}
@@ -139,13 +145,28 @@ ${target.readinessSignals.map(s => `- ${s}`).join("\n")}
 CURRENT SCORE: ${target.readinessScore}/5
 
 Based on your knowledge of the current state of these technologies, return your readiness assessment as JSON.`,
-    }],
-  });
+      }],
+    });
 
-  const textContent = response.content
-    .filter(b => b.type === "text")
-    .map(b => (b as any).text)
-    .join("");
+    textContent = response.content
+      .filter(b => b.type === "text")
+      .map(b => (b as any).text)
+      .join("");
+
+  } finally {
+    await appendAuditEvent({
+      actor:      "system",
+      action:     "RESEARCH_RADAR_SCAN_CALL",
+      entityId:   target.id,
+      entityType: "research_radar",
+      details: {
+        targetId:   target.id,
+        latencyMs:  Date.now() - scanStartMs,
+        hasContent: !!textContent,
+        note:       "Direct SDK call — pending Win 19 gateway tool-use support",
+      },
+    }).catch(console.error);
+  }
 
   let parsed: any;
   try {

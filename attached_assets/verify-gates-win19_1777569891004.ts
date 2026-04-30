@@ -1,8 +1,11 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env npx ts-node
 /**
  * verify-gates.ts — UPDATED FOR WIN 19
  * Adds G6: No direct anthropic.messages.create() calls outside llmGateway.ts
  * and researchRadar.ts (which has a documented exception for tool-use).
+ *
+ * Replace .claude/skills/clinical-safety-verifier/scripts/verify-gates.ts
+ * with this file after Win 19 is applied.
  */
 
 import * as fs   from "fs";
@@ -45,7 +48,7 @@ console.log("\n── G2: Discharge requires physician actor ──");
 const reviewRoutes = readFile("server/routes/review.routes.ts");
 if (reviewRoutes) {
   check(reviewRoutes.includes("guardDischarge"), "review.routes.ts calls guardDischarge", "MISSING guardDischarge — Gate 3 not wired");
-  check(reviewRoutes.includes("req.user") || reviewRoutes.includes("req as any).user"), "review.routes.ts uses req.user for actor", "review.routes.ts may use wrong actor source");
+  check(reviewRoutes.includes("req.user"), "review.routes.ts uses req.user for actor", "review.routes.ts may use wrong actor source");
 }
 
 // ─── G3 ──────────────────────────────────────────────────────────────────────

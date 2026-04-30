@@ -20,14 +20,12 @@
  *   6. Escalation protocol — what the AI does when stuck
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { llmGateway } from "../gateway/llmGateway";
 import { Router } from "express";
 import * as fs   from "fs";
 import * as path from "path";
 import { appendAuditEvent } from "../governance/audit";
 import { requireReviewAuth } from "../middleware/reviewAuth";
-
-const anthropic = new Anthropic();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,24 +172,8 @@ export const SpecDrivenDevelopment = {
     nonGoals?:     string[];
   }): Promise<ComplaintPathwaySpec> {
 
-    const response = await anthropic.messages.create({
-      model:      "claude-opus-4-20250514",
-      max_tokens: 3000,
-      system: `You are generating a spec.md for a new complaint pathway in Auralyn,
-a multi-tenant urgent care AI triage system.
-
-The spec must include all six sections from the spec-driven development framework:
-1. Mandate (one sentence — specific enough to verify against)
-2. Data models (complaint shape, red-flag rule shape, LR table shape, follow-up protocol shape)
-3. Non-goals (explicit list)
-4. Boundary conditions (Auralyn-specific safety rails)
-5. Escalation protocol
-6. Tasks (atomic, ordered, each with a test criterion)
-
-Task phases: spec → plan → implement → test
-Each task must be small enough to implement and test in isolation.
-
-Return ONLY valid JSON. No markdown.`,
+    const gatewayResult = await llmGateway.complete({
+      purpose:  "kb_validator",
       messages: [{
         role:    "user",
         content: `Create a spec for:
@@ -217,9 +199,26 @@ Return JSON:
   ]
 }`,
       }],
+      system:    `You are generating a spec.md for a new complaint pathway in Auralyn,
+a multi-tenant urgent care AI triage system.
+
+The spec must include all six sections from the spec-driven development framework:
+1. Mandate (one sentence — specific enough to verify against)
+2. Data models (complaint shape, red-flag rule shape, LR table shape, follow-up protocol shape)
+3. Non-goals (explicit list)
+4. Boundary conditions (Auralyn-specific safety rails)
+5. Escalation protocol
+6. Tasks (atomic, ordered, each with a test criterion)
+
+Task phases: spec → plan → implement → test
+Each task must be small enough to implement and test in isolation.
+
+Return ONLY valid JSON. No markdown.`,
+      maxTokens: 3000,
+      skipCache: true,
     });
 
-    const text  = response.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+    const text  = gatewayResult.content;
     const clean = text.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
 
