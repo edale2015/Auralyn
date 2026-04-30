@@ -1,0 +1,135 @@
+# Auralyn Clinical Patterns Skill
+# Type: Library & API Reference
+#
+# DESCRIPTION (for Claude Code skill discovery):
+# Use this skill when generating any Auralyn server-side code, especially:
+# clinical pipeline changes, new routes, audit events, ontology usage,
+# physician gate enforcement, or any code touching patient data flow.
+# Trigger: "add to pipeline", "new route", "clinical feature", "audit event"
+
+## What Auralyn Is
+
+Auralyn is a multi-tenant urgent care clinical AI triage platform.
+Node.js 20 / TypeScript / Express / PostgreSQL 16 / React 18 / Drizzle ORM.
+
+The clinical pipeline processes WhatsApp patient intake through AI triage
+to physician review to discharge. Every step has safety gates.
+
+## The Non-Negotiable Pattern Triad
+
+Every clinical operation in Auralyn requires all three:
+
+```typescript
+// 1. AUDIT — appendAuditEvent() on EVERY clinical state change
+await appendAuditEvent({
+  actor:      physicianId,           // never "system" for physician actions
+  action:     "CASE_APPROVED",       // SCREAMING_SNAKE_CASE
+  entityId:   caseId,
+  entityType: "case",
+  details:    { /* no PHI — use scrubPhi() */ },
+});
+
+// 2. PHYSICIAN GATE — physicianApproved defaults false, never auto-set
+const caseDoc = {
+  physicianApproved: false,  // NEVER set to true without a physician actor ID
+  // ...
+};
+
+// 3. ONTOLOGY — every clinical value resolves through the ontology
+import { OntologyFieldMapper } from "../ontology/ontologyFieldMapper";
+const enriched = OntologyFieldMapper.enrichCaseDoc(caseDoc);
+// enriched._ont.disposition, .complaintSlug, .returnPrecautionsKey, etc.
+```
+
+## Core Service Imports
+
+```typescript
+// Audit chain (required on every clinical event)
+import { appendAuditEvent } from "../governance/audit";
+
+// Ontology layer (Win 14) — replaces all DISPOSITION_MAP instances
+import { OntologyFieldMapper, returnPrecautionsKey } from "../ontology/ontologyFieldMapper";
+import { OntologyFirewall } from "../ontology/ontologyFirewall";
+import { ont } from "../ontology/clinicalOntology";
+
+// Harness (Win 11) — enforces safety caps
+import { enforceAgentCaps, buildClinicalContext, createAgentState } from "../harness/harnessEnforcer";
+
+// Clinical Skills (Win 15) — Tier 1 memory injection
+import { retrieveRelevantSkills } from "../learning/clinicalSkillsSystem";
+
+// LLM Gateway (Win 17) — never call anthropic SDK directly
+import { llmGateway } from "../gateway/llmGateway";
+
+// Follow-up (Win 8)
+import { enrollInFollowUp } from "../followup/followUpService";
+
+// Queue
+import { createDurableQueue } from "../queue/queueFactory";
+```
+
+## Route Pattern (all clinical routes)
+
+```typescript
+router.post(
+  "/api/review/case/:id/approve",
+  requireAuth,
+  requireAnyRole(["physician", "admin"]),
+  requireCsrf,
+  async (req, res) => {
+    const { id } = req.params;
+    const physicianId = req.user?.id;                // always from req.user
+
+    // Ontology firewall before any action
+    const gate = await OntologyFirewall.guardDischarge({ caseId: id, ... });
+    if (gate.blocked) return res.status(400).json({ error: gate.reason });
+
+    // Clinical action
+    // ...
+
+    // Audit after action (non-blocking is ok for non-critical events)
+    await appendAuditEvent({
+      actor:      physicianId,
+      action:     "CASE_APPROVED",
+      entityId:   id,
+      entityType: "case",
+      details:    { /* no PHI */ },
+    });
+
+    return res.json({ ok: true });
+  }
+);
+```
+
+## BullMQ Pattern (all background jobs)
+
+```typescript
+// Scheduling (self-rescheduling setTimeout, not setInterval)
+function scheduleMyJob() {
+  const msUntilNext = computeMsUntilNextRun();
+  setTimeout(async () => {
+    await runMyJob().catch(console.error);
+    scheduleMyJob();  // re-arm — never use setInterval for clinical jobs
+  }, msUntilNext);
+}
+
+// Queue factory (always use this, never instantiate Queue directly)
+const queue = await createDurableQueue("followup");
+```
+
+## Files — read these for gold-standard patterns
+
+- `server/followup/followUpService.ts` — service pattern, BullMQ, audit events
+- `server/reasoning/bayesianConfidenceUpdater.ts` — clinical reasoning pattern
+- `server/ontology/clinicalOntology.ts` — how ontology classes are defined
+- `server/harness/harnessEnforcer.ts` — safety caps pattern
+- `client/src/components/DischargeInstructionPanel.tsx` — physician-gated UI
+- `client/src/components/CaseSnapshotCard.tsx` — case display with badges
+
+## See Also
+
+- `gotchas/disposition-map.md` — never create a new DISPOSITION_MAP
+- `gotchas/phi-in-logs.md` — what counts as PHI and how to scrub it
+- `gotchas/physician-gate.md` — what breaks the physician gate
+- `examples/new-route.ts` — complete route example
+- `examples/new-service.ts` — complete service example

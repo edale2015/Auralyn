@@ -1,0 +1,81 @@
+# Clinical Safety Verifier Skill
+# Type: Product Verification
+#
+# DESCRIPTION (for Claude Code skill discovery):
+# Use this skill to verify that any new clinical feature maintains
+# Auralyn's safety guarantees. Run this after ANY change to:
+# pipeline.ts, review.routes.ts, ontologyFirewall.ts, harnessEnforcer.ts,
+# followUpService.ts, or any file touching the physician gate.
+# Trigger: "verify safety", "check gates", "after pipeline change", "test physician gate"
+
+## What This Skill Does
+
+Runs a structured safety verification across the five critical clinical guarantees.
+After any pipeline or clinical route change, run this skill to verify nothing broke.
+
+## The Five Safety Guarantees
+
+Every Auralyn build must satisfy all five:
+
+**G1 — Red flag never self-cares**
+A case with active red flags must never receive a SELF_CARE disposition.
+Ontology Firewall Gate 2 blocks this structurally.
+
+**G2 — Discharge requires physician actor**
+`physicianApproved: true` with no physician actor ID must be blocked.
+Ontology Firewall Gate 3 enforces this.
+
+**G3 — Safety caps enforce**
+Any agent loop that exceeds max_steps (5), max_llm_calls (8), or cost ($1.50)
+must throw HarnessCapExceeded and route to physician review.
+
+**G4 — Drift canaries pass**
+All 20 canonical drift canaries produce correct dispositions and confidence floors.
+
+**G5 — Ontology resolves**
+All disposition values in the codebase resolve through OntologyFieldMapper,
+not through local DISPOSITION_MAP instances.
+
+## Verification Steps
+
+Run each script in order. All must pass before merging.
+
+```bash
+# Step 1: Run the safety guarantee tests
+npx tsx .claude/skills/clinical-safety-verifier/scripts/verify-gates.ts
+
+# Step 2: Check for DISPOSITION_MAP drift
+npx tsx .claude/skills/clinical-safety-verifier/scripts/check-disposition-maps.ts
+
+# Step 3: Run the drift canary subset (5 highest-risk canaries, fast)
+npx tsx .claude/skills/clinical-safety-verifier/scripts/spot-check-canaries.ts
+
+# Step 4: Audit event coverage check
+npx tsx .claude/skills/clinical-safety-verifier/scripts/check-audit-coverage.ts
+```
+
+## Manual Checks (after automated scripts)
+
+After scripts pass, manually verify:
+
+1. **Gate 2 visual check** — find the post-`runClinicalBrain()` block in `pipeline.ts`.
+   Confirm `guardTriageOutput()` is called before uncertainty sampler.
+
+2. **Physician actor check** — search for `physicianApproved: true` in the codebase.
+   Every occurrence must be inside a block that first validates `physicianId !== "system"`.
+
+3. **PHI check** — search for `appendAuditEvent` calls added in this diff.
+   Confirm no details fields contain names, phones, or symptom free text.
+
+## Gotchas
+
+**Common failure: adding a new clinical route without auth middleware**
+Every route touching clinical data needs: `requireAuth, requireAnyRole(...), requireCsrf`
+
+**Common failure: new LLM call bypassing the gateway**
+Search the diff for `anthropic.messages.create(` — should return 0 results.
+All LLM calls go through `llmGateway.complete()`.
+
+**Common failure: new field on caseDoc without ontology enrichment**
+If a new field stores a disposition or complaint value, it must flow through
+OntologyFieldMapper. Search new code for hardcoded disposition strings.
