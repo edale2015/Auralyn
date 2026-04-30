@@ -85,6 +85,84 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+
+        // ── Auralyn Design System tokens ──────────────────────────────────────
+        // Clinical urgency hierarchy — DESIGN.md §Colors
+        critical: {
+          DEFAULT: "#DC2626",
+          light:   "#FEF2F2",
+          border:  "#FECACA",
+          text:    "#991B1B",
+        },
+        urgent: {
+          DEFAULT: "#EA580C",
+          light:   "#FFF7ED",
+          border:  "#FED7AA",
+          text:    "#9A3412",
+        },
+        elevated: {
+          DEFAULT: "#D97706",
+          light:   "#FFFBEB",
+          border:  "#FDE68A",
+          text:    "#92400E",
+        },
+        routine: {
+          DEFAULT: "#16A34A",
+          light:   "#F0FDF4",
+          border:  "#BBF7D0",
+          text:    "#14532D",
+        },
+        // Feature-area colors — DESIGN.md §Feature-Area Colors
+        clinical: {
+          DEFAULT: "#2563EB",
+          light:   "#EFF6FF",
+          border:  "#BFDBFE",
+          text:    "#1E40AF",
+        },
+        consult: {
+          DEFAULT: "#4F46E5",
+          light:   "#EEF2FF",
+          border:  "#C7D2FE",
+          text:    "#3730A3",
+        },
+        knowledge: {
+          DEFAULT: "#7C3AED",
+          light:   "#F5F3FF",
+          border:  "#DDD6FE",
+          text:    "#5B21B6",
+        },
+        ehr: {
+          DEFAULT: "#0D9488",
+          light:   "#F0FDFA",
+          border:  "#99F6E4",
+          text:    "#115E59",
+        },
+        system: {
+          DEFAULT: "#4B5563",
+          light:   "#F9FAFB",
+          border:  "#E5E7EB",
+          text:    "#374151",
+        },
+        // Neutrals
+        surface: {
+          DEFAULT: "#FFFFFF",
+          muted:   "#F9FAFB",
+          subtle:  "#F3F4F6",
+        },
+        content: {
+          primary:   "#111827",
+          secondary: "#374151",
+          muted:     "#6B7280",
+          disabled:  "#9CA3AF",
+        },
+        // Dark mode (⌘K command interface)
+        dark: {
+          surface:           "#030712",
+          "surface-elevated": "#111827",
+          border:            "#1F2937",
+          text:              "#F9FAFB",
+          "text-muted":      "#6B7280",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
