@@ -48,7 +48,7 @@ export class RuntimeAnalyticsService {
     const cases = await firestoreCaseStore.listCases({ limit: limitCases });
 
     const complaintMap = new Map<string, ComplaintAnalyticsRow>();
-    const dispositionMap = new Map<string, number>();
+    const dispositionCounts = new Map<string, number>();
 
     let totalSignedOff = 0;
     let totalOverrides = 0;
@@ -82,7 +82,7 @@ export class RuntimeAnalyticsService {
       }
 
       const disposition = c.engineResult?.recommendedDisposition || "UNKNOWN";
-      dispositionMap.set(disposition, (dispositionMap.get(disposition) ?? 0) + 1);
+      dispositionCounts.set(disposition, (dispositionCounts.get(disposition) ?? 0) + 1);
 
       complaintMap.set(key, existing);
     }
@@ -107,7 +107,7 @@ export class RuntimeAnalyticsService {
 
     const complaintMetrics = [...complaintMap.values()].sort((a, b) => b.caseCount - a.caseCount);
 
-    const dispositionMetrics: DispositionAnalyticsRow[] = [...dispositionMap.entries()]
+    const dispositionMetrics: DispositionAnalyticsRow[] = [...dispositionCounts.entries()]
       .map(([disposition, count]) => ({ disposition, count }))
       .sort((a, b) => b.count - a.count);
 

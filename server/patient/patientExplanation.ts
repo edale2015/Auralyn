@@ -29,7 +29,10 @@ export function patientExplanation(result: {
 
   const humanDx = dxMap[dx] ?? dx.replace(/_/g, " ");
 
-  const dispositionMap: Record<string, { nextSteps: string; urgency: PatientExplanation["urgency"]; reassurance: string }> = {
+  // NOTE: keys here are legacy uppercase canonical values (pre-Win-14).
+  // This map produces patient-facing copy only — not used for clinical routing.
+  // Pending migration: keys should resolve through OntologyFieldMapper.
+  const dispositionCopyMap: Record<string, { nextSteps: string; urgency: PatientExplanation["urgency"]; reassurance: string }> = {
     ER_NOW: {
       nextSteps: "Please go to the emergency room right away or call 911.",
       urgency: "emergency",
@@ -57,7 +60,7 @@ export function patientExplanation(result: {
     },
   };
 
-  const mapped = dispositionMap[disposition] ?? dispositionMap["ROUTINE"];
+  const mapped = dispositionCopyMap[disposition] ?? dispositionCopyMap["ROUTINE"];
 
   return {
     message: `Based on your symptoms, we think you may have ${humanDx}.`,

@@ -14,7 +14,13 @@ import { registerDynamicQuestion } from "./router";
 import { buildClinicalState } from "../services/clinicalStateBuilder";
 import { runCrossoverHooks } from "../agents/crossoverHooks";
 import { runClinicalBrain } from "../core/clinicalBrainEngine";
-import { buildClinicalContext } from "../harness/harnessEnforcer";
+import {
+  buildClinicalContext,
+  createAgentState,
+  enforceAgentCaps,
+  incrementLlmCall,
+  HarnessCapExceeded,
+} from "../harness/harnessEnforcer";
 import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator";
 import { assessUncertainty }    from "../reasoning/dualModelUncertaintySampler";
 import { OntologyFirewall }     from "../ontology/ontologyFirewall";
@@ -366,6 +372,10 @@ export async function initializePipeline(
   }
 
   // ─── CLINICAL BRAIN ENGINE ────────────────────────────────────────────────
+  // G3: create AgentState here so enforceAgentCaps guards every LLM call below.
+  const caseIdForHarness = (updated as any).caseId ?? (updated as any).sessionId ?? "unknown";
+  let agentState = createAgentState(caseIdForHarness);
+
   try {
     const differentialCandidates = updated.activeClusters.map((id) => ({ clusterId: id, score: 1 }));
     const availableQuestions = updated.questionQueue
@@ -476,6 +486,9 @@ export async function initializePipeline(
       });
     }
 
+    // ── G3: enforce caps before the expensive Opus LLM call ──────────────────
+    enforceAgentCaps(agentState);
+
     const brainOutput = await runClinicalBrain({
       complaint: updated.chiefComplaint ?? updated.normalizedComplaint ?? "",
       answers: updated.answers || {},
@@ -483,6 +496,9 @@ export async function initializePipeline(
       differentialCandidates,
       availableQuestions,
     });
+
+    // Track LLM call: clinical_brain uses Claude Opus (~$0.08/call at typical token load)
+    agentState = incrementLlmCall(agentState, 0.08);
 
     if (brainOutput.similarity)              updated.similarity               = brainOutput.similarity;
     if (brainOutput.memoryCases)             updated.memoryCases              = brainOutput.memoryCases;
@@ -579,11 +595,17 @@ export async function initializePipeline(
       const complaintSlug  = updated.normalizedComplaint ?? updated.chiefComplaint ?? "";
       const systemPrompt   = `You are a clinical AI triage system. Analyze the patient presentation and return a structured differential assessment. Be conservative and flag any red flags or high-urgency conditions.`;
 
+      // ── G3: enforce caps before the Sonnet uncertainty LLM call ─────────────
+      enforceAgentCaps(agentState);
+
       const uncertainty = await assessUncertainty(
         { topDiagnosis: primaryTopDx, confidence: primaryConf, disposition: primaryDisp, differential: primaryDiff },
         { caseId: caseIdForAudit, complaint: { slug: complaintSlug }, answers: { structured: (updated.answers as any) ?? {} } },
         systemPrompt
       );
+
+      // Track LLM call: uncertainty_sampler uses Claude Sonnet (~$0.01/call)
+      agentState = incrementLlmCall(agentState, 0.01);
 
       (updated as any).uncertaintyAssessment = uncertainty;
 
@@ -600,11 +622,25 @@ export async function initializePipeline(
       });
     }
   } catch (err: any) {
-    events.push({
-      type: "CLINICAL_BRAIN_ERROR",
-      severity: "warn",
-      message: `Clinical brain failed: ${err.message}`,
-    });
+    if (err instanceof HarnessCapExceeded) {
+      // G3: cap breached — route to mandatory physician review, never self-care
+      events.push({
+        type:     "HARNESS_CAP_EXCEEDED",
+        severity: "error",
+        message:  `Safety cap breached (${err.cap}: ${err.value}/${err.limit}) — routed to physician review`,
+      });
+      updated.routing = { ...updated.routing, state: "PHYSICIAN_REVIEW_REQUIRED" };
+      // Ensure disposition is not self_care when caps breach
+      if ((updated as any).disposition === "self_care" || !(updated as any).disposition) {
+        (updated as any).disposition = "urgent_care";
+      }
+    } else {
+      events.push({
+        type:     "CLINICAL_BRAIN_ERROR",
+        severity: "warn",
+        message:  `Clinical brain failed: ${err.message}`,
+      });
+    }
   }
 
   if (!updated.redFlagGate || !updated.redFlagGate.evaluated) {
