@@ -79,6 +79,7 @@ const NAV_ITEMS = [
   { path: "/clinical-skills",           label: "Clinical Skills",           icon: Brain },
   { path: "/cme-quiz",                 label: "CME Quiz",                   icon: GraduationCap },
   { path: "/infra-status",             label: "Infrastructure",             icon: Activity },
+  { path: "/intent-analytics",         label: "Intent Analytics",           icon: BarChart3 },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
   { path: "/fda-dashboard", label: "FDA Validation", icon: FlaskConical },
   { path: "/prior-auth", label: "Prior Auth", icon: FileCheck },
