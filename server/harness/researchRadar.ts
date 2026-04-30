@@ -88,6 +88,26 @@ export const RESEARCH_TARGETS: ResearchTarget[] = [
     implementationNotes: "Requires: (1) curated clinical knowledge graph (SNOMED-CT or ICD-11 based), (2) trained GNN model for urgent care complaint space, (3) inference API or local model. Wire as a pre-LLM step in the triage pipeline. The clinicalKnowledgeGraph.ts already built in Win 12 is the structural prototype — the GNN version uses learned edge weights from training data rather than manually specified likelihood ratios.",
     estimatedBuildTime: "4-6 weeks once a clinical GNN library is available. The Win 12 knowledge graph we already built is directly compatible — it would become the GNN's initial graph structure.",
   },
+  {
+    id:          "rec7_guideline_auto_indexing",
+    name:        "Recommendation 7 — Automated Clinical Guideline Indexing",
+    description: "Automated pipelines that detect new guideline publications (ACEP, AAP, AHA, CDC) and trigger indexing without manual upload. PageIndex MCP protocol would enable this.",
+    clinicalValue: "KB rules always grounded in latest guidelines without manual curation.",
+    auralynaImpact: "guidelineGrounding.ts auto-discovers and indexes new guidelines on publication.",
+    readinessScore: 1,
+    searchQueries: [
+      "PageIndex MCP clinical guidelines auto-indexing 2026",
+      "ACEP AAP guidelines API automated ingestion",
+      "clinical guideline change detection automated",
+    ],
+    readinessSignals: [
+      "PageIndex MCP server released for automated document discovery",
+      "ACEP/AAP/AHA releasing structured guideline APIs",
+      "Medical society guideline change notification API",
+    ],
+    implementationNotes: "Wire into guidelineGrounding.indexGuideline(). When the auto-discovery API is available, it calls this function on new publication detection.",
+    estimatedBuildTime: "1-2 days once API available",
+  },
 ];
 
 // ─── Readiness scorer ─────────────────────────────────────────────────────────

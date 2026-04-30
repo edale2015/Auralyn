@@ -80,6 +80,7 @@ Available categories and their triggers:
 - CME_QUIZ: quiz me, clinical quiz, test my knowledge, CME
 - DESIGN_AUDIT: design drift, components not using design system, color drift audit
 - DRIFT_STATUS: drift canaries, canary results, model drift, last drift check
+- GUIDELINE_QUERY: what does ACEP/AHA/AAP/CDC say about X, does payer require prior auth for X, guideline grounding status, indexed guidelines
 - UNKNOWN: anything unclear or outside scope
 
 Actions for CASE_ACTION: approve, reject, modify, escalate, sign_off
@@ -298,12 +299,13 @@ async function executeResearchRadar() {
 
   const rec5 = targets["rec5_temporal_graph_ehr"];
   const rec6 = targets["rec6_gnn_differential"];
+  const rec7 = targets["rec7_guideline_auto_indexing"];
 
   const fmt = (t: any, name: string) => t
     ? `${name}: ${t.readiness_score}/5 (scanned: ${t.last_scanned_at ? new Date(t.last_scanned_at).toLocaleDateString() : "never"})`
     : `${name}: Not yet scanned`;
 
-  const anyReady = [rec5, rec6].some(t => t?.readiness_score >= 4);
+  const anyReady = [rec5, rec6, rec7].some(t => t?.readiness_score >= 4);
 
   return {
     actions: [{
@@ -313,8 +315,8 @@ async function executeResearchRadar() {
       result: anyReady ? "⚠ A recommendation is ready to implement!" : "Monitoring — not yet ready",
     }],
     summary: anyReady
-      ? `🚨 **Implementation Alert:** A recommendation has reached readiness score 4+. Check /research-radar immediately.\n\n${fmt(rec5, "Rec 5 — Temporal Graph EHR")}\n${fmt(rec6, "Rec 6 — GNN Differential")}`
-      : `Research Radar — both recommendations still in research phase:\n${fmt(rec5, "Rec 5 — Temporal Graph EHR")}\n${fmt(rec6, "Rec 6 — GNN Differential")}\n\nNext scan: Sunday 4am UTC.`,
+      ? `🚨 **Implementation Alert:** A recommendation has reached readiness score 4+. Check /research-radar immediately.\n\n${fmt(rec5, "Rec 5 — Temporal Graph EHR")}\n${fmt(rec6, "Rec 6 — GNN Differential")}\n${fmt(rec7, "Rec 7 — Guideline Auto-Indexing")}`
+      : `Research Radar — recommendations still in research phase:\n${fmt(rec5, "Rec 5 — Temporal Graph EHR")}\n${fmt(rec6, "Rec 6 — GNN Differential")}\n${fmt(rec7, "Rec 7 — Guideline Auto-Indexing")}\n\nNext scan: Sunday 4am UTC.`,
   };
 }
 
@@ -559,6 +561,33 @@ commandRouter.post(
             summary: "To audit design drift, ask Claude Code: \"Review /client/src/components and list Tailwind color classes not defined in DESIGN.md. Include file and line number.\"\n\nDESIGN.md is the authoritative token set.",
           };
           break;
+        case "GUIDELINE_QUERY": {
+          const { queryGuidelines, getGroundingStatus } = await import("../retrieval/guidelineGrounding");
+          const rawQuery = intent.rawQuery ?? command;
+
+          // "grounding status" path
+          if (/grounding status|indexed guidelines|which guidelines/i.test(rawQuery)) {
+            const status = getGroundingStatus();
+            result = {
+              actions: [{ type: "GUIDELINE_QUERY", label: "Guideline grounding status", status: "complete", result: `${status.indexedGuidelines} guideline(s) indexed` }],
+              summary: status.indexedGuidelines === 0
+                ? "No clinical guidelines indexed yet. Upload a guideline PDF via POST /api/documents/index-guideline to begin grounding KB rules in source documents.\n\nUncovered complaints: " + status.uncoveredComplaints.join(", ")
+                : `**Indexed guidelines:** ${status.indexedGuidelines}\n**Covered complaints:** ${status.coveredComplaints.join(", ") || "none"}\n**Uncovered:** ${status.uncoveredComplaints.join(", ") || "none"}\n\n${status.guidelines.map(g => `- ${g.name} (${g.organization}, ${g.year})`).join("\n")}`,
+            };
+          } else {
+            // complaint-based query path
+            const complaintSlug = (intent as any).complaintSlug ?? "chest_pain";
+            const queryResults  = await queryGuidelines(complaintSlug, rawQuery);
+            const found         = queryResults.filter(r => r.found);
+            result = {
+              actions: [{ type: "GUIDELINE_QUERY", label: `Guideline search — ${found.length} result(s)`, status: "complete", result: found.length > 0 ? found[0].citation : "No indexed guidelines found" }],
+              summary: found.length > 0
+                ? `**${found[0].organization} — ${found[0].citation}:**\n${found[0].answer}${found[0].evidenceGrade ? `\n\n*Evidence grade: ${found[0].evidenceGrade}*` : ""}`
+                : "No indexed guidelines cover this complaint yet. Upload a guideline PDF via POST /api/documents/index-guideline.\n\nComplaint searched: " + complaintSlug,
+            };
+          }
+          break;
+        }
         case "UNKNOWN":
         default:
           result = {
