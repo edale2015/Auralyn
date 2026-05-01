@@ -9,6 +9,7 @@ import {
   cutoverToCanonicalOnly,
 } from "../engines/googleSheetsMigrationEngine";
 import { importClinicalSheetsToDb } from "../scripts/importClinicalSheetsToDb";
+import { importAllSystemSheetsToDb } from "../scripts/importAllSystemSheetsToDb";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -62,6 +63,15 @@ router.post("/cutover", auth, async (_req: Request, res: Response) => {
 router.post("/import-clinical", auth, async (_req: Request, res: Response) => {
   try {
     const result = await importClinicalSheetsToDb();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+router.post("/import-all-systems", auth, async (_req: Request, res: Response) => {
+  try {
+    const result = await importAllSystemSheetsToDb();
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error.message });
