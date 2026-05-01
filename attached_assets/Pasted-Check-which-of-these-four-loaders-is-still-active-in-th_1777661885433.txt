@@ -1,0 +1,24 @@
+Check which of these four loaders is still active in the current request path:
+bashgrep -r "sheetFlowLoader\|entFluRuleLoader\|medCatalog\|diagnosisCatalog" \
+  server/ --include="*.ts" -l
+Any file that imports these is a candidate for the queryKBCached() swap.
+Verify the must-not-miss surfacing in the physician queue:
+The audit chain now records mustNotMissCount on every case. Run this to confirm must-not-miss diagnoses are appearing in the physician review queue display:
+sqlSELECT event_data->>'complaintId', event_data->>'mustNotMissCount', timestamp
+FROM audit_hash_chain
+WHERE event_type = 'KB_RULES_INJECTED'
+ORDER BY timestamp DESC
+LIMIT 10;
+If mustNotMissCount is 0 for complaints where your KB has cannot-miss diagnoses, the red_flag column detection in kbQueryLayer.ts may need adjustment to match your actual column name in kb_diagnosis_rules.
+Run verify-gates.ts to confirm no regression:
+bashnpx tsx .claude/skills/clinical-safety-verifier/scripts/verify-gates.ts
+The KB injection adds a new LLM call pattern — confirm G6 still passes (no direct SDK calls introduced by the patch).
+
+The Clinical Significance
+Before this patch, the system audit identified the complaint pathway gap as the largest clinical risk. That assessment was based on incomplete information about what was already built.
+The real picture now: your Google Sheets represent a complete urgent care clinical KB covering the majority of the 230 complaint pathways in the master map. The 2,198 diagnosis rules, 418 red flag rules, and 1,227 treatment rules almost certainly cover the P1 critical complaints — chest pain, stroke, PE, sepsis, syncope, testicular torsion — that would be fatal if missed.
+The immediate next step for clinical completeness is not building new pathways. It is running the KB export:
+POST /api/admin/sheets/export-kb-diagnoses
+POST /api/admin/sheets/export-kb-red-flags
+Open the exported KB_DIAGNOSIS_RULES and KB_RED_FLAG_RULES tabs in your Google Sheet. Review which complaints have robust coverage and which have gaps. That review — by you as the physician — is the authoritative assessment of clinical completeness. It replaces the PATHWAY_MASTER_MAP status flags with ground truth from the actual KB.
+The system is now doing what it was designed to do. The KB is connected. The audit trail is running. The physician gate is structural. The next clinical conversation is about KB coverage — not architecture.

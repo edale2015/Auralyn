@@ -17,6 +17,11 @@
 import { db }  from "../db";
 import { sql } from "drizzle-orm";
 
+// PostgreSQL booleans arrive as "t"/"f" strings via raw db.execute() — not JS true/false
+function pgBool(v: unknown): boolean {
+  return v === true || v === "t" || v === "true" || v === "yes" || v === "1";
+}
+
 export interface KBRedFlagRule {
   id:           number;
   rule_id:      string;
@@ -237,7 +242,7 @@ export async function queryKBForComplaint(
 
   const appliedModifiers  = evaluateModifiers(modifiers, c, patient);
   const safeTreatments    = filterSafeMedications(treatments, patient);
-  const mustNotMiss       = diagnoses.filter(d => d.cannot_miss === true);
+  const mustNotMiss       = diagnoses.filter(d => pgBool(d.cannot_miss));
 
   const rulesFired = [
     ...redFlags.map(r    => r.rule_id),
@@ -308,7 +313,7 @@ export function buildKBPromptBlock(kb: KBQueryResult): string {
     kb.treatments.forEach(t => {
       const dose  = t.adult_dose ? ` | ${t.adult_dose}` : "";
       const route = t.route ? ` ${t.route}` : "";
-      const first = t.is_first_line ? " ★" : "";
+      const first = pgBool(t.is_first_line) ? " ★" : "";
       lines.push(`- ${t.medication_name}${first}${dose}${route}`);
     });
     lines.push("");
