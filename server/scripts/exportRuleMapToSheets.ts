@@ -34,11 +34,12 @@ export async function exportRuleMapToSheets(): Promise<ExportResult> {
 
     // Ensure MASTER_RULE_MAP tab exists
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
-    const hasTab = meta.data.sheets?.some(s => s.properties?.title === "MASTER_RULE_MAP");
+    const TAB_NAME = "COMPLAINT_COVERAGE";
+    const hasTab = meta.data.sheets?.some(s => s.properties?.title === TAB_NAME);
     if (!hasTab) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
-        requestBody: { requests: [{ addSheet: { properties: { title: "MASTER_RULE_MAP" } } }] },
+        requestBody: { requests: [{ addSheet: { properties: { title: TAB_NAME } } }] },
       });
     }
 
@@ -80,18 +81,18 @@ export async function exportRuleMapToSheets(): Promise<ExportResult> {
       ];
     });
 
-    await sheets.spreadsheets.values.clear({ spreadsheetId, range: "MASTER_RULE_MAP!A:Z" });
+    await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${TAB_NAME}!A:Z` });
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: "MASTER_RULE_MAP!A1",
+      range: `${TAB_NAME}!A1`,
       valueInputOption: "RAW",
       requestBody: { values: [...header, ...dataRows] },
     });
 
-    console.log(`[RuleMapExport] Exported ${dataRows.length} rows to MASTER_RULE_MAP tab`);
-    return { ok: true, rowsExported: dataRows.length, sheetTab: "MASTER_RULE_MAP", exportedAt };
+    console.log(`[RuleMapExport] Exported ${dataRows.length} rows to ${TAB_NAME} tab`);
+    return { ok: true, rowsExported: dataRows.length, sheetTab: TAB_NAME, exportedAt };
   } catch (e: any) {
     console.error("[RuleMapExport] Error:", e.message);
-    return { ok: false, rowsExported: 0, sheetTab: "MASTER_RULE_MAP", exportedAt, error: e.message };
+    return { ok: false, rowsExported: 0, sheetTab: "COMPLAINT_COVERAGE", exportedAt, error: e.message };
   }
 }

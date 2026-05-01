@@ -26,3 +26,17 @@ export function getSheetsClientRW() {
   sheetsRW = google.sheets({ version: "v4", auth });
   return sheetsRW;
 }
+
+/**
+ * Returns the canonical spreadsheet ID.
+ * SHEETS_SPREADSHEET_ID is the primary (standardized) variable.
+ * PACKS_SPREADSHEET_ID and GOOGLE_SHEET_ID are preserved for backward compatibility.
+ */
+export function getSpreadsheetId(): string {
+  const id =
+    process.env.SHEETS_SPREADSHEET_ID ??
+    process.env.PACKS_SPREADSHEET_ID ??
+    process.env.GOOGLE_SHEET_ID;
+  if (!id) throw new Error("No spreadsheet ID configured — set SHEETS_SPREADSHEET_ID");
+  return id;
+}

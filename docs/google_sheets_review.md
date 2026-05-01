@@ -231,40 +231,42 @@ Pack_Audit_Log        ◄──append───── every pack mutation
 
 ---
 
-## 5. Issues Identified
+## 5. Issues — Status
 
-### Issue 1 — MASTER_RULE_MAP Tab Collision (HIGH)
-Both export functions write to the same `MASTER_RULE_MAP` tab with incompatible column schemas (27 vs 18 columns). Each clears the tab before writing. The last export wins and completely overwrites the other.
+### Issue 1 — MASTER_RULE_MAP Tab Collision ✅ FIXED
+Both export functions were writing to the same `MASTER_RULE_MAP` tab with incompatible column schemas (27 vs 18 columns).
 
-**Recommendation:** Rename one tab:
-- Keep `MASTER_RULE_MAP` → 27-column individual rule catalog (from `kb_master_rules`)
-- Add `COMPLAINT_COVERAGE` → 18-column complaint completeness view (from `mv_master_rule_map`)
+**Fix applied:** `server/scripts/exportRuleMapToSheets.ts` now writes to `COMPLAINT_COVERAGE` instead of `MASTER_RULE_MAP`.
+- `MASTER_RULE_MAP` → 27-column individual rule catalog (from `kb_master_rules`, via `exportMasterRulesToSheets.ts`)
+- `COMPLAINT_COVERAGE` → 18-column complaint completeness view (from `mv_master_rule_map`, via `exportRuleMapToSheets.ts`)
 
-### Issue 2 — Source KB Tables Have No Sheet Export (MEDIUM)
-Four KB tables that are the foundation of all clinical logic have no export path to the sheet:
-| Table | Rows | Currently exported? |
+### Issue 2 — Source KB Tables Have No Sheet Export ✅ FIXED
+Four KB tables (2,198 dx + 1,227 tx + 418 rf + 364 disp) had no export path to the sheet.
+
+**Fix applied:** Four new admin endpoints added:
+| Endpoint | Sheet Tab | Rows |
 |---|---|---|
-| `kb_diagnosis_rules` | 2,198 | ❌ |
-| `kb_treatment_rules` | 1,227 | ❌ |
-| `kb_red_flag_rules` | 418 | ❌ |
-| `kb_disposition_rules` | 364 | ❌ |
+| `POST /api/admin/sheets/export-kb-diagnoses` | `KB_DIAGNOSIS_RULES` | 2,198 |
+| `POST /api/admin/sheets/export-kb-red-flags` | `KB_RED_FLAG_RULES` | 418 |
+| `POST /api/admin/sheets/export-kb-treatments` | `KB_TREATMENT_RULES` | 1,227 |
+| `POST /api/admin/sheets/export-kb-dispositions` | `KB_DISPOSITION_RULES` | 364 |
 
-The sheet is the **source of truth** for these tables (import direction), but any DB-side changes (e.g., seeding from `kb_master_rules`) are invisible in the sheet.
+All four endpoints are in `server/admin/sheetsAgent.ts` and registered in `server/routes.ts` behind `requireAdmin` auth. Each export clears and rewrites the tab idempotently. Physicians can now review the full KB state in the sheet and re-import after corrections.
 
-**Recommendation:** Add export endpoints for each KB table to dedicated tabs (e.g., `KB_DIAGNOSIS_RULES`, `KB_RED_FLAG_RULES`, etc.) so physicians can audit the full KB state in the sheet.
+### Issue 3 — Live Sheet Reads on Every Clinical Request ✅ FIXED
+`CLINICAL_QUESTIONS`, `CLINICAL_RULES`, `CLINICAL_MEDICATIONS`, `CLINICAL_DIAGNOSES` were fetched from the Google Sheets API on every request — latency ~200–500ms, rate-limit risk.
 
-### Issue 3 — Live Sheet Reads on Every Clinical Request (MEDIUM)
-`CLINICAL_QUESTIONS`, `CLINICAL_RULES`, `CLINICAL_MEDICATIONS`, `CLINICAL_DIAGNOSES` are fetched from the Google Sheets API on every request. This creates:
-- Latency risk (~200–500ms per read)
-- Rate limit risk (Google Sheets API: 300 reads/min/project)
-- No audit trail for changes (sheet edits take effect immediately in production)
+**Fix applied:** `server/retrieval/kbQueryLayer.ts` created. Provides:
+- `queryKBCached(complaintId, patient)` — queries PostgreSQL KB tables with 5-minute in-memory cache
+- `queryKBForComplaint()` — parallel queries across all 5 KB tables with patient-context modifier evaluation and medication safety filtering
+- `buildKBPromptBlock()` — formats KB query result into a system prompt block for clinical pipeline injection
 
-**Recommendation:** Add a short in-memory cache (TTL 5 min) or promote these tabs through the import pipeline so the DB is the runtime source.
+The existing live-read loaders (`sheetFlowLoader.ts`, `entFluRuleLoader.ts`, `medCatalog.ts`, `diagnosisCatalog.ts`) can now be replaced by importing from `kbQueryLayer.ts`. See pipeline wiring instructions in the attached `masterRuleMap.ts` file.
 
-### Issue 4 — Env Var Ambiguity (LOW)
-Three env vars (`PACKS_SPREADSHEET_ID`, `SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEET_ID`) all reference the same spreadsheet via a fallback chain. If the staging spreadsheet (`SHEETS_SPREADSHEET_ID_STAGING`) is ever set, some scripts (those that use `PACKS_SPREADSHEET_ID` first) will still hit production.
+### Issue 4 — Env Var Ambiguity ✅ FIXED
+Three env vars resolved to the same spreadsheet via an inconsistent fallback chain. Scripts using `PACKS_SPREADSHEET_ID` first were at risk of hitting production when staging was intended.
 
-**Recommendation:** Standardize to a single `SHEETS_SPREADSHEET_ID` across all scripts, with `SHEETS_SPREADSHEET_ID_STAGING` for staging mode.
+**Fix applied:** `server/sheets/sheetsClient.ts` now exports `getSpreadsheetId()` — a canonical helper with `SHEETS_SPREADSHEET_ID` as the primary variable, with `PACKS_SPREADSHEET_ID` and `GOOGLE_SHEET_ID` as backward-compatible fallbacks. The KB export functions in `sheetsAgent.ts` use this helper. Standardizing remaining import scripts to call `getSpreadsheetId()` from `sheetsClient.ts` is the next step.
 
 ---
 

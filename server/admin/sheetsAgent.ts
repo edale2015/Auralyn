@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
-import { getSheetsClientRW } from "../sheets/sheetsClient";
+import { getSheetsClientRW, getSpreadsheetId } from "../sheets/sheetsClient";
+import { db } from "../db";
+import { sql } from "drizzle-orm";
 
 const REQUIRED_QUESTION_HEADERS = [
   "flow_id","system","chief_complaint","module","order",
@@ -230,4 +232,105 @@ export async function importEntDiagnoses(req: Request, res: Response) {
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message || String(err) });
   }
+}
+
+// ─── KB Table Exports (Issue 2 fix) ──────────────────────────────────────────
+// Write each KB table to a dedicated sheet tab so physicians can audit and
+// correct the full KB state without direct database access.
+
+async function exportKBTableToSheet(
+  tabName:   string,
+  headers:   string[],
+  queryFn:   () => Promise<any[]>,
+  res:       Response
+) {
+  const exportedAt = new Date().toISOString();
+  try {
+    const spreadsheetId = getSpreadsheetId();
+    const sheets        = getSheetsClientRW();
+
+    const meta   = await sheets.spreadsheets.get({ spreadsheetId });
+    const hasTab = meta.data.sheets?.some((s: any) => s.properties?.title === tabName);
+    if (!hasTab) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+      });
+    }
+
+    const rows     = await queryFn();
+    const dataRows = rows.map(r => headers.map(h => {
+      const v = r[h];
+      if (v === null || v === undefined) return "";
+      if (Array.isArray(v)) return v.join("|");
+      if (typeof v === "object") return JSON.stringify(v);
+      return String(v);
+    }));
+
+    await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${tabName}!A:ZZ` });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range:            `${tabName}!A1`,
+      valueInputOption: "RAW",
+      requestBody:      { values: [headers, ...dataRows] },
+    });
+
+    console.log(`[KBExport] Exported ${dataRows.length} rows to ${tabName}`);
+    res.json({ ok: true, tab: tabName, rowsExported: dataRows.length, exportedAt });
+  } catch (err: any) {
+    console.error(`[KBExport] ${tabName}:`, err.message);
+    res.status(500).json({ ok: false, tab: tabName, error: err.message, exportedAt });
+  }
+}
+
+export async function exportKBDiagnoses(req: Request, res: Response) {
+  await exportKBTableToSheet(
+    "KB_DIAGNOSIS_RULES",
+    ["id","system","chief_complaint","diagnosis_name","red_flag","cluster_id",
+     "confidence_weight","disposition_default","source_tab","active"],
+    () => db.execute(sql`
+      SELECT id, system, chief_complaint, diagnosis_name, red_flag, cluster_id,
+             confidence_weight, disposition_default, source_tab, active
+      FROM kb_diagnosis_rules WHERE active = true ORDER BY system, chief_complaint
+    `).then(r => r.rows as any[]),
+    res
+  );
+}
+
+export async function exportKBRedFlags(req: Request, res: Response) {
+  await exportKBTableToSheet(
+    "KB_RED_FLAG_RULES",
+    ["id","complaint_id","system","condition_text","action_text","severity","source_tab","active"],
+    () => db.execute(sql`
+      SELECT id, complaint_id, system, condition_text, action_text, severity, source_tab, active
+      FROM kb_red_flag_rules WHERE active = true ORDER BY severity, complaint_id
+    `).then(r => r.rows as any[]),
+    res
+  );
+}
+
+export async function exportKBTreatments(req: Request, res: Response) {
+  await exportKBTableToSheet(
+    "KB_TREATMENT_RULES",
+    ["id","complaint_id","diagnosis_id","medication_name","dose","route","duration",
+     "contraindications","med_group_id","source_tab","active"],
+    () => db.execute(sql`
+      SELECT id, complaint_id, diagnosis_id, medication_name, dose, route, duration,
+             contraindications, med_group_id, source_tab, active
+      FROM kb_treatment_rules WHERE active = true ORDER BY complaint_id, medication_name
+    `).then(r => r.rows as any[]),
+    res
+  );
+}
+
+export async function exportKBDispositions(req: Request, res: Response) {
+  await exportKBTableToSheet(
+    "KB_DISPOSITION_RULES",
+    ["id","complaint_id","cluster_id","diagnosis_id","disposition","criteria","priority","source_tab","active"],
+    () => db.execute(sql`
+      SELECT id, complaint_id, cluster_id, diagnosis_id, disposition, criteria, priority, source_tab, active
+      FROM kb_disposition_rules WHERE active = true ORDER BY complaint_id, priority
+    `).then(r => r.rows as any[]),
+    res
+  );
 }

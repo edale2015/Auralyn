@@ -5,7 +5,7 @@ import { correlationMiddleware } from "./middleware/correlation";
 import { buildDomainRouters } from "./routes/domainIndex";
 import { getEntFluRules } from "./rules/entFluRuleLoader";
 import { generateToken, generateCode, expiresAtMinutes, INTAKE_EXPIRY_MINUTES, BASE_URL } from "./intake/intakeAuth";
-import { syncClinicalSheets, importEntMedications, importEntDiagnoses } from "./admin/sheetsAgent";
+import { syncClinicalSheets, importEntMedications, importEntDiagnoses, exportKBDiagnoses, exportKBRedFlags, exportKBTreatments, exportKBDispositions } from "./admin/sheetsAgent";
 import { runTests, applyPatch } from "./admin/devAgent";
 import { getMedicationCatalog, pickBestMed, medMatchesAllergy, shouldAvoidMedByModifiers, getMedsForDiagnoses, isFirstLine } from "./meds/medCatalog";
 import { getDiagnosisCatalog } from "./meds/diagnosisCatalog";
@@ -2003,6 +2003,10 @@ export async function registerRoutes(
   app.post("/api/admin/sheets/sync", requireProviderAuth, requireAdmin, syncClinicalSheets);
   app.post("/api/admin/sheets/import-medications", requireProviderAuth, requireAdmin, importEntMedications);
   app.post("/api/admin/sheets/import-diagnoses", requireProviderAuth, requireAdmin, importEntDiagnoses);
+  app.post("/api/admin/sheets/export-kb-diagnoses", requireProviderAuth, requireAdmin, exportKBDiagnoses);
+  app.post("/api/admin/sheets/export-kb-red-flags", requireProviderAuth, requireAdmin, exportKBRedFlags);
+  app.post("/api/admin/sheets/export-kb-treatments", requireProviderAuth, requireAdmin, exportKBTreatments);
+  app.post("/api/admin/sheets/export-kb-dispositions", requireProviderAuth, requireAdmin, exportKBDispositions);
   app.post("/api/admin/dev/run-tests", requireProviderAuth, requireAdmin, runTests);
   app.post("/api/admin/dev/apply-patch", requireProviderAuth, requireAdmin, applyPatch);
 
