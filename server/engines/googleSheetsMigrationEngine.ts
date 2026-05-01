@@ -53,15 +53,20 @@ const CANONICAL_HEADERS: Record<CanonicalTabName, string[]> = {
 };
 
 function getSheetsClient() {
+  const credsJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const auth = new google.auth.GoogleAuth({
+    ...(credsJson ? { credentials: JSON.parse(credsJson) } : {}),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   return google.sheets({ version: "v4", auth });
 }
 
 function getSpreadsheetId(): string {
-  const id = process.env.PACKS_SPREADSHEET_ID;
-  if (!id) throw new Error("Missing PACKS_SPREADSHEET_ID");
+  const id =
+    process.env.PACKS_SPREADSHEET_ID ??
+    process.env.SHEETS_SPREADSHEET_ID ??
+    process.env.GOOGLE_SHEET_ID;
+  if (!id) throw new Error("Missing spreadsheet ID — set PACKS_SPREADSHEET_ID, SHEETS_SPREADSHEET_ID, or GOOGLE_SHEET_ID");
   return id;
 }
 

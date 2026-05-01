@@ -8,6 +8,7 @@ import {
   runQaChecks,
   cutoverToCanonicalOnly,
 } from "../engines/googleSheetsMigrationEngine";
+import { importClinicalSheetsToDb } from "../scripts/importClinicalSheetsToDb";
 
 const router = Router();
 const auth = requireRole(["admin"]);
@@ -52,6 +53,15 @@ router.post("/run-qa", auth, async (_req: Request, res: Response) => {
 router.post("/cutover", auth, async (_req: Request, res: Response) => {
   try {
     const result = await cutoverToCanonicalOnly();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+router.post("/import-clinical", auth, async (_req: Request, res: Response) => {
+  try {
+    const result = await importClinicalSheetsToDb();
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error.message });
