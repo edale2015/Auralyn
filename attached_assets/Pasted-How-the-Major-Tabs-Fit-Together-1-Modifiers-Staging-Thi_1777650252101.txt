@@ -1,0 +1,329 @@
+How the Major Tabs Fit Together
+1. Modifiers Staging
+
+This is the patient context layer.
+
+It answers:
+
+Who is this patient?
+
+Examples:
+
+Age
+Pregnancy
+Immunocompromised
+Diabetes
+CHF
+COPD/asthma
+Anticoagulants
+Allergies
+Current meds
+Renal disease
+
+This tab should influence everything downstream:
+
+questions → red flags → diagnosis probability → disposition → medication safety
+
+Example:
+
+Cough + age 78 + CHF history
+→ higher pneumonia/CHF risk
+→ lower threshold for CXR/ER
+2. Medications Staging
+
+This is the medication safety pre-check.
+
+It answers:
+
+Can this patient safely receive common treatments?
+
+Examples:
+
+NSAID allowed?
+Steroid caution?
+Macrolide QT risk?
+Doxycycline pregnancy/pediatric issue?
+Renal dose adjustment?
+Drug allergy conflict?
+
+This should feed into:
+
+Standardized Med Groups
+Medication Rules
+Plan Templates
+3. Core Questions / Secondary Questions / Question Clusters
+
+This is the interview engine.
+
+It answers:
+
+What do we still need to ask?
+
+Example for cough:
+
+Duration
+Fever
+Shortness of breath
+Chest pain
+Wheezing
+Hemoptysis
+COPD/asthma/CHF
+O2 sat
+Night symptoms
+
+Question clusters should map to clinical clusters:
+
+SOB + fever + pleuritic pain
+→ pneumonia / PE / asthma cluster
+4. Red Flags
+
+This is the hard-stop safety layer.
+
+It answers:
+
+Is there anything dangerous that overrides everything else?
+
+Examples:
+
+Chest pain
+Severe shortness of breath
+O2 sat < 92%
+Neuro deficit
+Syncope
+Sepsis signs
+Pregnancy + abdominal pain
+Immunocompromised + fever
+
+Red flags should feed directly into:
+
+Cluster Triage
+Disposition
+Audit Log
+Provider Alert
+
+Important: red flags should usually override diagnosis scoring.
+
+Possible benign URI + O2 sat 88%
+→ ER, regardless of URI score
+5. Clusters
+
+This is the syndrome grouping layer.
+
+It answers:
+
+What clinical pattern does this look like?
+
+Examples:
+
+URI cluster
+Pneumonia cluster
+Asthma/COPD cluster
+CHF cluster
+PE cluster
+Strep throat cluster
+Viral pharyngitis cluster
+UTI cluster
+Pyelonephritis cluster
+GI infection cluster
+Appendicitis cluster
+
+Clusters help avoid making the system think one symptom equals one diagnosis.
+
+6. Cluster Scoring
+
+This is the probability/ranking layer.
+
+It answers:
+
+How strongly does this patient match each cluster?
+
+Example:
+
+Fever: +2 pneumonia
+Productive cough: +2 pneumonia
+Wheezing: +2 asthma/COPD
+Leg swelling: +2 CHF/PE
+Normal O2: -1 severe pneumonia
+
+Output:
+
+Pneumonia cluster: 8
+Asthma cluster: 5
+URI cluster: 4
+CHF cluster: 2
+
+This should feed into:
+
+Diagnosis tab
+Disposition tab
+Workup rules
+Treatment rules
+7. Cluster Triage
+
+This is the cluster-specific danger map.
+
+It answers:
+
+Given this cluster, how dangerous is it?
+
+Example:
+
+URI cluster → usually home/urgent care
+Pneumonia cluster → urgent care vs ER depending vitals
+PE cluster → ER
+Stroke cluster → ER/911
+Sepsis cluster → ER/EMS
+
+This tab bridges:
+
+Cluster Scoring + Red Flags → Disposition
+8. DIAGNOSIS
+
+This is the final differential layer.
+
+It answers:
+
+What are the most likely diagnoses?
+
+The DIAGNOSIS tab should not work alone. It should receive inputs from:
+
+Complaint
+Modifiers
+Question answers
+Cluster scores
+Red flags
+Triage rules
+
+Example output:
+
+1. Viral URI
+2. Acute bronchitis
+3. Pneumonia
+4. Asthma exacerbation
+5. PE, must not miss
+9. Disposition
+
+This is the final safety/action layer.
+
+It answers:
+
+Where should the patient go?
+
+Possible values:
+
+Home care
+Routine outpatient
+Urgent care today
+ER now
+Call 911
+Specialist referral
+Physician review required
+
+Disposition should be calculated from:
+
+Red Flags
+Vitals
+Cluster Triage
+Diagnosis Risk
+Modifiers
+Uncertainty
+Medication limitations
+
+Example:
+
+Sore throat + Centor 3 + stable
+→ urgent care/testing
+
+Sore throat + drooling + muffled voice
+→ ER
+10. Standardized Med Groups
+
+This is the medication template layer.
+
+It answers:
+
+What medication group applies to this diagnosis/cluster?
+
+Examples:
+
+URI supportive care group
+Strep antibiotic group
+Asthma bronchodilator group
+UTI antibiotic group
+Migraine group
+Allergy rhinitis group
+Pain/fever group
+
+This should never prescribe blindly. It should be filtered by:
+
+Age
+Pregnancy
+Allergies
+Renal disease
+Drug interactions
+Diagnosis confidence
+Disposition
+11. Flowsheets
+
+This is the structured clinical pathway layer.
+
+It answers:
+
+What pathway should this complaint follow?
+
+Example:
+
+Chest pain flowsheet:
+Vitals → red flags → HEART score → EKG need → troponin need → disposition
+
+Sore throat flowsheet:
+Red flags → Centor/McIsaac → test decision → treatment → follow-up
+
+Flowsheets are the visual/logic skeleton tying tabs together.
+
+Recommended Sheet Architecture
+
+I would organize the system into 6 groups.
+
+1. INPUT / PATIENT CONTEXT
+   - Patient Intake
+   - Modifiers Staging
+   - Medications Staging
+   - Allergies
+   - PMH
+   - Current Meds
+
+2. QUESTION ENGINE
+   - Complaint Registry
+   - Core Questions
+   - Secondary Questions
+   - Question Clusters
+   - Flowsheets
+
+3. SAFETY ENGINE
+   - Red Flags
+   - Red Flag Rules
+   - Cluster Triage
+   - Escalation Rules
+
+4. DIAGNOSTIC ENGINE
+   - Clusters
+   - Cluster Scoring
+   - Diagnosis Clusters
+   - DIAGNOSIS
+   - Diagnosis Rules
+
+5. PLAN / TREATMENT ENGINE
+   - Workup Rules
+   - Treatment Rules
+   - Standardized Med Groups
+   - Medication Rules
+   - Plan Templates
+
+6. GOVERNANCE / TESTING
+   - Audit Log
+   - Change Log
+   - Golden Cases
+   - Test Cases
+   - Validation Results
+   - Rule Versioning

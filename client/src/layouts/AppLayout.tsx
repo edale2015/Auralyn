@@ -35,6 +35,7 @@ import {
   Radar,
   GraduationCap,
   ClipboardCheck,
+  Map,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -80,6 +81,7 @@ const NAV_ITEMS = [
   { path: "/clinical-skills",           label: "Clinical Skills",           icon: Brain },
   { path: "/cme-quiz",                 label: "CME Quiz",                   icon: GraduationCap },
   { path: "/pathway-review",           label: "Pathway Review",             icon: ClipboardCheck },
+  { path: "/rule-map",                 label: "Master Rule Map",            icon: Map },
   { path: "/infra-status",             label: "Infrastructure",             icon: Activity },
   { path: "/intent-analytics",         label: "Intent Analytics",           icon: BarChart3 },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },

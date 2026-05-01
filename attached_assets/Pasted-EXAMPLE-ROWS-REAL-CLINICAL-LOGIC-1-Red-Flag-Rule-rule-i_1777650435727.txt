@@ -1,0 +1,89 @@
+EXAMPLE ROWS (REAL CLINICAL LOGIC)
+🚨 1. Red Flag Rule
+rule_id: RULE_0001
+rule_name: Hypoxia Red Flag
+rule_type: red_flag
+priority: 1
+complaint_id: ALL
+cluster_id: ALL
+diagnosis_id: ALL
+modifier_dependencies: none
+question_dependencies: O2_sat
+red_flag_dependencies: none
+input_fields: O2_sat
+logic_description: If O2 < 92%
+logic_type: threshold
+source_tab: Red Flags
+target_tabs: Disposition
+outputs: hypoxia_flag = TRUE
+disposition_impact: ER_NOW
+medication_impact: block outpatient
+workup_impact: oxygen, ABG, imaging
+safety_level: CRITICAL
+override_rules: ALL
+confidence_weight: 1.0
+active: TRUE
+version: v1
+🧬 2. Cluster Scoring Rule
+rule_id: RULE_0101
+rule_name: Pneumonia Fever Score
+rule_type: cluster_scoring
+priority: 3
+complaint_id: cough
+cluster_id: pneumonia_cluster
+diagnosis_id: CAP
+modifier_dependencies: none
+question_dependencies: fever
+input_fields: fever
+logic_description: If fever = yes → +2 pneumonia score
+logic_type: scoring
+source_tab: Cluster Scoring
+target_tabs: Diagnosis
+outputs: pneumonia_score +2
+disposition_impact: none
+medication_impact: none
+workup_impact: none
+safety_level: MODERATE
+🧠 3. Diagnosis Rule
+rule_id: RULE_0201
+rule_name: CAP Diagnosis Threshold
+rule_type: diagnosis
+priority: 4
+complaint_id: cough
+cluster_id: pneumonia_cluster
+diagnosis_id: CAP
+input_fields: pneumonia_score
+logic_description: If score ≥ 6 → CAP likely
+logic_type: threshold
+source_tab: Diagnosis Rules
+target_tabs: Diagnosis
+outputs: diagnosis_rank = high
+🏥 4. Disposition Rule
+rule_id: RULE_0301
+rule_name: Pneumonia ER Rule
+rule_type: disposition
+priority: 2
+complaint_id: cough
+cluster_id: pneumonia_cluster
+diagnosis_id: CAP
+modifier_dependencies: age>65 OR comorbidity
+question_dependencies: O2<94
+logic_description: pneumonia + risk → ER
+logic_type: conditional
+source_tab: Disposition
+target_tabs: Final Output
+outputs: ER
+💊 5. Medication Rule
+rule_id: RULE_0401
+rule_name: CAP Antibiotics
+rule_type: medication
+priority: 5
+complaint_id: cough
+cluster_id: pneumonia_cluster
+diagnosis_id: CAP
+modifier_dependencies: no_allergy_penicillin
+logic_description: assign antibiotic group
+logic_type: mapping
+source_tab: Standardized Med Groups
+target_tabs: Plan
+outputs: amoxicillin + azithromycin
