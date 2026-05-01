@@ -69,15 +69,37 @@ function ActionBadge({ action }: { action: string }) {
 }
 
 // ─── Generic CRUD dialog ─────────────────────────────────────────────────────
+function toSlug(s: string) {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
 function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoading, serverErrors, serverWarnings }: {
   open: boolean; onClose: () => void; title: string;
-  fields: { key: string; label: string; type?: string; required?: boolean; options?: string[]; hint?: string }[];
+  fields: { key: string; label: string; type?: string; required?: boolean; options?: string[]; hint?: string; autoSlugFrom?: string; readOnly?: boolean }[];
   initialValues?: Record<string, any>; onSave: (vals: Record<string, any>) => void; isLoading?: boolean;
   serverErrors?: string[]; serverWarnings?: string[];
 }) {
   const [vals, setVals] = useState<Record<string, any>>(initialValues ?? {});
   const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
-  const set = (k: string, v: any) => setVals(p => ({ ...p, [k]: v }));
+  const [manuallyEditedSlugs, setManuallyEditedSlugs] = useState<Set<string>>(new Set());
+
+  const set = (k: string, v: any) => {
+    setVals(p => {
+      const next = { ...p, [k]: v };
+      // Auto-populate slug fields derived from this field
+      for (const f of fields) {
+        if (f.autoSlugFrom === k && !manuallyEditedSlugs.has(f.key)) {
+          next[f.key] = toSlug(String(v));
+        }
+      }
+      return next;
+    });
+  };
+
+  const setSlug = (k: string, v: any) => {
+    setManuallyEditedSlugs(prev => new Set(prev).add(k));
+    setVals(p => ({ ...p, [k]: v }));
+  };
 
   const handleSave = () => {
     // Parse any JSON fields before saving
@@ -141,11 +163,26 @@ function EditDialog({ open, onClose, title, fields, initialValues, onSave, isLoa
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="true">Yes</SelectItem><SelectItem value="false">No</SelectItem></SelectContent>
                 </Select>
+              ) : f.autoSlugFrom ? (
+                <div className="space-y-1">
+                  <Input
+                    type="text"
+                    value={String(vals[f.key] ?? "")}
+                    onChange={e => setSlug(f.key, e.target.value)}
+                    className="font-mono text-sm bg-muted/30"
+                    placeholder="auto-generated from label"
+                    data-testid={`input-${f.key}`}
+                  />
+                  {!manuallyEditedSlugs.has(f.key) && vals[f.key] && (
+                    <p className="text-xs text-muted-foreground">Auto-generated — edit above if needed</p>
+                  )}
+                </div>
               ) : (
                 <Input
                   type={f.type || "text"}
                   value={String(vals[f.key] ?? "")}
                   onChange={e => set(f.key, f.type === "number" ? Number(e.target.value) : e.target.value)}
+                  data-testid={`input-${f.key}`}
                 />
               )}
             </div>
@@ -199,10 +236,10 @@ function ComplaintsTab() {
   });
 
   const FIELDS = [
-    { key: "complaintId", label: "Complaint ID", required: true },
-    { key: "label", label: "Label", required: true },
-    { key: "system", label: "System", options: ["ENT", "PULM", "CARD", "GI", "GU", "DERM", "MSK", "NEURO", "GENERAL"] },
-    { key: "aliases", label: "Aliases (comma-separated)" },
+    { key: "label", label: "Complaint Name", required: true, hint: "Human-readable name, e.g. \"Ectopic Pregnancy\" or \"Severe Sepsis\"" },
+    { key: "complaintId", label: "Complaint ID", required: true, autoSlugFrom: "label", hint: "Auto-generated from the name above — lowercase_with_underscores" },
+    { key: "system", label: "Body System", options: ["ENT", "PULM", "CARD", "GI", "GU", "DERM", "MSK", "NEURO", "GENERAL"] },
+    { key: "aliases", label: "Aliases (comma-separated)", hint: "Other names patients might use, e.g. \"belly pain, stomach ache\"" },
     { key: "defaultCluster", label: "Default Cluster" },
     { key: "scoringModule", label: "Scoring Module" },
     { key: "engineType", label: "Engine Type", options: ["LEGACY", "STANDARD", "ADVANCED"] },
