@@ -5,6 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -12,10 +15,13 @@ import {
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Map, AlertTriangle, CheckCircle2, RefreshCw, Download,
   ShieldCheck, FileBarChart2, Search, ChevronRight, Loader2,
   ClipboardList, Pill, HelpCircle, Stethoscope, Activity,
+  ListTree, Play, ChevronDown, ChevronUp, ArrowRight,
+  Zap, Filter, BookOpen,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -600,6 +606,508 @@ function ValidatorTab() {
   );
 }
 
+// ── Rules Catalog tab ─────────────────────────────────────────────────────────
+const RULE_TYPES = ["red_flag","diagnosis","cluster_scoring","medication","disposition","modifier","question","workup","plan"];
+const SAFETY_LEVELS = ["CRITICAL","HIGH","MODERATE","LOW"];
+
+function safetyBadge(level: string) {
+  const map: Record<string,string> = {
+    CRITICAL: "bg-red-700 text-white",
+    HIGH:     "bg-orange-500 text-white",
+    MODERATE: "bg-yellow-500 text-white",
+    LOW:      "bg-slate-400 text-white",
+  };
+  return <Badge className={`text-xs ${map[level] ?? "bg-slate-400 text-white"}`}>{level}</Badge>;
+}
+function ruleTypeBadge(t: string) {
+  const map: Record<string,string> = {
+    red_flag:       "bg-red-100 text-red-700 border-red-200",
+    diagnosis:      "bg-blue-100 text-blue-700 border-blue-200",
+    cluster_scoring:"bg-purple-100 text-purple-700 border-purple-200",
+    medication:     "bg-green-100 text-green-700 border-green-200",
+    disposition:    "bg-indigo-100 text-indigo-700 border-indigo-200",
+    modifier:       "bg-amber-100 text-amber-700 border-amber-200",
+    question:       "bg-cyan-100 text-cyan-700 border-cyan-200",
+    workup:         "bg-pink-100 text-pink-700 border-pink-200",
+    plan:           "bg-teal-100 text-teal-700 border-teal-200",
+  };
+  return <Badge variant="outline" className={`text-xs font-mono ${map[t] ?? ""}`}>{t.replace("_"," ")}</Badge>;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("app_auth_token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
+function RulesTab() {
+  const { toast } = useToast();
+  const [filterType,     setFilterType]     = useState<string>("all");
+  const [filterSafety,   setFilterSafety]   = useState<string>("all");
+  const [filterComplaint,setFilterComplaint] = useState("");
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<any | null>(null);
+
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: "40",
+    ...(filterType !== "all" && { rule_type: filterType }),
+    ...(filterSafety !== "all" && { safety_level: filterSafety }),
+    ...(filterComplaint && { complaint_id: filterComplaint }),
+  });
+
+  const { data: statsData } = useQuery<any>({
+    queryKey: ["/api/master-rules/stats"],
+    queryFn: async () => {
+      const r = await fetch("/api/master-rules/stats", { credentials: "include", headers: authHeaders() });
+      return r.json();
+    },
+  });
+  const { data: listData, isLoading } = useQuery<any>({
+    queryKey: ["/api/master-rules", filterType, filterSafety, filterComplaint, page],
+    queryFn: async () => {
+      const r = await fetch(`/api/master-rules?${params}`, { credentials: "include", headers: { "Content-Type": "application/json", ...authHeaders() } });
+      return r.json();
+    },
+  });
+
+  const exportRules = useMutation({
+    mutationFn: () => fetch("/api/master-rules/export-to-sheets", {
+      method: "POST", credentials: "include", headers: authHeaders(),
+    }),
+    onSuccess: () => toast({ title: "Exported", description: "MASTER_RULE_MAP tab updated with 27-column structure." }),
+  });
+
+  const stats = statsData?.stats;
+  const rules: any[] = listData?.rules ?? [];
+  const total = listData?.total ?? 0;
+  const totalPages = Math.ceil(total / 40);
+
+  return (
+    <div className="space-y-4">
+      {/* Stats row */}
+      {stats && (
+        <div className="grid grid-cols-4 md:grid-cols-8 gap-2 text-xs">
+          {[
+            { label: "Total",     val: stats.total,          cls: "text-slate-700" },
+            { label: "Critical",  val: stats.critical,        cls: "text-red-600 font-bold" },
+            { label: "Red Flags", val: stats.red_flags,       cls: "text-red-500" },
+            { label: "Diagnoses", val: stats.diagnoses,       cls: "text-blue-600" },
+            { label: "Meds",      val: stats.medications,     cls: "text-green-600" },
+            { label: "Disp",      val: stats.dispositions,    cls: "text-indigo-600" },
+            { label: "Modifiers", val: stats.modifiers,       cls: "text-amber-600" },
+            { label: "Clusters",  val: stats.cluster_scoring, cls: "text-purple-600" },
+          ].map(s => (
+            <div key={s.label} className="border rounded p-2 text-center">
+              <div className={`text-lg font-bold ${s.cls}`}>{s.val}</div>
+              <div className="text-muted-foreground">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <Filter className="h-4 w-4 text-muted-foreground" />
+        <Select value={filterType} onValueChange={v => { setFilterType(v); setPage(1); }}>
+          <SelectTrigger className="w-40 h-8 text-xs" data-testid="select-rule-type">
+            <SelectValue placeholder="All types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All types</SelectItem>
+            {RULE_TYPES.map(t => <SelectItem key={t} value={t}>{t.replace("_"," ")}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filterSafety} onValueChange={v => { setFilterSafety(v); setPage(1); }}>
+          <SelectTrigger className="w-36 h-8 text-xs" data-testid="select-safety-level">
+            <SelectValue placeholder="All safety" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All safety</SelectItem>
+            {SAFETY_LEVELS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Input
+          data-testid="input-filter-complaint"
+          placeholder="Filter by complaint_id…"
+          className="h-8 text-xs w-44"
+          value={filterComplaint}
+          onChange={e => { setFilterComplaint(e.target.value); setPage(1); }}
+        />
+        <span className="text-xs text-muted-foreground ml-auto">{total} rules</span>
+        <Button
+          data-testid="button-export-master-rules"
+          size="sm" variant="outline"
+          onClick={() => exportRules.mutate()}
+          disabled={exportRules.isPending}
+        >
+          {exportRules.isPending ? <Loader2 className="animate-spin h-3 w-3 mr-1" /> : <Download className="h-3 w-3 mr-1" />}
+          Export 27-col Sheet
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Rule table */}
+        <div className="md:col-span-2 border rounded-md overflow-hidden">
+          {isLoading
+            ? <div className="p-4 flex items-center gap-2 text-muted-foreground"><Loader2 className="animate-spin h-4 w-4" />Loading rules…</div>
+            : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="text-xs">
+                    <TableHead className="w-32">Rule ID</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>P</TableHead>
+                    <TableHead>Complaint</TableHead>
+                    <TableHead>Safety</TableHead>
+                    <TableHead>Flow</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rules.map((r: any) => (
+                    <TableRow
+                      key={r.rule_id}
+                      className={`cursor-pointer hover:bg-muted text-xs ${selected?.rule_id === r.rule_id ? "bg-muted" : ""}`}
+                      onClick={() => setSelected(r)}
+                      data-testid={`row-rule-${r.rule_id}`}
+                    >
+                      <TableCell className="font-mono text-xs text-muted-foreground">{r.rule_id.slice(0,14)}</TableCell>
+                      <TableCell className="max-w-[160px] truncate font-medium">{r.rule_name}</TableCell>
+                      <TableCell>{ruleTypeBadge(r.rule_type)}</TableCell>
+                      <TableCell className="text-center">{r.priority}</TableCell>
+                      <TableCell className="font-mono text-xs">{r.complaint_id === "ALL" ? <span className="text-muted-foreground">ALL</span> : r.complaint_id}</TableCell>
+                      <TableCell>{safetyBadge(r.safety_level)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {r.source_tab?.split(" ")[0]} <ArrowRight className="h-3 w-3 inline" /> {(r.target_tabs ?? [])[0]?.split(" ")[0]}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )
+          }
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between p-2 border-t text-xs">
+              <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.max(1, p-1))} disabled={page === 1}>← Prev</Button>
+              <span>{page} / {totalPages}</span>
+              <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.min(totalPages, p+1))} disabled={page >= totalPages}>Next →</Button>
+            </div>
+          )}
+        </div>
+
+        {/* Rule detail panel */}
+        <div className="border rounded-md overflow-y-auto max-h-[65vh]">
+          {!selected ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground text-sm p-6 text-center">
+              <div><BookOpen className="h-8 w-8 mx-auto mb-2 opacity-30" />Click a rule to see all 27 fields</div>
+            </div>
+          ) : (
+            <div className="p-3 space-y-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-bold text-sm">{selected.rule_name}</div>
+                  <div className="font-mono text-muted-foreground">{selected.rule_id}</div>
+                </div>
+                {safetyBadge(selected.safety_level)}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {ruleTypeBadge(selected.rule_type)}
+                <Badge variant="outline">P{selected.priority}</Badge>
+                <Badge variant="outline">{selected.version}</Badge>
+              </div>
+              {[
+                ["Complaint", selected.complaint_id],
+                ["Cluster", selected.cluster_id],
+                ["Diagnosis", selected.diagnosis_id],
+                ["Logic type", selected.logic_type],
+                ["Source tab", selected.source_tab],
+                ["Target tabs", (selected.target_tabs ?? []).join(", ")],
+                ["Disposition impact", selected.disposition_impact],
+                ["Medication impact", selected.medication_impact],
+                ["Workup impact", selected.workup_impact],
+                ["Confidence weight", selected.confidence_weight],
+                ["Owner", selected.owner],
+                ["Last updated", selected.last_updated ? new Date(selected.last_updated).toLocaleDateString() : "—"],
+              ].map(([label, val]) => val ? (
+                <div key={String(label)} className="flex gap-1">
+                  <span className="text-muted-foreground w-32 shrink-0">{label}:</span>
+                  <span className="font-medium break-all">{String(val)}</span>
+                </div>
+              ) : null)}
+              {selected.logic_description && (
+                <div className="border-t pt-2">
+                  <div className="text-muted-foreground mb-1">Logic:</div>
+                  <div className="bg-muted/50 rounded p-2 font-mono text-xs whitespace-pre-wrap">{selected.logic_description}</div>
+                </div>
+              )}
+              {selected.notes && (
+                <div className="border-t pt-2 text-muted-foreground italic">{selected.notes}</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Pipeline Simulator tab ─────────────────────────────────────────────────────
+const STEP_COLORS: Record<number, string> = {
+  1: "border-l-slate-400",  2: "border-l-amber-400",
+  3: "border-l-cyan-400",   4: "border-l-cyan-300",
+  5: "border-l-red-500",    6: "border-l-purple-500",
+  7: "border-l-blue-500",   8: "border-l-indigo-500",
+  9: "border-l-teal-500",   10: "border-l-green-500",
+  11: "border-l-green-400", 12: "border-l-emerald-500",
+  13: "border-l-slate-600",
+};
+
+function PipelineTab() {
+  const { toast } = useToast();
+  const [complaintId, setComplaintId] = useState("chest_pain");
+  const [inputsJson, setInputsJson] = useState(`{"O2_sat": 89, "fever": "yes", "diaphoresis": "yes"}`);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [result, setResult] = useState<any | null>(null);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set([5, 7, 8]));
+
+  const pipelineQuery = useQuery<any>({
+    queryKey: ["/api/master-rules/pipeline", complaintId],
+    queryFn: async () => {
+      const r = await fetch(`/api/master-rules/pipeline/${encodeURIComponent(complaintId)}`, { credentials: "include", headers: authHeaders() });
+      return r.json();
+    },
+    enabled: !!complaintId,
+  });
+
+  const dryRun = useMutation({
+    mutationFn: async (vars: { complaint_id: string; inputs: any }) => {
+      const res = await fetch("/api/master-rules/dry-run", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(vars),
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setResult(data);
+      if (data.hardStop) toast({ title: "Hard Stop!", description: data.hardStopReason ?? "", variant: "destructive" });
+    },
+    onError: () => toast({ title: "Dry-run failed", variant: "destructive" }),
+  });
+
+  function handleRun() {
+    try {
+      const parsed = JSON.parse(inputsJson);
+      setJsonError(null);
+      dryRun.mutate({ complaint_id: complaintId, inputs: parsed });
+    } catch {
+      setJsonError("Invalid JSON — check your inputs object");
+    }
+  }
+
+  function toggleExpand(step: number) {
+    setExpanded(prev => { const n = new Set(prev); n.has(step) ? n.delete(step) : n.add(step); return n; });
+  }
+
+  const pipeline = pipelineQuery.data?.pipeline ?? [];
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      {/* Left: pipeline structure for complaint */}
+      <div className="md:col-span-2 space-y-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <ListTree className="h-4 w-4 text-indigo-500" />13-Step Pipeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-xs">
+            <div className="flex gap-2">
+              <Input
+                data-testid="input-pipeline-complaint"
+                value={complaintId}
+                onChange={e => setComplaintId(e.target.value)}
+                placeholder="complaint_id"
+                className="h-7 text-xs"
+              />
+            </div>
+            {pipelineQuery.isLoading
+              ? <div className="flex items-center gap-1 text-muted-foreground"><Loader2 className="animate-spin h-3 w-3" />Loading…</div>
+              : (
+                <div className="space-y-1">
+                  {/* Step 1 */}
+                  <div className={`border-l-4 border-l-slate-400 pl-2 py-1 rounded-r`}>
+                    <div className="font-semibold">Step 1 — Complaint Identification</div>
+                    <div className="text-muted-foreground">complaint_id: {complaintId}</div>
+                  </div>
+                  {pipeline.map((step: any) => (
+                    <div key={step.ruleType} className={`border-l-4 ${STEP_COLORS[step.step] ?? "border-l-slate-300"} pl-2 py-1 rounded-r`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold">Step {step.step} — {step.stepName}</span>
+                        <Badge variant="outline" className="text-xs">{step.count}</Badge>
+                      </div>
+                      <div className="text-muted-foreground">{step.ruleType.replace("_"," ")}</div>
+                    </div>
+                  ))}
+                  <div className={`border-l-4 border-l-slate-600 pl-2 py-1 rounded-r`}>
+                    <div className="font-semibold">Step 13 — Audit Trail</div>
+                    <div className="text-muted-foreground">immutable log</div>
+                  </div>
+                </div>
+              )
+            }
+          </CardContent>
+        </Card>
+
+        {/* Dry-run input */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Play className="h-4 w-4 text-green-500" />Dry-Run Simulator
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="text-xs text-muted-foreground">Patient inputs as JSON:</div>
+            <Textarea
+              data-testid="input-dry-run-json"
+              value={inputsJson}
+              onChange={e => setInputsJson(e.target.value)}
+              rows={6}
+              className="text-xs font-mono"
+              placeholder='{"O2_sat": 89, "fever": "yes"}'
+            />
+            {jsonError && <div className="text-red-500 text-xs">{jsonError}</div>}
+            <Button
+              data-testid="button-dry-run"
+              onClick={handleRun}
+              disabled={dryRun.isPending}
+              className="w-full"
+              size="sm"
+            >
+              {dryRun.isPending ? <Loader2 className="animate-spin h-4 w-4 mr-2" /> : <Play className="h-4 w-4 mr-2" />}
+              Execute Pipeline
+            </Button>
+            <div className="text-xs text-muted-foreground border rounded p-2 space-y-1 font-mono">
+              <div className="font-semibold text-foreground">Example inputs:</div>
+              <div>O2_sat: 89 → triggers hypoxia red flag</div>
+              <div>fever: "yes" → scores pneumonia cluster</div>
+              <div>diaphoresis: "yes" → ACS flag</div>
+              <div>pregnancy_confirmed: true → blocks meds</div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Right: execution trace */}
+      <div className="md:col-span-3">
+        {!result && !dryRun.isPending && (
+          <div className="h-full flex items-center justify-center border rounded-lg text-muted-foreground text-sm p-8 text-center">
+            <div>
+              <Zap className="h-10 w-10 mx-auto mb-3 opacity-20" />
+              Enter patient inputs and click Execute Pipeline to see which rules fire at each step.
+            </div>
+          </div>
+        )}
+        {dryRun.isPending && (
+          <div className="flex items-center justify-center h-40 gap-2 text-muted-foreground">
+            <Loader2 className="animate-spin h-5 w-5" />Executing 13-step pipeline…
+          </div>
+        )}
+        {result && (
+          <div className="space-y-3">
+            {/* Summary banner */}
+            <Card className={result.hardStop ? "border-red-500 bg-red-50 dark:bg-red-950" : "border-green-500 bg-green-50 dark:bg-green-950"}>
+              <CardContent className="pt-3 pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {result.hardStop
+                      ? <AlertTriangle className="h-5 w-5 text-red-500" />
+                      : <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    }
+                    <div>
+                      <div className="font-bold text-sm">
+                        {result.hardStop ? `HARD STOP — ${result.hardStopReason}` : "Pipeline Complete"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {result.totalRulesFired} rules fired · Disposition: {result.finalDisposition}
+                      </div>
+                    </div>
+                  </div>
+                  <Badge className={result.hardStop ? "bg-red-600 text-white" : "bg-green-600 text-white"}>
+                    {result.finalDisposition}
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Step-by-step trace */}
+            <div className="space-y-2">
+              {(result.steps ?? []).map((step: any) => {
+                const isExpanded = expanded.has(step.step);
+                const hasRules   = step.rulesFired?.length > 0;
+                return (
+                  <div
+                    key={step.step}
+                    className={`border-l-4 ${STEP_COLORS[step.step] ?? "border-l-slate-300"} border rounded-r-md overflow-hidden`}
+                    data-testid={`step-${step.step}`}
+                  >
+                    <button
+                      className="w-full text-left p-2 flex items-center justify-between hover:bg-muted/50 transition-colors"
+                      onClick={() => toggleExpand(step.step)}
+                    >
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-bold w-6 text-center text-muted-foreground">{step.step}</span>
+                        <span className="font-semibold">{step.name}</span>
+                        {step.redFlagHit && <Badge className="bg-red-600 text-white text-xs py-0">⚠ Red Flag</Badge>}
+                        {hasRules && <Badge variant="outline" className="text-xs py-0">{step.rulesFired.length} fired</Badge>}
+                        {step.rulesEvaluated > 0 && !hasRules && <span className="text-muted-foreground">({step.rulesEvaluated} evaluated, 0 fired)</span>}
+                      </div>
+                      {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="px-3 pb-2 border-t bg-muted/20 text-xs space-y-2">
+                        <div className="text-muted-foreground pt-1">{step.summary}</div>
+                        {step.rulesFired?.length > 0 && (
+                          <div className="space-y-1">
+                            {step.rulesFired.map((r: any) => (
+                              <div key={r.rule_id} className="border rounded p-2 bg-background" data-testid={`fired-${r.rule_id}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium">{r.rule_name}</span>
+                                  {safetyBadge(r.safety_level)}
+                                </div>
+                                <div className="text-muted-foreground font-mono">{r.rule_id}</div>
+                                {r.disposition_impact && (
+                                  <div className="text-indigo-600 font-semibold">→ {r.disposition_impact}</div>
+                                )}
+                                {r.outputs && (
+                                  <div className="font-mono bg-muted/50 rounded px-1 py-0.5 text-xs mt-1">
+                                    {JSON.stringify(r.outputs)}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {Object.keys(step.outputs ?? {}).length > 0 && (
+                          <div className="font-mono bg-muted/50 rounded px-2 py-1">
+                            {JSON.stringify(step.outputs)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function MasterRuleMapPage() {
   const qc = useQueryClient();
@@ -642,13 +1150,23 @@ export default function MasterRuleMapPage() {
         </Button>
       </div>
 
-      <Tabs defaultValue="overview">
-        <TabsList data-testid="tabs-rule-map">
-          <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
+      <Tabs defaultValue="rules">
+        <TabsList data-testid="tabs-rule-map" className="flex-wrap h-auto gap-1">
+          <TabsTrigger value="rules"     data-testid="tab-rules">Rule Catalog</TabsTrigger>
+          <TabsTrigger value="pipeline"  data-testid="tab-pipeline">Pipeline Simulator</TabsTrigger>
+          <TabsTrigger value="overview"  data-testid="tab-overview">Coverage Overview</TabsTrigger>
           <TabsTrigger value="drilldown" data-testid="tab-drilldown">Drill-down</TabsTrigger>
-          <TabsTrigger value="gaps" data-testid="tab-gaps">Gaps</TabsTrigger>
-          <TabsTrigger value="tools" data-testid="tab-tools">Tools & RLHF</TabsTrigger>
+          <TabsTrigger value="gaps"      data-testid="tab-gaps">Gaps</TabsTrigger>
+          <TabsTrigger value="tools"     data-testid="tab-tools">Tools & RLHF</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="rules" className="mt-4">
+          <RulesTab />
+        </TabsContent>
+
+        <TabsContent value="pipeline" className="mt-4">
+          <PipelineTab />
+        </TabsContent>
 
         <TabsContent value="overview" className="mt-4">
           {isLoading
