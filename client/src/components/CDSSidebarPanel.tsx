@@ -39,18 +39,6 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-// ─── Disposition translation (same map as DischargeInstructionPanel) ──────────
-const DISPOSITION_MAP: Record<string, string> = {
-  er_send:     "Urgent Care",
-  urgent_care: "Urgent Care",
-  pcp:         "Prescription",
-  self_care:   "Home Care",
-};
-function translateDisposition(raw?: string): string {
-  if (!raw) return "Home Care";
-  return DISPOSITION_MAP[raw] ?? "Home Care";
-}
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface SafetyAlert {
@@ -110,6 +98,7 @@ interface CDSSidebarPanelProps {
   caseId: string | number;
   complaint?: string;
   disposition?: string;
+  caseDoc?: { _ont?: { returnPrecautionsKey?: string } };
   patientMedications?: string[];
   allergies?: string[];
   conditions?: string[];
@@ -213,6 +202,7 @@ export function CDSSidebarPanel({
   caseId,
   complaint,
   disposition,
+  caseDoc,
   patientMedications = [],
   allergies = [],
   conditions = [],
@@ -220,7 +210,7 @@ export function CDSSidebarPanel({
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<CDSResponse | null>(null);
 
-  const translatedDisposition = translateDisposition(disposition);
+  const translatedDisposition = caseDoc?._ont?.returnPrecautionsKey ?? "Home Care";
 
   // ── API call ────────────────────────────────────────────────────────────────
   const analyzeMutation = useMutation({

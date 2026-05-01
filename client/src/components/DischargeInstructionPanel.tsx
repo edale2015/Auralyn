@@ -26,23 +26,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, FileText, RefreshCw } from "lucide-react";
 
-const DISPOSITION_MAP: Record<string, string> = {
-  er_send:     "Urgent Care",
-  urgent_care: "Urgent Care",
-  pcp:         "Prescription",
-  self_care:   "Home Care",
-};
-
-function translateDisposition(raw?: string): string {
-  if (!raw) return "Home Care";
-  return DISPOSITION_MAP[raw] ?? "Home Care";
-}
-
 interface DischargeInstructionPanelProps {
   caseId: string | number;
   patientName?: string;
   complaint?: string;
   disposition?: string;
+  caseDoc?: { _ont?: { returnPrecautionsKey?: string } };
   onInstructionsReady?: (text: string) => void;
 }
 
@@ -57,13 +46,14 @@ export function DischargeInstructionPanel({
   patientName = "Patient",
   complaint,
   disposition,
+  caseDoc,
   onInstructionsReady,
 }: DischargeInstructionPanelProps) {
   const [instructionText, setInstructionText] = useState<string>("");
   const [isGenerated,     setIsGenerated]     = useState(false);
   const [isApproved,      setIsApproved]      = useState(false);
 
-  const translatedDisposition = translateDisposition(disposition);
+  const translatedDisposition = caseDoc?._ont?.returnPrecautionsKey ?? "Home Care";
 
   const generateMutation = useMutation({
     mutationFn: async () => {
