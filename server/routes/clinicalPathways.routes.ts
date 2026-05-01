@@ -14,6 +14,10 @@ import { validatePathway }   from "../clinical/complaintPathwaySchema";
 import { ALL_SYSTEMS, MASTER_SUMMARY, getComplaintsByPriority, getCriticalMissingP1, getSystemStatus } from "../clinical/PATHWAY_MASTER_MAP";
 import { ENT_EYE_INFECTIOUS_PATHWAYS } from "../clinical/pathways/ent-eye-infectious";
 import type { ComplaintPathway } from "../clinical/complaintPathwaySchema";
+import { completePathwayDraft } from "../clinical/pathwayCompletionEngine";
+import { appendAuditEvent }    from "../governance/audit";
+import { db }  from "../db";
+import { sql } from "drizzle-orm";
 
 export const clinicalPathwaysRouter = Router();
 
@@ -57,6 +61,45 @@ clinicalPathwaysRouter.get(
       version:      p.version ?? 1,
     }));
     res.json({ ok: true, count: entries.length, pathways: entries });
+  }
+);
+
+// ─── GET /api/clinical/pathways/pending-review ───────────────────────────────
+// WIN 22: Returns all pathway drafts awaiting physician approval.
+// NOTE: Must be registered BEFORE /:slug to avoid slug capture.
+
+clinicalPathwaysRouter.get(
+  "/api/clinical/pathways/pending-review",
+  requireReviewAuth,
+  requireRole(["admin", "physician"]),
+  async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT slug, display_name, drafted_at, validation_score, review_items, status, draft_json
+        FROM pathway_drafts
+        WHERE status = 'pending_physician_review'
+        ORDER BY validation_score DESC
+        LIMIT 50
+      `);
+
+      const drafts = (rows.rows as any[]).map(r => ({
+        slug:                    r.slug,
+        displayName:             r.display_name,
+        draftedAt:               r.drafted_at,
+        validationScore:         r.validation_score,
+        requiresPhysicianReview: typeof r.review_items === "string"
+          ? JSON.parse(r.review_items)
+          : (r.review_items ?? []),
+        status: r.status,
+        draft:  typeof r.draft_json === "string"
+          ? JSON.parse(r.draft_json)
+          : (r.draft_json ?? {}),
+      }));
+
+      return res.json({ ok: true, drafts, count: drafts.length });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: e?.message });
+    }
   }
 );
 
@@ -186,5 +229,154 @@ clinicalPathwaysRouter.get(
     }
     const complaints = getComplaintsByPriority(level);
     return res.json({ ok: true, priority: level, complaints, count: complaints.length });
+  }
+);
+
+// ─── WIN 22 ROUTES ────────────────────────────────────────────────────────────
+
+// POST /api/clinical/pathways/complete-draft
+// Triggers async AI drafting for a single pathway slug.
+// Returns immediately; draft appears in pending-review queue within ~30s.
+
+clinicalPathwaysRouter.post(
+  "/api/clinical/pathways/complete-draft",
+  requireReviewAuth,
+  requireRole(["admin", "physician"]),
+  async (req, res) => {
+    const { slug } = req.body;
+    if (!slug) return res.status(400).json({ ok: false, error: "slug required" });
+
+    const existing = await db.execute(sql`
+      SELECT pathway_json FROM clinical_pathways WHERE slug = ${slug}
+    `).catch(() => ({ rows: [] }));
+
+    const partialPathway: Partial<ComplaintPathway> = existing.rows[0]
+      ? JSON.parse((existing.rows[0] as any).pathway_json)
+      : { slug, displayName: (slug as string).replace(/_/g, " ") };
+
+    // Fire async — respond immediately, draft saved to pathway_drafts
+    completePathwayDraft({ partialPathway }).catch((err: Error) =>
+      console.error(`[PathwayCompletion] Error drafting ${slug}:`, err.message)
+    );
+
+    return res.json({
+      ok:      true,
+      message: `Draft generation started for ${slug}. Check pending review queue in ~30s.`,
+    });
+  }
+);
+
+// POST /api/clinical/pathways/:slug/approve
+// Physician approves a draft and loads it to the clinical_pathways KB.
+
+clinicalPathwaysRouter.post(
+  "/api/clinical/pathways/:slug/approve",
+  requireReviewAuth,
+  requireRole(["admin", "physician"]),
+  async (req, res) => {
+    const { slug }    = req.params;
+    const physicianId = (req as any).authUser?.userId ?? (req as any).authUser?.id;
+
+    if (!physicianId) {
+      return res.status(403).json({ ok: false, error: "Physician actor required for pathway approval" });
+    }
+
+    const draftRow = await db.execute(sql`
+      SELECT draft_json, validation_score FROM pathway_drafts WHERE slug = ${slug}
+    `).catch(() => ({ rows: [] }));
+
+    if (!draftRow.rows[0]) {
+      return res.status(404).json({ ok: false, error: `Draft not found for slug: ${slug}` });
+    }
+
+    const draft = typeof (draftRow.rows[0] as any).draft_json === "string"
+      ? JSON.parse((draftRow.rows[0] as any).draft_json)
+      : (draftRow.rows[0] as any).draft_json;
+
+    const score = (draftRow.rows[0] as any).validation_score;
+
+    if (score < 80) {
+      return res.status(400).json({
+        ok:    false,
+        error: `Validation score ${score}/100 is below minimum 80 for KB loading`,
+      });
+    }
+
+    const approvedAt = new Date().toISOString();
+
+    await db.execute(sql`
+      INSERT INTO clinical_pathways (
+        slug, display_name, system, acuity_class, pathway_json,
+        validation_score, approved_by, approved_at, version, active
+      ) VALUES (
+        ${slug},
+        ${draft.displayName ?? slug},
+        ${draft.system ?? "general"},
+        ${draft.acuityClass ?? "routine"},
+        ${JSON.stringify(draft)},
+        ${score},
+        ${physicianId},
+        ${approvedAt},
+        1,
+        true
+      )
+      ON CONFLICT (slug) DO UPDATE SET
+        pathway_json     = ${JSON.stringify(draft)},
+        validation_score = ${score},
+        approved_by      = ${physicianId},
+        approved_at      = ${approvedAt},
+        version          = clinical_pathways.version + 1,
+        updated_at       = CURRENT_TIMESTAMP
+    `);
+
+    await db.execute(sql`
+      UPDATE pathway_drafts
+      SET status = 'approved', approved_by = ${physicianId}, approved_at = ${approvedAt}
+      WHERE slug = ${slug}
+    `);
+
+    await appendAuditEvent({
+      actor:      physicianId,
+      action:     "CLINICAL_PATHWAY_APPROVED",
+      entityId:   slug,
+      entityType: "complaint_pathway",
+      details:    { validationScore: score },
+    }).catch(console.error);
+
+    return res.json({ ok: true, message: `${slug} approved and loaded to clinical KB` });
+  }
+);
+
+// POST /api/clinical/pathways/:slug/reject
+// Physician rejects a draft with an optional reason.
+
+clinicalPathwaysRouter.post(
+  "/api/clinical/pathways/:slug/reject",
+  requireReviewAuth,
+  requireRole(["admin", "physician"]),
+  async (req, res) => {
+    const { slug }    = req.params;
+    const { reason }  = req.body;
+    const physicianId = (req as any).authUser?.userId ?? (req as any).authUser?.id ?? "system";
+    const rejectedAt  = new Date().toISOString();
+
+    await db.execute(sql`
+      UPDATE pathway_drafts
+      SET status           = 'rejected',
+          rejection_reason = ${reason ?? "No reason provided"},
+          approved_by      = ${physicianId},
+          approved_at      = ${rejectedAt}
+      WHERE slug = ${slug}
+    `);
+
+    await appendAuditEvent({
+      actor:      physicianId,
+      action:     "CLINICAL_PATHWAY_REJECTED",
+      entityId:   slug,
+      entityType: "complaint_pathway",
+      details:    { reason: (reason as string | undefined)?.slice(0, 200) },
+    }).catch(console.error);
+
+    return res.json({ ok: true });
   }
 );

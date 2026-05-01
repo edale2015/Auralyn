@@ -97,6 +97,7 @@ import ResearchRadarDashboard      from "@/pages/ResearchRadarDashboard";
 import ClinicalSkillsDashboard    from "@/pages/ClinicalSkillsDashboard";
 import InfraStatusDashboard       from "@/pages/InfraStatusDashboard";
 import PhysicianCMEQuizTool       from "@/pages/PhysicianCMEQuizTool";
+import PhysicianPathwayReview     from "@/pages/PhysicianPathwayReview";
 import IntentAnalyticsDashboard   from "@/pages/IntentAnalyticsDashboard";
 import SkillMapPage from "@/pages/SkillMapPage";
 import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
@@ -244,6 +245,7 @@ function WorkbenchRouter() {
         <Route path="/clinical-skills">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalSkillsDashboard /></RoleGuard>}</Route>
         <Route path="/infra-status">{() => <RoleGuard allowedRoles={["admin"]}><InfraStatusDashboard /></RoleGuard>}</Route>
         <Route path="/cme-quiz">{() => <RoleGuard allowedRoles={["admin", "physician"]}><PhysicianCMEQuizTool /></RoleGuard>}</Route>
+        <Route path="/pathway-review">{() => <RoleGuard allowedRoles={["admin", "physician"]}><PhysicianPathwayReview /></RoleGuard>}</Route>
         <Route path="/intent-analytics">{() => <RoleGuard allowedRoles={["admin"]}><IntentAnalyticsDashboard /></RoleGuard>}</Route>
         <Route path="/scope-command-center"  component={ScopeCommandCenter} />
         <Route path="/command-wall"          component={CommandWall} />
