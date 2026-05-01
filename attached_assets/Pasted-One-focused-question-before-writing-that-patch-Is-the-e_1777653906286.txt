@@ -1,0 +1,71 @@
+One focused question before writing that patch: Is the existing clinicalKBRetriever.ts currently wired into pipeline.ts? Specifically, does pipeline.ts call retrieveClinicalKB() and add its output to systemPromptAdditions?
+The answer changes how the patch is written:
+
+If yes — kbQueryLayer.ts replaces or supplements clinicalKBRetriever.ts at the same injection point
+If no — the patch adds both the injection point and the queryKBCached() call together
+
+Either way, the patch is the same three additions to pipeline.ts:
+Addition 1 — Import at top:
+tsimport { queryKBCached, buildKBPromptBlock } from "../retrieval/kbQueryLayer";
+Addition 2 — After EHR context fetch, before harness enforcement:
+ts// Query the full PostgreSQL KB — 4,207 clinical rules
+const kbResult = await queryKBCached(
+  enrichedCase._ont?.complaintSlug ?? complaintSlug,
+  {
+    age:               extractedAge,
+    pregnant:          rawAnswers.some(a => /pregnan/i.test(a)),
+    allergies:         ctx.allergies ?? [],
+    currentMeds:       ctx.medications ?? [],
+    diabetic:          ctx.conditions?.some(c => /diabet/i.test(c)),
+    chf:               ctx.conditions?.some(c => /heart failure|chf/i.test(c)),
+    copd:              ctx.conditions?.some(c => /copd|emphysema/i.test(c)),
+    immunocompromised: ctx.conditions?.some(c => /immunocompromised|hiv|transplant/i.test(c)),
+    renalDisease:      ctx.conditions?.some(c => /renal|kidney|ckd/i.test(c)),
+    anticoagulated:    ctx.medications?.some(m => /warfarin|coumadin|eliquis|xarelto/i.test(m)),
+  }
+).catch(() => null);
+
+if (kbResult) {
+  systemPromptAdditions.push(buildKBPromptBlock(kbResult));
+}
+Addition 3 — Audit event after:
+tsif (kbResult) {
+  await appendAuditEvent({
+    actor:      "system",
+    action:     "KB_RULES_INJECTED",
+    entityId:   caseId,
+    entityType: "case",
+    details: {
+      complaintId:      kbResult.complaintId,
+      redFlagCount:     kbResult.redFlags.length,
+      diagnosisCount:   kbResult.diagnoses.length,
+      mustNotMissCount: kbResult.mustNotMiss.length,
+      treatmentCount:   kbResult.treatments.length,
+      rulesFiredCount:  kbResult.rulesFired.length,
+      appliedModifiers: kbResult.appliedModifiers,
+    },
+  }).catch(console.error);
+}
+
+After Applying — Verification Test
+Run a chest pain case through the pipeline and check the audit chain:
+sqlSELECT event_data
+FROM audit_hash_chain
+WHERE event_type = 'KB_RULES_INJECTED'
+ORDER BY timestamp DESC
+LIMIT 1;
+Expected output:
+json{
+  "complaintId": "chest_pain",
+  "redFlagCount": 8,
+  "diagnosisCount": 15,
+  "mustNotMissCount": 3,
+  "treatmentCount": 12,
+  "rulesFiredCount": 38,
+  "appliedModifiers": []
+}
+If rulesFiredCount is significantly higher than before, the full KB is now feeding the clinical brain. If mustNotMissCount shows 3+ diagnoses for chest pain, your must-not-miss rules (ACS, PE, aortic dissection) are being surfaced to the physician.
+
+Complete System State
+CategoryStatusSafety gates (6/6)✅ All greenLLM Gateway (6 files)✅ All migratedClinical KB (4,207 rules)✅ In PostgreSQLKB → Pipeline connection🔧 Three additions to pipeline.tsGoogle Sheets architecture✅ All 4 issues fixedComplaint pathways (schema)✅ Win 21 completePathway completion engine✅ Win 22 ready to wireBD Radar🔧 Ready to wirePageIndex (Win 20)✅ Complete
+The pipeline patch is the highest-priority remaining item — it is the connection between a year of clinical KB development and the AI that serves patients. Everything else is additive on top of a working clinical system. This is what makes the difference between "Auralyn uses AI" and "Auralyn uses your clinical knowledge."

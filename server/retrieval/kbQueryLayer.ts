@@ -3,81 +3,78 @@
  * server/retrieval/kbQueryLayer.ts
  *
  * Connects the clinical pipeline to the existing PostgreSQL KB tables.
- * Replaces the live Google Sheets reads for Group D tabs (Issue 3 fix):
- *   CLINICAL_QUESTIONS  → kb_questions (via sheetFlowLoader)
- *   CLINICAL_RULES      → kb_red_flag_rules (via entFluRuleLoader)
- *   CLINICAL_MEDICATIONS → kb_treatment_rules (via medCatalog)
- *   CLINICAL_DIAGNOSES  → kb_diagnosis_rules (via diagnosisCatalog)
+ * Replaces live Google Sheets reads (Issue 3 fix) with fast DB queries
+ * backed by a 5-minute in-memory cache.
  *
- * Queried tables (total ~4,207 rules):
- *   kb_red_flag_rules   — 418 rows
- *   kb_diagnosis_rules  — 2,198 rows
- *   kb_treatment_rules  — 1,227 rows
- *   kb_disposition_rules — 364 rows
- *   kb_modifiers        — patient context rules
+ * Actual table schemas (from information_schema):
+ *   kb_red_flag_rules   — rule_id, complaint_id, label, trigger_expr, severity, action, active
+ *   kb_diagnosis_rules  — rule_id, complaint_id, diagnosis_id, diagnosis_label, cannot_miss, base_probability, active
+ *   kb_treatment_rules  — rule_id, complaint_id, diagnosis_id, medication_name, adult_dose, route, contraindications, pregnancy_category, active
+ *   kb_disposition_rules — rule_id, complaint_id, priority, when_expr, disposition_level, active
+ *   kb_modifiers        — modifier_id, label, applies_to[], disposition_threshold_shift, active
  */
 
 import { db }  from "../db";
 import { sql } from "drizzle-orm";
 
 export interface KBRedFlagRule {
-  id:              string;
-  rule_id?:        string;
-  complaint_id:    string;
-  system?:         string;
-  condition_text:  string;
-  action_text:     string;
-  severity:        "CRITICAL" | "HIGH" | "MODERATE";
-  source_tab?:     string;
-  active:          boolean;
+  id:           number;
+  rule_id:      string;
+  complaint_id: string;
+  label:        string;
+  trigger_expr: string;
+  severity:     string;
+  action:       string;
+  active:       boolean;
 }
 
 export interface KBDiagnosisRule {
-  id:              string;
-  diagnosis_id?:   string;
-  system:          string;
-  chief_complaint: string;
-  diagnosis_name:  string;
-  red_flag:        boolean;
-  cluster_id?:     string;
-  confidence_weight?: number;
-  disposition_default?: string;
-  active:          boolean;
+  id:               number;
+  rule_id:          string;
+  complaint_id:     string;
+  diagnosis_id:     string;
+  diagnosis_label:  string;
+  icd_code?:        string;
+  base_probability?: number;
+  cannot_miss:      boolean;
+  base_points?:     number;
+  cluster_priority?: number;
+  active:           boolean;
 }
 
 export interface KBTreatmentRule {
-  id:              string;
-  med_group_id?:   string;
-  diagnosis_id?:   string;
-  complaint_id?:   string;
-  medication_name: string;
-  dose?:           string;
-  route?:          string;
-  duration?:       string;
-  contraindications?: string;
-  active:          boolean;
+  id:                  number;
+  rule_id:             string;
+  complaint_id:        string;
+  diagnosis_id?:       string;
+  medication_name:     string;
+  medication_group?:   string;
+  is_first_line?:      boolean;
+  adult_dose?:         string;
+  route?:              string;
+  contraindications?:  string;
+  pregnancy_category?: string;
+  allergy_cross_reacts?: string[];
+  active:              boolean;
 }
 
 export interface KBDispositionRule {
-  id:              string;
-  rule_id?:        string;
-  complaint_id:    string;
-  cluster_id?:     string;
-  diagnosis_id?:   string;
-  disposition:     string;
-  criteria:        string;
-  priority:        number;
-  active:          boolean;
+  id:               number;
+  rule_id:          string;
+  complaint_id:     string;
+  priority:         number;
+  when_expr:        string;
+  disposition_level: string;
+  active:           boolean;
 }
 
 export interface KBModifier {
-  id:              string;
-  modifier_id?:    string;
-  modifier_type:   string;
-  condition:       string;
-  affects:         string;
-  adjustment:      string;
-  active:          boolean;
+  id:                          number;
+  modifier_id:                 string;
+  label:                       string;
+  applies_to:                  string[];
+  disposition_threshold_shift?: number;
+  active:                      boolean;
 }
 
 export interface PatientContext {
@@ -107,43 +104,49 @@ export interface KBQueryResult {
   mustNotMiss:      KBDiagnosisRule[];
 }
 
-function evaluateModifiers(modifiers: KBModifier[], patient: PatientContext): string[] {
+// ─── Modifier evaluation ──────────────────────────────────────────────────────
+
+function evaluateModifiers(modifiers: KBModifier[], complaint: string, patient: PatientContext): string[] {
   const fired: string[] = [];
 
   for (const mod of modifiers) {
-    const c = mod.condition.toLowerCase();
+    const appliesToComplaint =
+      !mod.applies_to?.length ||
+      mod.applies_to.some(t => t.toLowerCase() === complaint || t.toLowerCase() === "all");
 
-    if (c.includes("age>65")    && (patient.age ?? 0) > 65)    { fired.push(mod.id); continue; }
-    if (c.includes("age<18")    && (patient.age ?? 99) < 18)   { fired.push(mod.id); continue; }
-    if (c.includes("pregnancy") && patient.pregnant)            { fired.push(mod.id); continue; }
-    if (c.includes("immunocompromised") && patient.immunocompromised) { fired.push(mod.id); continue; }
-    if (c.includes("diabetes")  && patient.diabetic)            { fired.push(mod.id); continue; }
-    if (c.includes("chf")       && patient.chf)                 { fired.push(mod.id); continue; }
-    if (c.includes("copd")      && patient.copd)                { fired.push(mod.id); continue; }
-    if (c.includes("renal")     && patient.renalDisease)        { fired.push(mod.id); continue; }
-    if (c.includes("anticoagul") && patient.anticoagulated)     { fired.push(mod.id); continue; }
+    if (!appliesToComplaint) continue;
 
-    if (patient.allergies?.length && c.includes("allergy")) {
-      const allergyMed = mod.condition.match(/allergy[_\s](\w+)/i)?.[1]?.toLowerCase();
-      if (allergyMed && patient.allergies.some(a => a.toLowerCase().includes(allergyMed))) {
-        fired.push(mod.id);
-      }
+    const label = (mod.label ?? "").toLowerCase();
+
+    if (label.includes("elderly") || label.includes("age>65")) {
+      if ((patient.age ?? 0) > 65) { fired.push(mod.modifier_id); continue; }
     }
+    if (label.includes("pediatric") || label.includes("age<18")) {
+      if ((patient.age ?? 99) < 18) { fired.push(mod.modifier_id); continue; }
+    }
+    if (label.includes("preg") && patient.pregnant) { fired.push(mod.modifier_id); continue; }
+    if (label.includes("immunocompromised") && patient.immunocompromised) { fired.push(mod.modifier_id); continue; }
+    if ((label.includes("diabet") || label.includes("dm")) && patient.diabetic) { fired.push(mod.modifier_id); continue; }
+    if ((label.includes("chf") || label.includes("heart failure")) && patient.chf) { fired.push(mod.modifier_id); continue; }
+    if ((label.includes("copd") || label.includes("emphysema")) && patient.copd) { fired.push(mod.modifier_id); continue; }
+    if ((label.includes("renal") || label.includes("ckd")) && patient.renalDisease) { fired.push(mod.modifier_id); continue; }
+    if (label.includes("anticoagul") && patient.anticoagulated) { fired.push(mod.modifier_id); continue; }
   }
 
   return fired;
 }
 
-function filterSafeMedications(
-  treatments:  KBTreatmentRule[],
-  patient:     PatientContext,
-): KBTreatmentRule[] {
-  return treatments.filter(tx => {
-    if (!tx.contraindications) return true;
-    const contra = tx.contraindications.toLowerCase();
+// ─── Medication safety filter ─────────────────────────────────────────────────
 
-    if (patient.pregnant      && (contra.includes("pregnancy") || contra.includes("pregnant"))) return false;
-    if (patient.renalDisease  && contra.includes("renal"))       return false;
+function filterSafeMedications(treatments: KBTreatmentRule[], patient: PatientContext): KBTreatmentRule[] {
+  return treatments.filter(tx => {
+    if (!tx.contraindications && !tx.pregnancy_category) return true;
+
+    const contra = (tx.contraindications ?? "").toLowerCase();
+    const pregCat = (tx.pregnancy_category ?? "").toUpperCase();
+
+    if (patient.pregnant && (contra.includes("pregnancy") || contra.includes("pregnant") || ["D","X"].includes(pregCat))) return false;
+    if (patient.renalDisease && contra.includes("renal")) return false;
     if ((patient.age ?? 99) < 18 && (contra.includes("pediatric") || contra.includes("child"))) return false;
 
     if (patient.allergies?.length) {
@@ -154,77 +157,74 @@ function filterSafeMedications(
         if (a.includes("penicillin") && (medName.includes("amoxicillin") || medName.includes("ampicillin"))) return false;
         if (a.includes("sulfa") && (medName.includes("sulfamethoxazole") || medName.includes("tmp-smx"))) return false;
       }
+      if (tx.allergy_cross_reacts?.length) {
+        for (const allergy of patient.allergies) {
+          if (tx.allergy_cross_reacts.some(cr => cr.toLowerCase().includes(allergy.toLowerCase()))) return false;
+        }
+      }
     }
 
     return true;
   });
 }
 
+// ─── Main KB query ────────────────────────────────────────────────────────────
+
 export async function queryKBForComplaint(
   complaintId: string,
   patient:     PatientContext = {}
 ): Promise<KBQueryResult> {
 
-  const normalizedComplaint = complaintId.toLowerCase().replace(/\s+/g, "_");
+  const c = complaintId.toLowerCase().replace(/\s+/g, "_");
 
   const [redFlagRows, diagnosisRows, treatmentRows, dispositionRows, modifierRows] = await Promise.all([
 
     db.execute(sql`
-      SELECT *
+      SELECT id, rule_id, complaint_id, label, trigger_expr, severity, action, active
       FROM kb_red_flag_rules
       WHERE active = true
-        AND (
-          LOWER(complaint_id) = ${normalizedComplaint}
-          OR LOWER(complaint_id) = 'all'
-          OR complaint_id IS NULL
-        )
+        AND (LOWER(complaint_id) = ${c} OR LOWER(complaint_id) = 'all' OR complaint_id IS NULL)
       ORDER BY
-        CASE WHEN LOWER(complaint_id) = ${normalizedComplaint} THEN 0 ELSE 1 END,
-        id
+        CASE WHEN severity = 'CRITICAL' THEN 0 WHEN severity = 'HIGH' THEN 1 ELSE 2 END,
+        CASE WHEN LOWER(complaint_id) = ${c} THEN 0 ELSE 1 END
       LIMIT 30
     `).catch(() => ({ rows: [] })),
 
     db.execute(sql`
-      SELECT *
+      SELECT id, rule_id, complaint_id, diagnosis_id, diagnosis_label, icd_code,
+             base_probability, cannot_miss, base_points, cluster_priority, active
       FROM kb_diagnosis_rules
       WHERE active = true
-        AND (
-          LOWER(chief_complaint) = ${normalizedComplaint}
-          OR LOWER(chief_complaint) LIKE ${`%${normalizedComplaint}%`}
-        )
+        AND (LOWER(complaint_id) = ${c} OR LOWER(complaint_id) LIKE ${`%${c}%`})
       ORDER BY
-        CASE WHEN red_flag = true THEN 0 ELSE 1 END,
-        COALESCE(confidence_weight, 0.5) DESC
+        CASE WHEN cannot_miss = true THEN 0 ELSE 1 END,
+        COALESCE(base_probability, 0.5) DESC
       LIMIT 20
     `).catch(() => ({ rows: [] })),
 
     db.execute(sql`
-      SELECT *
+      SELECT id, rule_id, complaint_id, diagnosis_id, medication_name, medication_group,
+             is_first_line, adult_dose, route, contraindications, pregnancy_category,
+             allergy_cross_reacts, active
       FROM kb_treatment_rules
       WHERE active = true
-        AND (
-          LOWER(complaint_id) = ${normalizedComplaint}
-          OR LOWER(complaint_id) LIKE ${`%${normalizedComplaint}%`}
-          OR complaint_id IS NULL
-        )
-      ORDER BY id
+        AND (LOWER(complaint_id) = ${c} OR LOWER(complaint_id) LIKE ${`%${c}%`} OR complaint_id IS NULL)
+      ORDER BY COALESCE(is_first_line, false) DESC, medication_name
       LIMIT 20
     `).catch(() => ({ rows: [] })),
 
     db.execute(sql`
-      SELECT *
+      SELECT id, rule_id, complaint_id, priority, when_expr, disposition_level, active
       FROM kb_disposition_rules
       WHERE active = true
-        AND (
-          LOWER(complaint_id) = ${normalizedComplaint}
-          OR LOWER(complaint_id) LIKE ${`%${normalizedComplaint}%`}
-        )
+        AND (LOWER(complaint_id) = ${c} OR LOWER(complaint_id) LIKE ${`%${c}%`})
       ORDER BY priority ASC
       LIMIT 15
     `).catch(() => ({ rows: [] })),
 
     db.execute(sql`
-      SELECT * FROM kb_modifiers WHERE active = true LIMIT 100
+      SELECT id, modifier_id, label, applies_to, disposition_threshold_shift, active
+      FROM kb_modifiers WHERE active = true LIMIT 100
     `).catch(() => ({ rows: [] })),
 
   ]);
@@ -235,94 +235,98 @@ export async function queryKBForComplaint(
   const dispositions = dispositionRows.rows as unknown as KBDispositionRule[];
   const modifiers    = modifierRows.rows    as unknown as KBModifier[];
 
-  const appliedModifiers  = evaluateModifiers(modifiers, patient);
+  const appliedModifiers  = evaluateModifiers(modifiers, c, patient);
   const safeTreatments    = filterSafeMedications(treatments, patient);
-  const mustNotMiss       = diagnoses.filter(d => d.red_flag === true);
+  const mustNotMiss       = diagnoses.filter(d => d.cannot_miss === true);
 
   const rulesFired = [
-    ...redFlags.map(r => r.rule_id ?? r.id),
-    ...diagnoses.map(d => d.diagnosis_id ?? d.id),
-    ...safeTreatments.map(t => t.med_group_id ?? t.id),
-    ...dispositions.map(d => d.rule_id ?? d.id),
+    ...redFlags.map(r    => r.rule_id),
+    ...diagnoses.map(d   => d.rule_id),
+    ...safeTreatments.map(t => t.rule_id),
+    ...dispositions.map(d  => d.rule_id),
     ...appliedModifiers,
   ].filter(Boolean);
 
   return {
-    complaintId:     normalizedComplaint,
+    complaintId:     c,
     redFlags,
     diagnoses,
     treatments:      safeTreatments,
     dispositions,
-    modifiers:       modifiers.filter(m => appliedModifiers.includes(m.id)),
+    modifiers:       modifiers.filter(m => appliedModifiers.includes(m.modifier_id)),
     appliedModifiers,
     rulesFired,
     mustNotMiss,
   };
 }
 
+// ─── System prompt block builder ──────────────────────────────────────────────
+
 export function buildKBPromptBlock(kb: KBQueryResult): string {
-  const sections: string[] = [
+  const lines: string[] = [
     `## CLINICAL KB — ${kb.complaintId.replace(/_/g, " ").toUpperCase()}`,
     `(${kb.rulesFired.length} rules loaded from PostgreSQL KB)`,
     "",
   ];
 
   if (kb.redFlags.length > 0) {
-    sections.push("### RED FLAG RULES (override everything)");
+    lines.push("### RED FLAG RULES (override everything)");
     kb.redFlags.forEach(r => {
-      sections.push(`- IF ${r.condition_text} → ${r.action_text} [${r.severity}]`);
+      lines.push(`- IF ${r.trigger_expr || r.label} → ${r.action} [${r.severity}]`);
     });
-    sections.push("");
+    lines.push("");
   }
 
   if (kb.mustNotMiss.length > 0) {
-    sections.push("### MUST-NOT-MISS DIAGNOSES");
+    lines.push("### MUST-NOT-MISS DIAGNOSES (cannot_miss = true)");
     kb.mustNotMiss.forEach(d => {
-      sections.push(`- ${d.diagnosis_name} (${d.chief_complaint}) — always consider, never dismiss without workup`);
+      const prob = d.base_probability ? ` (base p=${d.base_probability.toFixed(2)})` : "";
+      lines.push(`- ${d.diagnosis_label}${d.icd_code ? ` [${d.icd_code}]` : ""}${prob} — never dismiss without workup`);
     });
-    sections.push("");
+    lines.push("");
   }
 
   if (kb.diagnoses.length > 0) {
-    sections.push("### DIFFERENTIAL DIAGNOSIS RULES");
-    kb.diagnoses.forEach(d => {
-      const confidence = d.confidence_weight ? ` [confidence weight: ${d.confidence_weight}]` : "";
-      const disp = d.disposition_default ? ` → default: ${d.disposition_default}` : "";
-      sections.push(`- ${d.diagnosis_name}${confidence}${disp}`);
+    lines.push("### DIFFERENTIAL DIAGNOSIS RULES");
+    kb.diagnoses.filter(d => !d.cannot_miss).forEach(d => {
+      const prob = d.base_probability ? ` [p=${d.base_probability.toFixed(2)}]` : "";
+      lines.push(`- ${d.diagnosis_label}${d.icd_code ? ` [${d.icd_code}]` : ""}${prob}`);
     });
-    sections.push("");
+    lines.push("");
   }
 
   if (kb.dispositions.length > 0) {
-    sections.push("### DISPOSITION RULES (priority ordered)");
+    lines.push("### DISPOSITION RULES (priority ordered)");
     kb.dispositions.forEach(d => {
-      sections.push(`- [P${d.priority}] ${d.criteria} → ${d.disposition}`);
+      lines.push(`- [P${d.priority}] ${d.when_expr} → ${d.disposition_level}`);
     });
-    sections.push("");
+    lines.push("");
   }
 
   if (kb.treatments.length > 0) {
-    sections.push("### TREATMENT OPTIONS (pre-filtered for patient safety)");
+    lines.push("### TREATMENT OPTIONS (pre-filtered for patient safety)");
     kb.treatments.forEach(t => {
-      const dose  = t.dose  ? ` | ${t.dose}` : "";
+      const dose  = t.adult_dose ? ` | ${t.adult_dose}` : "";
       const route = t.route ? ` ${t.route}` : "";
-      sections.push(`- ${t.medication_name}${dose}${route}`);
+      const first = t.is_first_line ? " ★" : "";
+      lines.push(`- ${t.medication_name}${first}${dose}${route}`);
     });
-    sections.push("");
+    lines.push("");
   }
 
   if (kb.appliedModifiers.length > 0) {
-    sections.push("### ACTIVE PATIENT MODIFIERS");
+    lines.push("### ACTIVE PATIENT MODIFIERS");
     kb.modifiers.forEach(m => {
-      sections.push(`- ${m.modifier_type}: ${m.condition} → ${m.adjustment}`);
+      const shift = m.disposition_threshold_shift ? ` (disposition threshold shift: ${m.disposition_threshold_shift > 0 ? "+" : ""}${m.disposition_threshold_shift})` : "";
+      lines.push(`- ${m.label}${shift}`);
     });
-    sections.push("");
+    lines.push("");
   }
 
-  sections.push(`### AUDIT TRAIL`);
-  sections.push(`Rules fired: ${kb.rulesFired.join(", ")}`);
+  lines.push("### AUDIT TRAIL");
+  lines.push(`Rules fired: ${kb.rulesFired.join(", ")}`);
 
-  return sections.join("\n");
+  return lines.join("\n");
 }
 
 // ─── 5-minute in-memory cache (fixes Issue 3) ────────────────────────────────
@@ -348,7 +352,8 @@ export async function queryKBCached(
     patient.chf          ? "chf" : "",
     patient.copd         ? "copd" : "",
     patient.renalDisease ? "ckd" : "",
-    patient.allergies?.join("-") ?? "",
+    patient.anticoagulated ? "acag" : "",
+    patient.allergies?.sort().join("-") ?? "",
   ].filter(Boolean).join(":");
 
   const cacheKey = `${complaintId}:${patientKey}`;

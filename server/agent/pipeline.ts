@@ -23,6 +23,8 @@ import {
 } from "../harness/harnessEnforcer";
 import { runGeometricReasoning } from "../reasoning/geometricReasoningIntegrator";
 import { assessUncertainty }    from "../reasoning/dualModelUncertaintySampler";
+import { queryKBCached, buildKBPromptBlock } from "../retrieval/kbQueryLayer";
+import { appendAuditEvent }     from "../governance/audit";
 import { OntologyFirewall }     from "../ontology/ontologyFirewall";
 import { OntologyFieldMapper }  from "../ontology/ontologyFieldMapper";
 import { retrieveRelevantSkills } from "../learning/clinicalSkillsSystem";
@@ -483,6 +485,75 @@ export async function initializePipeline(
         type:     "GEOMETRIC_REASONING_ERROR",
         severity: "warn",
         message:  `runGeometricReasoning failed: ${geoErr.message}`,
+      });
+    }
+
+    // ── KB Injection: wire PostgreSQL clinical rules into the LLM prompt ─────
+    // Queries all 5 KB tables (~4,207 rules) for this complaint, filtered to
+    // patient context (age, modifiers, allergies). 5-min in-memory cache.
+    // Produces FDA-grade rulesFired[] audit trail on every case.
+    try {
+      const kbComplaintSlug = (updated as any)._ont?.complaintSlug
+        ?? updated.normalizedComplaint
+        ?? updated.chiefComplaint
+        ?? "";
+      const kbCaseId = (updated as any).caseId ?? (updated as any).sessionId ?? "unknown";
+
+      if (kbComplaintSlug) {
+        const rawAnswerValues = Object.values((updated.answers as Record<string, any>) ?? {})
+          .map(v => (typeof v === "string" ? v : JSON.stringify(v)));
+
+        const kbResult = await queryKBCached(kbComplaintSlug, {
+          age:               updated.demographics?.age,
+          sex:               updated.demographics?.sex as "M" | "F" | "other" | undefined,
+          pregnant:          rawAnswerValues.some(a => /pregnan/i.test(a)),
+          allergies:         updated.modifiers?.allergies ?? [],
+          currentMeds:       updated.modifiers?.meds      ?? [],
+          pmh:               updated.modifiers?.pmh        ?? [],
+          diabetic:          updated.modifiers?.pmh?.some((c: string) => /diabet/i.test(c)),
+          chf:               updated.modifiers?.pmh?.some((c: string) => /heart failure|chf/i.test(c)),
+          copd:              updated.modifiers?.pmh?.some((c: string) => /copd|emphysema/i.test(c)),
+          immunocompromised: updated.modifiers?.pmh?.some((c: string) => /immunocompromised|hiv|transplant/i.test(c)),
+          renalDisease:      updated.modifiers?.pmh?.some((c: string) => /renal|kidney|ckd/i.test(c)),
+          anticoagulated:    updated.modifiers?.meds?.some((m: string) => /warfarin|coumadin|eliquis|xarelto/i.test(m)),
+        }).catch(() => null);
+
+        if (kbResult) {
+          if (!(updated as any).systemPromptAdditions) {
+            (updated as any).systemPromptAdditions = [];
+          }
+          (updated as any).systemPromptAdditions.push(buildKBPromptBlock(kbResult));
+
+          events.push({
+            type:     "KB_RULES_INJECTED",
+            severity: "info",
+            message:  `KB: ${kbResult.rulesFired.length} rules fired for "${kbComplaintSlug}" — ` +
+                      `redFlags=${kbResult.redFlags.length}, dx=${kbResult.diagnoses.length}, ` +
+                      `mustNotMiss=${kbResult.mustNotMiss.length}, tx=${kbResult.treatments.length}, ` +
+                      `modifiers=${kbResult.appliedModifiers.length}`,
+          });
+
+          appendAuditEvent({
+            action:     "KB_RULES_INJECTED",
+            entityType: "case",
+            entityId:   kbCaseId,
+            payload: {
+              complaintId:      kbResult.complaintId,
+              redFlagCount:     kbResult.redFlags.length,
+              diagnosisCount:   kbResult.diagnoses.length,
+              mustNotMissCount: kbResult.mustNotMiss.length,
+              treatmentCount:   kbResult.treatments.length,
+              rulesFiredCount:  kbResult.rulesFired.length,
+              appliedModifiers: kbResult.appliedModifiers,
+            },
+          }).catch(console.error);
+        }
+      }
+    } catch (kbErr: any) {
+      events.push({
+        type:     "KB_INJECTION_ERROR",
+        severity: "warn",
+        message:  `queryKBCached failed: ${kbErr.message}`,
       });
     }
 
