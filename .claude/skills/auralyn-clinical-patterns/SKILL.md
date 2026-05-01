@@ -131,5 +131,6 @@ const queue = await createDurableQueue("followup");
 - `gotchas/disposition-map.md` — never create a new DISPOSITION_MAP
 - `gotchas/phi-in-logs.md` — what counts as PHI and how to scrub it
 - `gotchas/physician-gate.md` — what breaks the physician gate
+- `gotchas/pg-bool.md` — PostgreSQL boolean columns return "t"/"f" strings via raw SQL; always use pgBool()
 - `examples/new-route.ts` — complete route example
 - `examples/new-service.ts` — complete service example
