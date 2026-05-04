@@ -113,3 +113,11 @@ export async function exportMasterRulesToSheets(): Promise<{
     return { ok: false, rowsExported: 0, exportedAt, error: e.message };
   }
 }
+
+// Self-invoke when run directly
+if (process.argv[1] && process.argv[1].includes("exportMasterRulesToSheets")) {
+  exportMasterRulesToSheets().then(result => {
+    console.log("[MasterRulesExport] Result:", JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
+  });
+}

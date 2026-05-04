@@ -334,3 +334,18 @@ export async function exportKBDispositions(req: Request, res: Response) {
     res
   );
 }
+
+export async function exportKBModifiers(req: Request, res: Response) {
+  await exportKBTableToSheet(
+    "KB_MODIFIERS",
+    ["modifier_id","label","description","applies_to","add_diagnoses","remove_diagnoses",
+     "workup_changes","med_changes","disposition_threshold_shift","active"],
+    () => db.execute(sql`
+      SELECT modifier_id, label, description, applies_to, add_diagnoses, remove_diagnoses,
+             workup_changes, med_changes, disposition_threshold_shift, active
+      FROM kb_modifiers
+      ORDER BY modifier_id
+    `).then(r => r.rows as any[]),
+    res
+  );
+}
