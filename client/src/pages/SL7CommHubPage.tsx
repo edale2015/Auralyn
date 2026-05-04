@@ -164,10 +164,10 @@ export default function SL7CommHubPage() {
       {activeTab === "templates" && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Select value={filterChannel} onValueChange={setFilterChannel}>
+            <Select value={filterChannel || "__all__"} onValueChange={v => setFilterChannel(v === "__all__" ? "" : v)}>
               <SelectTrigger className="w-40" data-testid="select-filter-channel"><SelectValue placeholder="All channels" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All channels</SelectItem>
+                <SelectItem value="__all__">All channels</SelectItem>
                 {CHANNELS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>

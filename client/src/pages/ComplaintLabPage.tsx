@@ -762,12 +762,12 @@ export default function ComplaintLabPage() {
               <Label className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5 block">
                 Complaint
               </Label>
-              <Select value={selectedComplaint} onValueChange={handleSetComplaint}>
+              <Select value={selectedComplaint || "__all__"} onValueChange={v => handleSetComplaint(v === "__all__" ? "" : v)}>
                 <SelectTrigger className="h-9 text-sm" data-testid="select-complaint">
                   <SelectValue placeholder="All complaints" />
                 </SelectTrigger>
                 <SelectContent className="max-h-60">
-                  <SelectItem value="">All complaints</SelectItem>
+                  <SelectItem value="__all__">All complaints</SelectItem>
                   {complaints.map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.label || c.id}</SelectItem>
                   ))}

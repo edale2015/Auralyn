@@ -339,10 +339,10 @@ function QuestionsTab() {
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <Select value={complaintFilter} onValueChange={setComplaintFilter}>
+        <Select value={complaintFilter || "__all__"} onValueChange={v => setComplaintFilter(v === "__all__" ? "" : v)}>
           <SelectTrigger className="w-64"><SelectValue placeholder="Filter by complaint…" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All complaints</SelectItem>
+            <SelectItem value="__all__">All complaints</SelectItem>
             {(complaints as any[]).map((c: any) => <SelectItem key={c.complaintId} value={c.complaintId}>{c.label}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -509,10 +509,10 @@ function RedFlagsTab() {
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <Select value={complaintFilter} onValueChange={setComplaintFilter}>
+        <Select value={complaintFilter || "__all__"} onValueChange={v => setComplaintFilter(v === "__all__" ? "" : v)}>
           <SelectTrigger className="w-64"><SelectValue placeholder="Filter by complaint…" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All</SelectItem>
+            <SelectItem value="__all__">All complaints</SelectItem>
             {(complaints as any[]).map((c: any) => <SelectItem key={c.complaintId} value={c.complaintId}>{c.label}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -710,10 +710,10 @@ function GoldenCasesTab() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search cases…" className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter || "__all__"} onValueChange={v => setStatusFilter(v === "__all__" ? "" : v)}>
           <SelectTrigger className="w-40"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All</SelectItem>
+            <SelectItem value="__all__">All statuses</SelectItem>
             <SelectItem value="draft">Draft</SelectItem>
             <SelectItem value="approved">Approved</SelectItem>
             <SelectItem value="retired">Retired</SelectItem>
@@ -774,10 +774,10 @@ function AuditTab() {
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <Select value={domain} onValueChange={setDomain}>
+        <Select value={domain || "__all__"} onValueChange={v => setDomain(v === "__all__" ? "" : v)}>
           <SelectTrigger className="w-64"><SelectValue placeholder="Filter by domain…" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All domains</SelectItem>
+            <SelectItem value="__all__">All domains</SelectItem>
             {["complaint","question","modifier","red_flag_rule","workup_rule","diagnosis_rule","treatment_rule","disposition_rule","plan_template","golden_case"].map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
           </SelectContent>
         </Select>
