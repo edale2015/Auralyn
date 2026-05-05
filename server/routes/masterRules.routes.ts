@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { requireRole } from "../middleware/requireRole";
 import { requireReviewAuth } from "../middleware/reviewAuth";
 import { exportMasterRulesToSheets } from "../scripts/exportMasterRulesToSheets";
+import { syncSourceTablesToMasterRules } from "../scripts/syncSourceTablesToMasterRules";
 import { executePipeline } from "../clinical/ruleExecutionEngine";
 import OpenAI from "openai";
 
@@ -324,6 +325,16 @@ router.post("/dry-run", ...auth, async (req, res) => {
     if (!complaint_id) return res.status(400).json({ ok: false, error: "complaint_id required" });
 
     const result = await executePipeline(complaint_id, inputs);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Sync source tables → kb_master_rules
+router.post("/sync-from-source", ...auth, async (_req, res) => {
+  try {
+    const result = await syncSourceTablesToMasterRules();
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });

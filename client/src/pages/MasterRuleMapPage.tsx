@@ -421,6 +421,29 @@ function ValidatorTab() {
     onSuccess: () => toast({ title: "Exported", description: "MASTER_RULE_MAP tab updated in Google Sheets." }),
   });
 
+  const [syncResult, setSyncResult] = useState<any>(null);
+  const syncRules = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/master-rules/sync-from-source", {
+        method: "POST", credentials: "include", headers: authHeaders(),
+      });
+      return r.json();
+    },
+    onSuccess: (data) => {
+      setSyncResult(data);
+      toast({
+        title: data.ok ? "Sync complete" : "Sync error",
+        description: data.ok
+          ? `${data.totalUpserted.toLocaleString()} rules synced from source tables into kb_master_rules.`
+          : data.error,
+        variant: data.ok ? "default" : "destructive",
+      });
+      qc.invalidateQueries({ queryKey: ["/api/master-rules"] });
+      qc.invalidateQueries({ queryKey: ["/api/master-rules/stats"] });
+      qc.invalidateQueries({ queryKey: ["/api/master-rules/complaints"] });
+    },
+  });
+
   const processFeedback = useMutation({
     mutationFn: () => apiRequest("POST", "/api/rlhf/process-feedback"),
     onSuccess: (data: any) => {
@@ -437,7 +460,7 @@ function ValidatorTab() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Auto-Validator */}
         <Card>
           <CardHeader className="pb-2">
@@ -461,6 +484,46 @@ function ValidatorTab() {
           </CardContent>
         </Card>
 
+        {/* Source Table Sync */}
+        <Card className="border-amber-200 dark:border-amber-800">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-amber-500" />Sync from Source Tables
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Pulls all questions, modifiers, red flags, diagnoses, medications, dispositions
+              and workups from their source KB tables into kb_master_rules. Run this after any
+              Google Sheets import.
+            </p>
+            <Button
+              data-testid="button-sync-source-tables"
+              onClick={() => syncRules.mutate()}
+              disabled={syncRules.isPending}
+              variant="outline"
+              className="w-full border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950"
+            >
+              {syncRules.isPending
+                ? <><Loader2 className="animate-spin h-4 w-4 mr-2" />Syncing…</>
+                : <><RefreshCw className="h-4 w-4 mr-2" />Sync Rules Now</>}
+            </Button>
+            {syncResult?.ok && (
+              <div className="text-xs space-y-1 border rounded p-2 bg-green-50 dark:bg-green-950">
+                <div className="font-semibold text-green-700 dark:text-green-400">
+                  {syncResult.totalUpserted.toLocaleString()} rules synced
+                </div>
+                {Object.entries(syncResult.tables as Record<string, { upserted: number; errors: number }>).map(([k, v]) => (
+                  <div key={k} className="flex justify-between text-muted-foreground">
+                    <span>{k}</span>
+                    <span className="font-mono">{v.upserted} ↑ {v.errors > 0 ? `/ ${v.errors} err` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Sheet Exporter */}
         <Card>
           <CardHeader className="pb-2">
@@ -470,7 +533,7 @@ function ValidatorTab() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Refreshes the MASTER_RULE_MAP tab in Google Sheets with all 89 complaint coverage rows.
+              Refreshes the MASTER_RULE_MAP tab in Google Sheets with all 27-column rule data.
             </p>
             <Button
               data-testid="button-export-sheets"
