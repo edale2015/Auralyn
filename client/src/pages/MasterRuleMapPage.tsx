@@ -646,6 +646,7 @@ function RulesTab() {
   const [filterComplaint,setFilterComplaint] = useState("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<any | null>(null);
+  const [view, setView] = useState<"table" | "tree">("table");
 
   const params = new URLSearchParams({
     page: String(page),
@@ -733,7 +734,19 @@ function RulesTab() {
           value={filterComplaint}
           onChange={e => { setFilterComplaint(e.target.value); setPage(1); }}
         />
-        <span className="text-xs text-muted-foreground ml-auto">{total} rules</span>
+        <div className="flex gap-1 ml-auto">
+          <Button size="sm" variant={view === "table" ? "default" : "outline"}
+            data-testid="button-view-table"
+            onClick={() => setView("table")} className="h-8 text-xs px-3">
+            <ClipboardList className="h-3 w-3 mr-1" />Table
+          </Button>
+          <Button size="sm" variant={view === "tree" ? "default" : "outline"}
+            data-testid="button-view-tree"
+            onClick={() => setView("tree")} className="h-8 text-xs px-3">
+            <ListTree className="h-3 w-3 mr-1" />Decision Tree
+          </Button>
+        </div>
+        <span className="text-xs text-muted-foreground">{total} rules</span>
         <Button
           data-testid="button-export-master-rules"
           size="sm" variant="outline"
@@ -741,52 +754,140 @@ function RulesTab() {
           disabled={exportRules.isPending}
         >
           {exportRules.isPending ? <Loader2 className="animate-spin h-3 w-3 mr-1" /> : <Download className="h-3 w-3 mr-1" />}
-          Export 27-col Sheet
+          Export Sheet
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Rule table */}
-        <div className="md:col-span-2 border rounded-md overflow-hidden">
+      {view === "table" ? (
+        /* ── TABLE VIEW ── */
+        <div className="border rounded-md overflow-hidden">
           {isLoading
             ? <div className="p-4 flex items-center gap-2 text-muted-foreground"><Loader2 className="animate-spin h-4 w-4" />Loading rules…</div>
             : (
               <Table>
                 <TableHeader>
-                  <TableRow className="text-xs">
-                    <TableHead className="w-32">Rule ID</TableHead>
+                  <TableRow className="text-xs bg-slate-50 dark:bg-slate-800">
+                    <TableHead className="w-6" />
+                    <TableHead className="w-48">Rule ID</TableHead>
                     <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>P</TableHead>
-                    <TableHead>Complaint</TableHead>
-                    <TableHead>Safety</TableHead>
-                    <TableHead>Flow</TableHead>
+                    <TableHead className="w-28">Type</TableHead>
+                    <TableHead className="w-8 text-center">P</TableHead>
+                    <TableHead className="w-36">Complaint</TableHead>
+                    <TableHead className="w-24">Safety</TableHead>
+                    <TableHead className="w-28">Disposition</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rules.map((r: any) => (
-                    <TableRow
-                      key={r.rule_id}
-                      className={`cursor-pointer hover:bg-muted text-xs ${selected?.rule_id === r.rule_id ? "bg-muted" : ""}`}
-                      onClick={() => setSelected(r)}
-                      data-testid={`row-rule-${r.rule_id}`}
-                    >
-                      <TableCell className="font-mono text-xs text-muted-foreground">{r.rule_id.slice(0,14)}</TableCell>
-                      <TableCell className="max-w-[160px] truncate font-medium">{r.rule_name}</TableCell>
-                      <TableCell>{ruleTypeBadge(r.rule_type)}</TableCell>
-                      <TableCell className="text-center">{r.priority}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.complaint_id === "ALL" ? <span className="text-muted-foreground">ALL</span> : r.complaint_id}</TableCell>
-                      <TableCell>{safetyBadge(r.safety_level)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {r.source_tab?.split(" ")[0]} <ArrowRight className="h-3 w-3 inline" /> {(r.target_tabs ?? [])[0]?.split(" ")[0]}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {rules.map((r: any) => {
+                    const isOpen = selected?.rule_id === r.rule_id;
+                    return [
+                      <TableRow
+                        key={r.rule_id}
+                        className={`cursor-pointer hover:bg-muted/50 text-xs ${isOpen ? "bg-blue-50 dark:bg-blue-950" : ""}`}
+                        onClick={() => setSelected(isOpen ? null : r)}
+                        data-testid={`row-rule-${r.rule_id}`}
+                      >
+                        <TableCell className="text-center text-muted-foreground">
+                          {isOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground break-all">{r.rule_id}</TableCell>
+                        <TableCell className="font-medium text-sm">{r.rule_name}</TableCell>
+                        <TableCell>{ruleTypeBadge(r.rule_type)}</TableCell>
+                        <TableCell className="text-center text-muted-foreground">{r.priority}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.complaint_id === "ALL"
+                          ? <span className="text-muted-foreground">ALL</span>
+                          : r.complaint_id}
+                        </TableCell>
+                        <TableCell>{safetyBadge(r.safety_level)}</TableCell>
+                        <TableCell>
+                          {r.disposition_impact
+                            ? <Badge className={
+                                r.disposition_impact?.toLowerCase().includes("er") ? "bg-red-600 text-white text-xs" :
+                                r.disposition_impact?.toLowerCase().includes("urgent") ? "bg-orange-500 text-white text-xs" :
+                                r.disposition_impact?.toLowerCase().includes("self") ? "bg-green-600 text-white text-xs" :
+                                "bg-slate-200 text-slate-700 text-xs"
+                              }>{r.disposition_impact}</Badge>
+                            : <span className="text-muted-foreground text-xs">—</span>}
+                        </TableCell>
+                      </TableRow>,
+
+                      /* Inline expanded detail */
+                      isOpen && (
+                        <TableRow key={`${r.rule_id}-detail`} className="bg-blue-50/60 dark:bg-blue-950/60">
+                          <TableCell colSpan={8} className="p-0">
+                            <div className="p-4 space-y-3 text-xs border-t border-blue-200 dark:border-blue-800">
+                              <div className="flex items-start gap-3">
+                                <div className="flex-1">
+                                  <p className="font-bold text-base text-slate-800 dark:text-slate-100">{r.rule_name}</p>
+                                  <p className="font-mono text-muted-foreground mt-0.5">{r.rule_id}</p>
+                                </div>
+                                <div className="flex gap-1 flex-wrap justify-end">
+                                  {safetyBadge(r.safety_level)}
+                                  {ruleTypeBadge(r.rule_type)}
+                                  <Badge variant="outline">Priority {r.priority}</Badge>
+                                  {r.version && <Badge variant="outline">v{r.version}</Badge>}
+                                </div>
+                              </div>
+
+                              {r.logic_description && (
+                                <div className="bg-white dark:bg-slate-900 border rounded p-3">
+                                  <p className="text-muted-foreground font-semibold mb-1 text-xs uppercase tracking-wide">Logic / Rule Description</p>
+                                  <p className="text-sm leading-relaxed">{r.logic_description}</p>
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1.5">
+                                {[
+                                  ["Complaint", r.complaint_id],
+                                  ["Logic type", r.logic_type],
+                                  ["Disposition impact", r.disposition_impact],
+                                  ["Medication impact", r.medication_impact],
+                                  ["Workup impact", r.workup_impact],
+                                  ["Confidence weight", r.confidence_weight],
+                                  ["Cluster", r.cluster_id],
+                                  ["Diagnosis", r.diagnosis_id],
+                                  ["Source tab", r.source_tab],
+                                  ["Target tabs", (r.target_tabs ?? []).join(", ")],
+                                  ["Owner", r.owner],
+                                  ["Last updated", r.last_updated ? new Date(r.last_updated).toLocaleDateString() : "—"],
+                                ].map(([label, val]) => val ? (
+                                  <div key={String(label)}>
+                                    <span className="text-muted-foreground">{label}: </span>
+                                    <span className="font-medium">{String(val)}</span>
+                                  </div>
+                                ) : null)}
+                              </div>
+
+                              {((r.modifier_dependencies ?? []).length > 0 || (r.question_dependencies ?? []).length > 0 || (r.input_fields ?? []).length > 0) && (
+                                <div className="flex flex-wrap gap-3">
+                                  {(r.modifier_dependencies ?? []).length > 0 && (
+                                    <div>
+                                      <span className="text-muted-foreground">Modifiers: </span>
+                                      {r.modifier_dependencies.map((m: string) => <Badge key={m} variant="outline" className="text-xs mr-1 border-amber-400 text-amber-700">{m}</Badge>)}
+                                    </div>
+                                  )}
+                                  {(r.input_fields ?? []).length > 0 && (
+                                    <div>
+                                      <span className="text-muted-foreground">Input fields: </span>
+                                      {r.input_fields.map((f: string) => <Badge key={f} variant="outline" className="text-xs mr-1 font-mono">{f}</Badge>)}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {r.notes && (
+                                <div className="border-t pt-2 text-muted-foreground italic text-xs">{r.notes}</div>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ),
+                    ];
+                  })}
                 </TableBody>
               </Table>
             )
           }
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-2 border-t text-xs">
               <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.max(1, p-1))} disabled={page === 1}>← Prev</Button>
@@ -795,58 +896,197 @@ function RulesTab() {
             </div>
           )}
         </div>
+      ) : (
+        /* ── DECISION TREE VIEW ── */
+        <DecisionTreeView rules={rules} complaint={filterComplaint} isLoading={isLoading} />
+      )}
+    </div>
+  );
+}
 
-        {/* Rule detail panel */}
-        <div className="border rounded-md overflow-y-auto max-h-[65vh]">
-          {!selected ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground text-sm p-6 text-center">
-              <div><BookOpen className="h-8 w-8 mx-auto mb-2 opacity-30" />Click a rule to see all 27 fields</div>
-            </div>
-          ) : (
-            <div className="p-3 space-y-3 text-xs">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="font-bold text-sm">{selected.rule_name}</div>
-                  <div className="font-mono text-muted-foreground">{selected.rule_id}</div>
+// ── Decision Tree View ────────────────────────────────────────────────────────
+const TREE_STEP_ORDER = ["red_flag","cluster_scoring","diagnosis","disposition","workup","medication","modifier","question","plan"];
+const TREE_STEP_LABELS: Record<string,string> = {
+  red_flag:       "🚨 Red Flags / Hard Stops",
+  cluster_scoring:"📊 Cluster Scoring",
+  diagnosis:      "🩺 Diagnosis Rules",
+  disposition:    "📋 Disposition",
+  workup:         "🔬 Workup / Testing",
+  medication:     "💊 Medication",
+  modifier:       "⚙️ Modifiers",
+  question:       "❓ Questions",
+  plan:           "📝 Plan",
+};
+const TREE_STEP_COLORS: Record<string,string> = {
+  red_flag:       "border-red-400 bg-red-50 dark:bg-red-950",
+  cluster_scoring:"border-purple-400 bg-purple-50 dark:bg-purple-950",
+  diagnosis:      "border-blue-400 bg-blue-50 dark:bg-blue-950",
+  disposition:    "border-indigo-400 bg-indigo-50 dark:bg-indigo-950",
+  workup:         "border-pink-400 bg-pink-50 dark:bg-pink-950",
+  medication:     "border-green-400 bg-green-50 dark:bg-green-950",
+  modifier:       "border-amber-400 bg-amber-50 dark:bg-amber-950",
+  question:       "border-cyan-400 bg-cyan-50 dark:bg-cyan-950",
+  plan:           "border-teal-400 bg-teal-50 dark:bg-teal-950",
+};
+
+function DecisionTreeView({ rules, complaint, isLoading }: { rules: any[]; complaint: string; isLoading: boolean }) {
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  function toggle(id: string) {
+    setExpandedNodes(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  if (isLoading) return <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="animate-spin h-4 w-4" />Loading…</div>;
+
+  if (!complaint) return (
+    <div className="border rounded-md p-8 text-center text-muted-foreground">
+      <ListTree className="h-10 w-10 mx-auto mb-3 opacity-30" />
+      <p className="font-medium">Enter a complaint ID in the filter above to see its decision tree.</p>
+      <p className="text-xs mt-1">Try: <code className="bg-muted px-1 rounded">sore_throat</code> · <code className="bg-muted px-1 rounded">cough</code> · <code className="bg-muted px-1 rounded">ent_sinus_pressure</code> · <code className="bg-muted px-1 rounded">chest_pain</code></p>
+    </div>
+  );
+
+  const grouped: Record<string, any[]> = {};
+  for (const r of rules) { (grouped[r.rule_type] = grouped[r.rule_type] ?? []).push(r); }
+
+  const hasAny = Object.keys(grouped).length > 0;
+  if (!hasAny) return (
+    <div className="border rounded-md p-8 text-center text-muted-foreground">
+      <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-40" />
+      <p>No rules found for <code className="bg-muted px-1 rounded">{complaint}</code></p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground border rounded px-3 py-2 bg-muted/30">
+        <ListTree className="h-4 w-4 text-indigo-500" />
+        Decision tree for <Badge variant="outline" className="font-mono">{complaint}</Badge> —
+        {rules.length} rules across {Object.keys(grouped).length} steps.
+        Click any rule to expand its full logic.
+      </div>
+
+      {/* Vertical tree */}
+      <div className="relative pl-6">
+        {/* Vertical connector line */}
+        <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-200 dark:bg-slate-700" />
+
+        {TREE_STEP_ORDER.filter(t => grouped[t]).map((ruleType, idx) => {
+          const stepRules = grouped[ruleType] ?? [];
+          const colorCls = TREE_STEP_COLORS[ruleType] ?? "border-slate-300 bg-slate-50";
+          const isLastStep = idx === TREE_STEP_ORDER.filter(t => grouped[t]).length - 1;
+
+          return (
+            <div key={ruleType} className="relative mb-4">
+              {/* Horizontal connector */}
+              <div className="absolute -left-4 top-4 w-4 h-0.5 bg-slate-200 dark:bg-slate-700" />
+              {/* Step circle */}
+              <div className="absolute -left-5 top-2.5 w-3 h-3 rounded-full border-2 border-slate-400 bg-white dark:bg-slate-900" />
+
+              <div className={`border-l-4 rounded-md overflow-hidden ${colorCls}`}>
+                {/* Step header */}
+                <div className="px-3 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm">{TREE_STEP_LABELS[ruleType] ?? ruleType}</span>
+                    <Badge variant="outline" className="text-xs">{stepRules.length} rule{stepRules.length !== 1 ? "s" : ""}</Badge>
+                  </div>
+                  {!isLastStep && (
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <ArrowRight className="h-3 w-3" />next step
+                    </div>
+                  )}
                 </div>
-                {safetyBadge(selected.safety_level)}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {ruleTypeBadge(selected.rule_type)}
-                <Badge variant="outline">P{selected.priority}</Badge>
-                <Badge variant="outline">{selected.version}</Badge>
-              </div>
-              {[
-                ["Complaint", selected.complaint_id],
-                ["Cluster", selected.cluster_id],
-                ["Diagnosis", selected.diagnosis_id],
-                ["Logic type", selected.logic_type],
-                ["Source tab", selected.source_tab],
-                ["Target tabs", (selected.target_tabs ?? []).join(", ")],
-                ["Disposition impact", selected.disposition_impact],
-                ["Medication impact", selected.medication_impact],
-                ["Workup impact", selected.workup_impact],
-                ["Confidence weight", selected.confidence_weight],
-                ["Owner", selected.owner],
-                ["Last updated", selected.last_updated ? new Date(selected.last_updated).toLocaleDateString() : "—"],
-              ].map(([label, val]) => val ? (
-                <div key={String(label)} className="flex gap-1">
-                  <span className="text-muted-foreground w-32 shrink-0">{label}:</span>
-                  <span className="font-medium break-all">{String(val)}</span>
+
+                {/* Rules in this step */}
+                <div className="divide-y divide-border/50">
+                  {stepRules.sort((a: any, b: any) => a.priority - b.priority).map((r: any) => {
+                    const nodeKey = r.rule_id;
+                    const isExpanded = expandedNodes.has(nodeKey);
+                    const isCritical = r.safety_level === "CRITICAL";
+
+                    return (
+                      <div key={r.rule_id}
+                        className={`px-3 py-2 cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${isCritical ? "border-l-2 border-red-500" : ""}`}
+                        onClick={() => toggle(nodeKey)}
+                        data-testid={`tree-node-${r.rule_id}`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className="text-muted-foreground mt-0.5 shrink-0">
+                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`font-medium text-sm ${isCritical ? "text-red-700 dark:text-red-300" : ""}`}>
+                                {isCritical ? "⛔ " : ""}{r.rule_name}
+                              </span>
+                              {safetyBadge(r.safety_level)}
+                              <span className="text-xs text-muted-foreground font-mono">{r.rule_id}</span>
+                            </div>
+
+                            {/* Compact IF → THEN display */}
+                            {!isExpanded && r.logic_description && (
+                              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{r.logic_description}</p>
+                            )}
+
+                            {/* Expanded full detail */}
+                            {isExpanded && (
+                              <div className="mt-2 space-y-2 text-xs">
+                                <div className="bg-white dark:bg-slate-900 border rounded p-2.5">
+                                  <p className="font-semibold text-muted-foreground mb-1 uppercase tracking-wide text-xs">IF condition met:</p>
+                                  <p className="text-sm leading-relaxed">{r.logic_description}</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                  {r.disposition_impact && (
+                                    <div className="bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 rounded p-2">
+                                      <p className="text-muted-foreground text-xs mb-0.5">Disposition</p>
+                                      <p className="font-bold text-indigo-700 dark:text-indigo-300">{r.disposition_impact}</p>
+                                    </div>
+                                  )}
+                                  {r.medication_impact && r.medication_impact !== "none" && (
+                                    <div className="bg-green-50 dark:bg-green-950 border border-green-200 rounded p-2">
+                                      <p className="text-muted-foreground text-xs mb-0.5">Medication</p>
+                                      <p className="font-bold text-green-700 dark:text-green-300">{r.medication_impact}</p>
+                                    </div>
+                                  )}
+                                  {r.workup_impact && r.workup_impact !== "none" && (
+                                    <div className="bg-pink-50 dark:bg-pink-950 border border-pink-200 rounded p-2">
+                                      <p className="text-muted-foreground text-xs mb-0.5">Workup</p>
+                                      <p className="font-bold text-pink-700 dark:text-pink-300">{r.workup_impact}</p>
+                                    </div>
+                                  )}
+                                </div>
+                                {(r.input_fields ?? []).length > 0 && (
+                                  <div>
+                                    <span className="text-muted-foreground">Checks: </span>
+                                    {r.input_fields.map((f: string) => <Badge key={f} variant="outline" className="text-xs mr-1 font-mono">{f}</Badge>)}
+                                  </div>
+                                )}
+                                {(r.modifier_dependencies ?? []).length > 0 && (
+                                  <div>
+                                    <span className="text-muted-foreground">Modifier gates: </span>
+                                    {r.modifier_dependencies.map((m: string) => <Badge key={m} variant="outline" className="text-xs mr-1 border-amber-400 text-amber-700">{m}</Badge>)}
+                                  </div>
+                                )}
+                                {r.notes && <p className="text-muted-foreground italic">{r.notes}</p>}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : null)}
-              {selected.logic_description && (
-                <div className="border-t pt-2">
-                  <div className="text-muted-foreground mb-1">Logic:</div>
-                  <div className="bg-muted/50 rounded p-2 font-mono text-xs whitespace-pre-wrap">{selected.logic_description}</div>
+              </div>
+
+              {/* Arrow between steps */}
+              {!isLastStep && (
+                <div className="flex items-center justify-center my-1 text-muted-foreground">
+                  <ChevronDown className="h-5 w-5" />
                 </div>
               )}
-              {selected.notes && (
-                <div className="border-t pt-2 text-muted-foreground italic">{selected.notes}</div>
-              )}
             </div>
-          )}
-        </div>
+          );
+        })}
       </div>
     </div>
   );
