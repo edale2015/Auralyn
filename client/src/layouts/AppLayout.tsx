@@ -115,7 +115,21 @@ export default function AppLayout({ children }: Props) {
           </span>
         </div>
 
-        <nav className="flex flex-col gap-1 p-3 flex-1">
+        <nav className="flex flex-col gap-1 p-3 flex-1 overflow-y-auto">
+          {/* ── Pinned top: Clinical KB Editor ── */}
+          <Link
+            to="/kb-editor"
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg font-bold transition-colors mb-2 border ${
+              location === "/kb-editor"
+                ? "bg-emerald-600 border-emerald-500 text-white"
+                : "bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-900/40"
+            }`}
+            data-testid="nav-link-clinical-kb-editor-top"
+          >
+            <ClipboardList className="h-5 w-5 shrink-0" />
+            <span className="text-[15px] font-bold tracking-wide">Clinical KB Editor</span>
+          </Link>
+
           {NAV_ITEMS.map(({ path, label, icon: Icon }) => {
             const active = location === path || location.startsWith(path + "/");
             return (

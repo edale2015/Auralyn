@@ -368,6 +368,23 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </SidebarHeader>
 
           <SidebarContent className="overflow-y-auto">
+            {/* ── TOP PIN: Clinical KB Editor ── */}
+            <div className="px-3 pt-3 pb-1">
+              <Link href="/kb-editor">
+                <div
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer border transition-colors ${
+                    location === "/kb-editor"
+                      ? "bg-emerald-600 border-emerald-500 text-white"
+                      : "bg-emerald-600/10 border-emerald-500/40 text-emerald-400 hover:bg-emerald-600/20 hover:border-emerald-500/70"
+                  }`}
+                  data-testid="nav-kb-editor-top"
+                >
+                  <ClipboardList className="w-5 h-5 shrink-0" />
+                  <span className="text-[15px] font-bold tracking-wide leading-tight">Clinical KB Editor</span>
+                </div>
+              </Link>
+            </div>
+
             {/* ── Pinned: Core Command Centers ── */}
             <SidebarGroup>
               <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-3 pt-2 pb-0">Command Centers</SidebarGroupLabel>
