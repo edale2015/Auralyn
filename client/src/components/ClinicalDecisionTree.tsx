@@ -9,9 +9,9 @@
  * Backend generates the tree via GPT-4o from the complaint's KB rules, then caches it.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, RefreshCw, Info } from "lucide-react";
+import { Loader2, RefreshCw, Info, Search, ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 function authHeaders(): Record<string, string> {
@@ -367,17 +367,217 @@ function FlowchartSVG({ fc }: { fc: Flowchart }) {
   );
 }
 
+// ─── System prefix → display label ───────────────────────────────────────────
+
+const SYSTEM_LABELS: Record<string, string> = {
+  chest:    "Chest / Cardiac",
+  cardio:   "Cardiology",
+  pulm:     "Pulmonology",
+  ent:      "ENT",
+  gi:       "Gastroenterology",
+  gu:       "Genitourinary",
+  neuro:    "Neurology",
+  msk:      "Musculoskeletal",
+  derm:     "Dermatology",
+  psych:    "Psychiatry",
+  tox:      "Toxicology",
+  obs:      "OB / GYN",
+  peds:     "Pediatrics",
+  ortho:    "Orthopedics",
+  oph:      "Ophthalmology",
+  endo:     "Endocrinology",
+  hem:      "Hematology",
+  infect:   "Infectious Disease",
+  obesity:  "Primary Care",
+  general:  "General",
+  sore:     "ENT",
+  cough:    "Respiratory",
+  fever:    "Infectious Disease",
+  dizziness:"Neurology / ENT",
+  back:     "Musculoskeletal",
+  head:     "Neurology",
+};
+
+function systemGroup(id: string): string {
+  const prefix = id.split("_")[0].toLowerCase();
+  return SYSTEM_LABELS[prefix] ?? prefix.charAt(0).toUpperCase() + prefix.slice(1);
+}
+
+const SYSTEM_COLORS: Record<string, string> = {
+  "Chest / Cardiac":    "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "Cardiology":         "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "Pulmonology":        "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  "ENT":                "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  "Gastroenterology":   "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  "Genitourinary":      "bg-pink-100 text-pink-700 dark:bg-pink-950 dark:text-pink-300",
+  "Neurology":          "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  "Neurology / ENT":    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  "Musculoskeletal":    "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300",
+  "Dermatology":        "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  "Psychiatry":         "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  "Toxicology":         "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "OB / GYN":           "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950 dark:text-fuchsia-300",
+  "Pediatrics":         "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
+  "Primary Care":       "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  "Respiratory":        "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  "Infectious Disease": "bg-lime-100 text-lime-700 dark:bg-lime-950 dark:text-lime-300",
+  "Endocrinology":      "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+};
+
+// ─── Complaint Picklist ───────────────────────────────────────────────────────
+
+interface ComplaintRow {
+  complaint_id: string;
+  rule_cnt: number;
+  critical: number;
+  red_flags: number;
+}
+
+function ComplaintPicklist({
+  selected,
+  onSelect,
+}: {
+  selected: string;
+  onSelect: (id: string) => void;
+}) {
+  const [search, setSearch]         = useState("");
+  const [collapsed, setCollapsed]   = useState<Set<string>>(new Set());
+  const searchRef                   = useRef<HTMLInputElement>(null);
+
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["/api/master-rules/complaints"],
+    queryFn: async () => {
+      const r = await fetch("/api/master-rules/complaints", {
+        credentials: "include",
+        headers: authHeaders(),
+      });
+      return r.json();
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const complaints: ComplaintRow[] = data?.complaints ?? [];
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    return q ? complaints.filter(c => c.complaint_id.toLowerCase().includes(q)) : complaints;
+  }, [complaints, search]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, ComplaintRow[]>();
+    for (const c of filtered) {
+      const grp = systemGroup(c.complaint_id);
+      if (!map.has(grp)) map.set(grp, []);
+      map.get(grp)!.push(c);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [filtered]);
+
+  function toggleGroup(grp: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(grp) ? next.delete(grp) : next.add(grp);
+      return next;
+    });
+  }
+
+  useEffect(() => { searchRef.current?.focus(); }, []);
+
+  return (
+    <div className="flex flex-col border rounded-lg bg-card overflow-hidden" style={{ width: 280, minWidth: 220 }}>
+      {/* Search bar */}
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b bg-muted/40">
+        <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <input
+          ref={searchRef}
+          data-testid="cdt-search-complaint"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search complaints…"
+          className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
+        />
+        {search && (
+          <button onClick={() => setSearch("")} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
+        )}
+      </div>
+
+      {/* Stats bar */}
+      <div className="px-3 py-1 text-[10px] text-muted-foreground border-b bg-muted/20">
+        {isLoading ? "Loading…" : `${filtered.length} of ${complaints.length} complaints`}
+      </div>
+
+      {/* List */}
+      <div className="overflow-y-auto flex-1" style={{ maxHeight: 420 }}>
+        {isLoading && (
+          <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading complaints…
+          </div>
+        )}
+
+        {!isLoading && grouped.length === 0 && (
+          <div className="py-6 text-center text-xs text-muted-foreground">No matches for "{search}"</div>
+        )}
+
+        {grouped.map(([grp, items]) => {
+          const isOpen = !collapsed.has(grp);
+          const colorCls = SYSTEM_COLORS[grp] ?? "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+          return (
+            <div key={grp}>
+              {/* Group header */}
+              <button
+                onClick={() => toggleGroup(grp)}
+                className="w-full flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-muted/40 transition-colors border-b"
+              >
+                {isOpen
+                  ? <ChevronDown className="h-3 w-3 shrink-0" />
+                  : <ChevronRight className="h-3 w-3 shrink-0" />
+                }
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${colorCls}`}>{grp}</span>
+                <span className="ml-auto text-[10px] text-muted-foreground">{items.length}</span>
+              </button>
+
+              {/* Items */}
+              {isOpen && items.map(c => {
+                const isSelected = c.complaint_id === selected;
+                return (
+                  <button
+                    key={c.complaint_id}
+                    data-testid={`cdt-pick-${c.complaint_id}`}
+                    onClick={() => onSelect(c.complaint_id)}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 text-left transition-colors border-b border-border/40
+                      ${isSelected
+                        ? "bg-blue-600 text-white"
+                        : "hover:bg-muted/60 text-foreground"
+                      }`}
+                  >
+                    <span className={`text-[11px] font-mono truncate max-w-[160px] ${isSelected ? "text-white" : ""}`}>
+                      {c.complaint_id}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {Number(c.critical) > 0 && (
+                        <span className={`text-[9px] font-bold px-1 rounded ${isSelected ? "bg-white/20 text-white" : "bg-red-100 text-red-600"}`}>
+                          ⚠ {c.critical}
+                        </span>
+                      )}
+                      <span className={`text-[9px] ${isSelected ? "text-blue-200" : "text-muted-foreground"}`}>
+                        {c.rule_cnt}r
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-const COMMON_COMPLAINTS = [
-  "chest_pain", "sore_throat", "dizziness", "gi_abdominal_pain",
-  "neuro_headache", "gu_hematuria", "gi_diarrhea", "msk_back_pain",
-  "pulm_shortness_of_breath", "ent_ear_pain", "derm_rash", "gu_uti_symptoms",
-];
-
 export default function ClinicalDecisionTree({ initialComplaint }: { initialComplaint?: string }) {
-  const [complaint, setComplaint] = useState(initialComplaint ?? "chest_pain");
-  const [input,     setInput    ] = useState(initialComplaint ?? "chest_pain");
+  const [complaint, setComplaint] = useState(initialComplaint ?? "");
   const [refresh,   setRefresh  ] = useState(false);
 
   const queryKey = ["/api/master-rules/flowchart", complaint, refresh];
@@ -393,6 +593,7 @@ export default function ClinicalDecisionTree({ initialComplaint }: { initialComp
       }
       return r.json();
     },
+    enabled: !!complaint,
     retry: false,
     staleTime: 1000 * 60 * 10,
   });
@@ -400,73 +601,55 @@ export default function ClinicalDecisionTree({ initialComplaint }: { initialComp
   const flowchart: Flowchart | null = data?.flowchart ?? null;
   const cached = data?.cached ?? false;
 
-  function load() {
-    setComplaint(input.trim());
+  function pick(id: string) {
     setRefresh(false);
+    setComplaint(id);
   }
 
   function regenerate() {
-    setRefresh(true);
-    setComplaint(input.trim());
+    setRefresh(r => !r);
   }
 
   return (
-    <div className="space-y-4">
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs text-muted-foreground whitespace-nowrap">Complaint:</label>
-        <input
-          data-testid="cdt-input-complaint"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") load(); }}
-          placeholder="e.g. chest_pain, sore_throat, dizziness…"
-          className="h-8 text-xs font-mono border rounded px-2 w-64 bg-background"
-        />
-        <button
-          data-testid="cdt-btn-load"
-          onClick={load}
-          className="px-3 h-8 text-xs rounded border bg-card hover:bg-muted transition-colors font-medium"
-        >
-          Generate
-        </button>
-        {flowchart && (
-          <button
-            data-testid="cdt-btn-refresh"
-            onClick={regenerate}
-            className="flex items-center gap-1 px-3 h-8 text-xs rounded border hover:bg-muted transition-colors text-muted-foreground"
-            title="Regenerate from KB rules (costs AI tokens)"
-          >
-            <RefreshCw className="h-3 w-3" /> Regenerate
-          </button>
-        )}
-        {cached && (
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
-            <Info className="h-3 w-3" /> Cached
-          </span>
-        )}
-        {isLoading && (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Generating clinical decision tree from KB rules…
-          </span>
-        )}
+    <div className="flex gap-4 items-start">
+      {/* ── LEFT: Complaint Picklist ─────────────────────────────────────── */}
+      <div className="shrink-0">
+        <div className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5">
+          <GitBranch className="h-3.5 w-3.5" /> Select Complaint
+        </div>
+        <ComplaintPicklist selected={complaint} onSelect={pick} />
       </div>
 
-      {/* Quick-pick chips */}
-      <div className="flex flex-wrap gap-1.5">
-        {COMMON_COMPLAINTS.map(c => (
-          <button
-            key={c}
-            data-testid={`cdt-chip-${c}`}
-            onClick={() => { setInput(c); setComplaint(c); setRefresh(false); }}
-            className={`px-2 py-0.5 text-[10px] font-mono rounded border transition-colors
-              ${complaint === c ? "bg-blue-600 text-white border-blue-600" : "bg-muted hover:bg-muted/80 border-border"}`}
-          >
-            {c}
-          </button>
-        ))}
-      </div>
+      {/* ── RIGHT: Flowchart area ────────────────────────────────────────── */}
+      <div className="flex-1 min-w-0 space-y-3">
+
+        {/* Header row */}
+        {complaint && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold font-mono text-blue-700 dark:text-blue-400">{complaint}</span>
+            {flowchart && (
+              <button
+                data-testid="cdt-btn-refresh"
+                onClick={regenerate}
+                className="flex items-center gap-1 px-3 h-7 text-xs rounded border hover:bg-muted transition-colors text-muted-foreground"
+                title="Regenerate from KB rules (costs AI tokens)"
+              >
+                <RefreshCw className="h-3 w-3" /> Regenerate
+              </button>
+            )}
+            {cached && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Info className="h-3 w-3" /> Cached
+              </span>
+            )}
+            {isLoading && (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating decision tree from KB rules…
+              </span>
+            )}
+          </div>
+        )}
 
       {/* Error */}
       {isError && (
@@ -503,17 +686,27 @@ export default function ClinicalDecisionTree({ initialComplaint }: { initialComp
         </div>
       )}
 
-      {/* Empty state */}
-      {!flowchart && !isLoading && !isError && (
+      {/* Empty state — no complaint selected yet */}
+      {!complaint && !isLoading && (
         <div className="border border-dashed rounded-xl p-12 text-center text-muted-foreground">
           <div className="text-4xl mb-3">🩺</div>
-          <div className="font-medium">Select a complaint above and click Generate</div>
+          <div className="font-medium">Pick a complaint from the list on the left</div>
           <div className="text-xs mt-1">
             GPT-4o will read the clinical rules from the knowledge base and produce a
-            branching decision flowchart like the clinical reference charts.
+            branching decision flowchart. Results are cached after the first generation.
           </div>
         </div>
       )}
+
+      {/* Empty state — complaint selected but no tree yet */}
+      {complaint && !flowchart && !isLoading && !isError && (
+        <div className="border border-dashed rounded-xl p-8 text-center text-muted-foreground">
+          <div className="text-3xl mb-2">🔄</div>
+          <div className="font-medium text-sm">Loading decision tree for <code className="font-mono bg-muted px-1 rounded">{complaint}</code>…</div>
+        </div>
+      )}
+
+      </div>
     </div>
   );
 }
