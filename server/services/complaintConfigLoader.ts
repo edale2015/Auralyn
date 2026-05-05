@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getTable, getTableFiltered } from "../data/registry";
+import { getTable } from "../data/registry";
 import {
   assertCoreQuestionsNotCorrupt,
   assertRedFlagRulesNotCorrupt,
@@ -9,7 +9,7 @@ import {
   assertClusterScoringRulesNotCorrupt,
 } from "../data/corruptionGuard";
 
-type SheetRow = Record<string, any>;
+export type SheetRow = Record<string, any>;
 
 export interface ComplaintRegistryEntry {
   ccId: string;
