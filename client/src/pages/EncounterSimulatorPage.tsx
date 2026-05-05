@@ -61,13 +61,18 @@ const COMPLAINTS = [
 ];
 
 const STEP_COLORS: Record<number, string> = {
-  1: "border-l-slate-400",   2: "border-l-amber-500",
-  3: "border-l-cyan-500",    4: "border-l-sky-500",
-  5: "border-l-red-500",     6: "border-l-purple-500",
-  7: "border-l-blue-500",    8: "border-l-indigo-500",
-  9: "border-l-teal-500",   10: "border-l-green-500",
-  11: "border-l-green-400", 12: "border-l-emerald-500",
-  13: "border-l-slate-600",
+  1:  "border-l-slate-400",    // Complaint ID
+  2:  "border-l-blue-500",     // Differential Dx
+  3:  "border-l-amber-500",    // 3A Modifiers
+  4:  "border-l-cyan-500",     // 3B Questions
+  5:  "border-l-teal-500",     // 4 Workup
+  6:  "border-l-green-500",    // 5 Medications
+  7:  "border-l-red-600",      // 6 Safety Screen / Red Flags ← hard stop
+  8:  "border-l-purple-500",   // 7 Cluster Scoring
+  9:  "border-l-indigo-500",   // 8 Dx Ranking
+  10: "border-l-violet-500",   // 9 Disposition + Plan
+  11: "border-l-emerald-500",  // Plan Generation
+  13: "border-l-slate-600",    // Audit Trail
 };
 
 const SAFETY_COLORS: Record<string, string> = {
@@ -78,19 +83,18 @@ const SAFETY_COLORS: Record<string, string> = {
 };
 
 const STEP_ICONS: Record<number, React.ReactNode> = {
-  1:  <ClipboardList className="h-3.5 w-3.5" />,
-  2:  <User className="h-3.5 w-3.5" />,
-  3:  <BookOpen className="h-3.5 w-3.5" />,
-  4:  <BookOpen className="h-3.5 w-3.5" />,
-  5:  <ShieldAlert className="h-3.5 w-3.5 text-red-500" />,
-  6:  <Activity className="h-3.5 w-3.5" />,
-  7:  <Stethoscope className="h-3.5 w-3.5" />,
-  8:  <ArrowRight className="h-3.5 w-3.5" />,
-  9:  <FlaskConical className="h-3.5 w-3.5" />,
-  10: <Pill className="h-3.5 w-3.5" />,
-  11: <Pill className="h-3.5 w-3.5" />,
-  12: <ClipboardList className="h-3.5 w-3.5" />,
-  13: <ListTree className="h-3.5 w-3.5" />,
+  1:  <ClipboardList className="h-3.5 w-3.5" />,          // Complaint ID
+  2:  <Stethoscope className="h-3.5 w-3.5" />,            // Differential Dx
+  3:  <User className="h-3.5 w-3.5" />,                   // 3A Modifiers
+  4:  <BookOpen className="h-3.5 w-3.5" />,               // 3B Questions
+  5:  <FlaskConical className="h-3.5 w-3.5" />,           // 4 Workup
+  6:  <Activity className="h-3.5 w-3.5" />,               // 5 Medications
+  7:  <ShieldAlert className="h-3.5 w-3.5 text-red-500" />, // 6 Safety Screen / Red Flags
+  8:  <Activity className="h-3.5 w-3.5" />,               // 7 Cluster Scoring
+  9:  <Stethoscope className="h-3.5 w-3.5" />,            // 8 Dx Ranking
+  10: <ArrowRight className="h-3.5 w-3.5" />,             // 9 Disposition + Plan
+  11: <ClipboardList className="h-3.5 w-3.5" />,          // Plan Generation
+  13: <ListTree className="h-3.5 w-3.5" />,               // Audit Trail
 };
 
 function safetyBadge(level: string) {

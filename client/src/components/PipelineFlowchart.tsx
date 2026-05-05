@@ -33,19 +33,17 @@ interface StepDef {
 }
 
 const STEPS: StepDef[] = [
-  { step:  1, name: "Complaint Identification",  short: "Chief Complaint",   ruleType: null,             shape: "box",      color: "bg-slate-700",   border: "border-slate-700",  textCol: "text-white" },
-  { step:  2, name: "Modifier Evaluation",       short: "Modifiers",         ruleType: "modifier",       shape: "box",      color: "bg-amber-500",   border: "border-amber-500",  textCol: "text-white" },
-  { step:  3, name: "Core Questions",            short: "Core Questions",    ruleType: "question",       shape: "box",      color: "bg-cyan-500",    border: "border-cyan-500",   textCol: "text-white" },
-  { step:  4, name: "Secondary Questions",       short: "Secondary Qs",      ruleType: "question",       shape: "box",      color: "bg-sky-500",     border: "border-sky-500",    textCol: "text-white" },
-  { step:  5, name: "Red Flag Safety Screen",    short: "Red Flag Screen",   ruleType: "red_flag",       shape: "diamond",  color: "bg-red-600",     border: "border-red-600",    textCol: "text-white" },
-  { step:  6, name: "Cluster Scoring",           short: "Cluster Scoring",   ruleType: "cluster_scoring",shape: "box",      color: "bg-purple-500",  border: "border-purple-500", textCol: "text-white" },
-  { step:  7, name: "Diagnosis Ranking",         short: "Diagnosis",         ruleType: "diagnosis",      shape: "box",      color: "bg-blue-600",    border: "border-blue-600",   textCol: "text-white" },
-  { step:  8, name: "Disposition Determination", short: "Disposition",       ruleType: "disposition",    shape: "box",      color: "bg-indigo-600",  border: "border-indigo-600", textCol: "text-white" },
-  { step:  9, name: "Workup Selection",          short: "Workup",            ruleType: "workup",         shape: "box",      color: "bg-teal-600",    border: "border-teal-600",   textCol: "text-white" },
-  { step: 10, name: "Medication Groups",         short: "Medications",       ruleType: "medication",     shape: "box",      color: "bg-green-600",   border: "border-green-600",  textCol: "text-white" },
-  { step: 11, name: "Medication Safety Filters", short: "Med Safety",        ruleType: "medication",     shape: "box",      color: "bg-green-500",   border: "border-green-500",  textCol: "text-white" },
-  { step: 12, name: "Plan Finalization",         short: "Plan",              ruleType: "plan",           shape: "box",      color: "bg-emerald-600", border: "border-emerald-600",textCol: "text-white" },
-  { step: 13, name: "Audit Trail",               short: "Audit",             ruleType: null,             shape: "terminal", color: "bg-slate-500",   border: "border-slate-500",  textCol: "text-white" },
+  { step:  1,  name: "Complaint Identification",                  short: "Complaint ID",        ruleType: null,              shape: "box",     color: "bg-slate-700",   border: "border-slate-700",  textCol: "text-white" },
+  { step:  2,  name: "Differential Diagnosis / Rule-Out Targets", short: "Differential Dx",     ruleType: "diagnosis",       shape: "box",     color: "bg-blue-600",    border: "border-blue-600",   textCol: "text-white" },
+  { step:  3,  name: "Modifier Collection",                       short: "3A · Modifiers",      ruleType: "modifier",        shape: "box",     color: "bg-amber-500",   border: "border-amber-500",  textCol: "text-white" },
+  { step:  4,  name: "Question Engine",                           short: "3B · Questions",      ruleType: "question",        shape: "box",     color: "bg-cyan-500",    border: "border-cyan-500",   textCol: "text-white" },
+  { step:  5,  name: "Workup Selection",                          short: "4 · Workup",          ruleType: "workup",          shape: "box",     color: "bg-teal-600",    border: "border-teal-600",   textCol: "text-white" },
+  { step:  6,  name: "Medication Selection / Safety",             short: "5 · Medications",     ruleType: "medication",      shape: "box",     color: "bg-green-600",   border: "border-green-600",  textCol: "text-white" },
+  { step:  7,  name: "Safety Screen — Red Flags",                 short: "6 · Red Flag Screen", ruleType: "red_flag",        shape: "diamond", color: "bg-red-600",     border: "border-red-600",    textCol: "text-white" },
+  { step:  8,  name: "Cluster Scoring",                           short: "7 · Cluster Score",   ruleType: "cluster_scoring", shape: "box",     color: "bg-purple-500",  border: "border-purple-500", textCol: "text-white" },
+  { step:  9,  name: "Diagnosis Ranking / Differential Refinement",short: "8 · Dx Ranking",    ruleType: "diagnosis",       shape: "box",     color: "bg-indigo-600",  border: "border-indigo-600", textCol: "text-white" },
+  { step: 10,  name: "Disposition + Plan",                        short: "9 · Disposition",     ruleType: "disposition",     shape: "box",     color: "bg-violet-600",  border: "border-violet-600", textCol: "text-white" },
+  { step: 13,  name: "Audit Trail",                               short: "13 · Audit",          ruleType: null,              shape: "terminal",color: "bg-slate-500",   border: "border-slate-500",  textCol: "text-white" },
 ];
 
 // ─── Arrow connector ──────────────────────────────────────────────────────────

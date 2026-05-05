@@ -173,11 +173,22 @@ Node type rules:
 - "terminal" — final disposition. No next_id. Include disposition in label (e.g. "Discharge: treat and follow up in 3 days").
 
 Requirements:
-1. Include red flag checks early as decision nodes (use the red_flag rules).
-2. Branch into ER/escalate if critical flags present.
-3. Work through differential diagnosis narrowing.
+1. Follow the exact clinical pipeline step order:
+   Step 1 → Complaint Identification (start node)
+   Step 2 → Differential Diagnosis / Rule-Out Targets (process nodes laying out candidate diagnoses)
+   Step 3A → Modifier Collection (decision nodes for patient-context modifiers, e.g. "Age > 65?", "Immunocompromised?")
+   Step 3B → Question Engine (decision nodes for symptom details, e.g. "Fever ≥ 38.5°C?", "Productive cough?")
+   Step 4 → Workup Selection (process node: labs/imaging to order)
+   Step 5 → Medication Selection / Safety (action node: treatment options)
+   Step 6 → Safety Screen — Red Flags (DECISION node, yes/no: critical red flag present?) → YES branches to ER escalation terminal, NO continues
+   Step 7 → Cluster Scoring (process node: scoring the working diagnosis clusters)
+   Step 8 → Diagnosis Ranking / Differential Refinement (process node: rank top diagnoses)
+   Step 9 → Disposition + Plan (terminal nodes per path, e.g. "Discharge with 5-day Azithromycin", "Admit for IV antibiotics")
+   Step 13 → Audit Trail (terminal: chart note summary)
+2. The Safety Screen (Step 6) MUST be a decision node with yes_id (→ escalate/ER terminal) and no_id (→ continues to Cluster Scoring).
+3. Modifiers and Question nodes (Steps 3A/3B) come BEFORE workup and medications.
 4. End each path with a specific disposition terminal node.
-5. Keep 10–16 nodes total. Be concise and medically accurate.
+5. Keep 12–18 nodes total. Be concise and medically accurate.
 6. Base the tree on the actual rules provided above.`,
         },
       ],
@@ -243,7 +254,21 @@ router.get("/complaints", ...auth, async (_req, res) => {
 router.get("/pipeline/:complaint_id", ...auth, async (req, res) => {
   try {
     const { complaint_id } = req.params;
-    const STEP_ORDER = ["modifier","question","red_flag","cluster_scoring","diagnosis","disposition","workup","medication","plan"];
+    // Corrected step order per clinical pipeline spec
+    const PIPELINE_DEFS = [
+      { step:  1,  ruleType: null,              stepName: "Complaint Identification"                  },
+      { step:  2,  ruleType: "diagnosis",       stepName: "Differential Diagnosis / Rule-Out Targets" },
+      { step:  3,  ruleType: "modifier",        stepName: "Modifier Collection"                       },
+      { step:  4,  ruleType: "question",        stepName: "Question Engine"                           },
+      { step:  5,  ruleType: "workup",          stepName: "Workup Selection"                          },
+      { step:  6,  ruleType: "medication",      stepName: "Medication Selection / Safety"             },
+      { step:  7,  ruleType: "red_flag",        stepName: "Safety Screen — Red Flags"                },
+      { step:  8,  ruleType: "cluster_scoring", stepName: "Cluster Scoring"                           },
+      { step:  9,  ruleType: "diagnosis",       stepName: "Diagnosis Ranking / Differential Refinement"},
+      { step: 10,  ruleType: "disposition",     stepName: "Disposition + Plan"                        },
+      { step: 11,  ruleType: "plan",            stepName: "Plan Generation"                           },
+      { step: 13,  ruleType: null,              stepName: "Audit Trail"                               },
+    ];
 
     const rows = await db.execute(sql`
       SELECT rule_id, rule_name, rule_type, priority, safety_level,
@@ -256,25 +281,21 @@ router.get("/pipeline/:complaint_id", ...auth, async (req, res) => {
       ORDER BY priority ASC, safety_level DESC
     `);
 
-    const grouped: Record<string, any[]> = {};
-    for (const step of STEP_ORDER) grouped[step] = [];
-
+    // Group rules by type
+    const grouped: Record<string, any[]> = {
+      diagnosis: [], modifier: [], question: [], workup: [],
+      medication: [], red_flag: [], cluster_scoring: [], disposition: [], plan: [],
+    };
     for (const r of rows.rows as any[]) {
-      if (grouped[r.rule_type]) grouped[r.rule_type].push(r);
+      if (grouped[r.rule_type] !== undefined) grouped[r.rule_type].push(r);
     }
 
-    const pipeline = STEP_ORDER.map((ruleType, i) => ({
-      step:     i + 2, // steps 2-12 (step 1 is complaint ID)
-      ruleType,
-      stepName: {
-        modifier: "Modifier Collection", question: "Question Engine",
-        red_flag: "Safety Screen (Red Flags)", cluster_scoring: "Cluster Scoring",
-        diagnosis: "Diagnosis Ranking", disposition: "Disposition Determination",
-        workup: "Workup Selection", medication: "Medication Selection / Safety",
-        plan: "Plan Generation",
-      }[ruleType],
-      rules: grouped[ruleType],
-      count: grouped[ruleType].length,
+    const pipeline = PIPELINE_DEFS.map(def => ({
+      step:     def.step,
+      ruleType: def.ruleType,
+      stepName: def.stepName,
+      rules:    def.ruleType ? grouped[def.ruleType] ?? [] : [],
+      count:    def.ruleType ? (grouped[def.ruleType]?.length ?? 0) : 0,
     }));
 
     res.json({ ok: true, complaint_id, totalRules: (rows.rows as any[]).length, pipeline });

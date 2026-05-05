@@ -47,21 +47,20 @@ export interface PipelineResult {
   criticalFlagsHit: string[];
 }
 
-// 13-step pipeline definition
+// Corrected 13-step pipeline definition
 const PIPELINE_STEPS = [
-  { step: 1,  name: "Complaint Identification",      ruleType: null            },
-  { step: 2,  name: "Modifier Collection",           ruleType: "modifier"      },
-  { step: 3,  name: "Core Questions",                ruleType: "question"      },
-  { step: 4,  name: "Secondary Questions",           ruleType: "question"      },
-  { step: 5,  name: "Red Flag Safety Screen",        ruleType: "red_flag"      },
-  { step: 6,  name: "Cluster Scoring",               ruleType: "cluster_scoring"},
-  { step: 7,  name: "Diagnosis Ranking",             ruleType: "diagnosis"     },
-  { step: 8,  name: "Disposition Determination",     ruleType: "disposition"   },
-  { step: 9,  name: "Workup Selection",              ruleType: "workup"        },
-  { step: 10, name: "Medication Group Selection",    ruleType: "medication"    },
-  { step: 11, name: "Medication Safety Filters",     ruleType: "medication"    },
-  { step: 12, name: "Plan Generation",               ruleType: "plan"          },
-  { step: 13, name: "Audit Trail",                   ruleType: null            },
+  { step:  1,  name: "Complaint Identification",                   ruleType: null              },
+  { step:  2,  name: "Differential Diagnosis / Rule-Out Targets",  ruleType: "diagnosis"       },
+  { step:  3,  name: "Modifier Collection",                        ruleType: "modifier"        },
+  { step:  4,  name: "Question Engine",                            ruleType: "question"        },
+  { step:  5,  name: "Workup Selection",                           ruleType: "workup"          },
+  { step:  6,  name: "Medication Selection / Safety",              ruleType: "medication"      },
+  { step:  7,  name: "Safety Screen — Red Flags",                  ruleType: "red_flag"        },
+  { step:  8,  name: "Cluster Scoring",                            ruleType: "cluster_scoring" },
+  { step:  9,  name: "Diagnosis Ranking / Differential Refinement",ruleType: "diagnosis"       },
+  { step: 10,  name: "Disposition + Plan",                         ruleType: "disposition"     },
+  { step: 11,  name: "Plan Generation",                            ruleType: "plan"            },
+  { step: 13,  name: "Audit Trail",                                ruleType: null              },
 ];
 
 // Parse PostgreSQL array format {a,b,c} or JS array or comma string
