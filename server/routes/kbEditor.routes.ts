@@ -182,15 +182,18 @@ router.post("/rules", async (req, res) => {
   const ruleId = `manual_${Date.now()}_${b.rule_type.slice(0,3)}`;
 
   try {
+    const keyQArr = Array.isArray(b.key_questions) ? b.key_questions : (typeof b.key_questions === "string" ? b.key_questions.split("\n").map((s:string)=>s.trim()).filter(Boolean) : null);
     await db.execute(sql`
       INSERT INTO kb_master_rules
         (rule_id, rule_name, rule_type, priority, complaint_id, cluster_id, diagnosis_id,
+         diagnostic_criteria, key_questions, icd10,
          logic_description, logic_type, source_tab,
          disposition_impact, medication_impact, workup_impact,
          safety_level, notes, active, version, owner)
       VALUES (
         ${ruleId}, ${b.rule_name}, ${b.rule_type}, ${b.priority ?? 5},
         ${b.complaint_id}, ${b.cluster_id ?? null}, ${b.diagnosis_id ?? null},
+        ${b.diagnostic_criteria ?? null}, ${keyQArr}, ${b.icd10 ?? null},
         ${b.logic_description ?? null},
         ${validLogic.includes(b.logic_type) ? b.logic_type : "boolean"},
         ${"manual"},
@@ -214,23 +217,27 @@ router.patch("/rules/:rule_id", async (req, res) => {
   const validLogic  = ["boolean","scoring","threshold","mapping","conditional","ML"];
 
   try {
+    const keyQArr = Array.isArray(b.key_questions) ? b.key_questions : (typeof b.key_questions === "string" ? b.key_questions.split("\n").map((s:string)=>s.trim()).filter(Boolean) : undefined);
     await db.execute(sql`
       UPDATE kb_master_rules SET
-        rule_name          = COALESCE(${b.rule_name          ?? null}, rule_name),
-        priority           = COALESCE(${b.priority           ?? null}, priority),
-        complaint_id       = COALESCE(${b.complaint_id       ?? null}, complaint_id),
-        cluster_id         = COALESCE(${b.cluster_id         ?? null}, cluster_id),
-        diagnosis_id       = COALESCE(${b.diagnosis_id       ?? null}, diagnosis_id),
-        logic_description  = ${b.logic_description  !== undefined ? b.logic_description  : sql`logic_description`},
-        logic_type         = COALESCE(${validLogic.includes(b.logic_type) ? b.logic_type : null}, logic_type),
-        disposition_impact = ${b.disposition_impact !== undefined ? b.disposition_impact : sql`disposition_impact`},
-        medication_impact  = ${b.medication_impact  !== undefined ? b.medication_impact  : sql`medication_impact`},
-        workup_impact      = ${b.workup_impact      !== undefined ? b.workup_impact      : sql`workup_impact`},
-        safety_level       = COALESCE(${validLevels.includes(b.safety_level) ? b.safety_level : null}, safety_level),
-        notes              = ${b.notes !== undefined ? b.notes : sql`notes`},
-        active             = COALESCE(${b.active !== undefined ? b.active : null}, active),
-        version            = 'v2',
-        last_updated       = NOW()
+        rule_name           = COALESCE(${b.rule_name          ?? null}, rule_name),
+        priority            = COALESCE(${b.priority           ?? null}, priority),
+        complaint_id        = COALESCE(${b.complaint_id       ?? null}, complaint_id),
+        cluster_id          = COALESCE(${b.cluster_id         ?? null}, cluster_id),
+        diagnosis_id        = COALESCE(${b.diagnosis_id       ?? null}, diagnosis_id),
+        icd10               = ${b.icd10               !== undefined ? b.icd10               : sql`icd10`},
+        diagnostic_criteria = ${b.diagnostic_criteria !== undefined ? b.diagnostic_criteria : sql`diagnostic_criteria`},
+        key_questions       = ${keyQArr               !== undefined ? keyQArr               : sql`key_questions`},
+        logic_description   = ${b.logic_description  !== undefined ? b.logic_description  : sql`logic_description`},
+        logic_type          = COALESCE(${validLogic.includes(b.logic_type) ? b.logic_type : null}, logic_type),
+        disposition_impact  = ${b.disposition_impact !== undefined ? b.disposition_impact : sql`disposition_impact`},
+        medication_impact   = ${b.medication_impact  !== undefined ? b.medication_impact  : sql`medication_impact`},
+        workup_impact       = ${b.workup_impact      !== undefined ? b.workup_impact      : sql`workup_impact`},
+        safety_level        = COALESCE(${validLevels.includes(b.safety_level) ? b.safety_level : null}, safety_level),
+        notes               = ${b.notes !== undefined ? b.notes : sql`notes`},
+        active              = COALESCE(${b.active !== undefined ? b.active : null}, active),
+        version             = 'v2',
+        last_updated        = NOW()
       WHERE rule_id = ${rule_id}
     `);
     res.json({ success: true });
