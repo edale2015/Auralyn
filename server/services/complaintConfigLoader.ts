@@ -679,6 +679,22 @@ export async function loadComplaintConfig(ccId: string, options: LoadComplaintCo
     );
   }
 
+  // World B layer validation (the 13 layers previously unvalidated)
+  try {
+    const { validateWorldBLayers } = await import("../clinical/pipelineSafetyPatches");
+    const wbIssues = validateWorldBLayers(config);
+    const wbErrors = wbIssues.filter(i => i.level === "ERROR");
+    const wbWarns  = wbIssues.filter(i => i.level === "WARN");
+    if (wbErrors.length) {
+      console.error(`[WorldBValidator] CC_ID=${canonicalKey} ERRORS: ` + wbErrors.map(e => `${e.layer}/${e.code}: ${e.message}`).join(" | "));
+    }
+    if (wbWarns.length) {
+      console.warn(`[WorldBValidator] CC_ID=${canonicalKey} WARN: ` + wbWarns.map(w => `${w.layer}/${w.code}: ${w.message}`).join(", "));
+    }
+  } catch (wbErr: any) {
+    console.warn(`[WorldBValidator] Could not run World B layer validation: ${wbErr.message}`);
+  }
+
   CONFIG_CACHE.set(key, { config, expiresAt: now + CONFIG_TTL_MS });
   if (key !== canonicalKey) {
     CONFIG_CACHE.set(canonicalKey, { config, expiresAt: now + CONFIG_TTL_MS });

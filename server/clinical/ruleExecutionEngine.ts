@@ -64,9 +64,31 @@ const PIPELINE_STEPS = [
   { step: 13, name: "Audit Trail",                   ruleType: null            },
 ];
 
+// Parse PostgreSQL array format {a,b,c} or JS array or comma string
+function parseFields(raw: any): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  const s = String(raw).trim();
+  if (s.startsWith("{") && s.endsWith("}")) {
+    return s.slice(1, -1).split(",").map(f => f.trim()).filter(Boolean);
+  }
+  return s ? s.split(",").map(f => f.trim()).filter(Boolean) : [];
+}
+
+function isTruthy(val: any): boolean {
+  if (val === undefined || val === null) return false;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number")  return val !== 0;
+  const s = String(val).toLowerCase().trim();
+  return s === "yes" || s === "true" || s === "1" || s === "present";
+}
+
 function evaluateRule(rule: any, inputs: PipelineInputs): boolean {
   const logic = (rule.logic_type ?? "boolean") as string;
-  const inputFields: string[] = rule.input_fields ?? [];
+  // input_fields is the primary trigger set; fall back to question_dependencies
+  const inputFields: string[] = parseFields(rule.input_fields).length > 0
+    ? parseFields(rule.input_fields)
+    : (rule.question_dependencies ?? []);
   const description: string   = rule.logic_description ?? "";
 
   switch (logic) {
@@ -285,4 +307,45 @@ export async function executePipeline(
     totalRulesFired: totalFired,
     criticalFlagsHit,
   };
+}
+
+// ─── Pipeline structure (for GET /api/master-rules/pipeline/:complaint_id) ────
+
+export async function getPipelineStructure(complaintId: string): Promise<{
+  pipeline: Array<{ step: number; stepName: string; ruleType: string; count: number; criticalCount: number }>;
+  totalRules: number;
+  complaintId: string;
+}> {
+  const { rows } = await db.execute(sql`
+    SELECT rule_type,
+           COUNT(*)                                           AS cnt,
+           COUNT(*) FILTER (WHERE safety_level = 'CRITICAL') AS critical_cnt
+    FROM kb_master_rules
+    WHERE active = true
+      AND (complaint_id = ${complaintId} OR complaint_id = 'ALL' OR complaint_id IS NULL)
+    GROUP BY rule_type
+  `);
+
+  const countByType = new Map<string, { cnt: number; critical: number }>();
+  for (const row of rows as any[]) {
+    countByType.set(row.rule_type, { cnt: Number(row.cnt), critical: Number(row.critical_cnt) });
+  }
+
+  const totalRules = [...countByType.values()].reduce((n, v) => n + v.cnt, 0);
+
+  // Deduplicate step 3/4 (both question) and 10/11 (both medication)
+  const seen = new Set<string>();
+  const pipeline = PIPELINE_STEPS
+    .filter(s => s.ruleType && !seen.has(s.ruleType) && (seen.add(s.ruleType), true))
+    .filter(s => s.step !== 1 && s.step !== 13)
+    .map(s => ({
+      step:          s.step,
+      stepName:      s.name,
+      ruleType:      s.ruleType!,
+      count:         countByType.get(s.ruleType!)?.cnt ?? 0,
+      criticalCount: countByType.get(s.ruleType!)?.critical ?? 0,
+    }))
+    .filter(s => s.count > 0);
+
+  return { pipeline, totalRules, complaintId };
 }

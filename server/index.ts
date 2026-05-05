@@ -92,6 +92,7 @@ import funnelRoutes from "./growth/funnelRoutes";
 import clinicRoutes from "./clinic/clinicRoutes";
 import voiceClinicRoutes from "./voice/voiceClinicRoutes";
 import { startOptimizerLoop } from "./learning/triageOptimizer";
+import { BackgroundTableRefresher } from "./clinical/pipelineSafetyPatches";
 import contractRoutes, { startNegotiationWorker } from "./contracts/contractRoutes";
 import financeRoutes from "./finance/financeRoutes";
 import regulatoryRoutes from "./regulatory/regulatoryRoutes";
@@ -1412,6 +1413,7 @@ app.use((req, res, next) => {
       initOrchestrationSocket(httpServer);
       startOptimizerLoop(60_000);
       startNegotiationWorker(60_000);
+      BackgroundTableRefresher.start(60_000);
       startAnomalyEngine(5000);
       startAlertEngine(10_000);
       startGovernanceLoop(15_000);

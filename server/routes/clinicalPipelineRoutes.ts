@@ -9,6 +9,21 @@ import {
   type ComplaintConfig,
   type SheetRow,
 } from "../services/complaintConfigLoader";
+import {
+  evaluateExpr,
+  evaluateRowExpr,
+  buildClinicalTokens,
+  type ClinicalTokens,
+} from "../clinical/clinicalExprEvaluator";
+import {
+  asSheetRows,
+  RedFlagRuleGuard,
+  ClusterScoringGuard,
+  ScoringDefGuard,
+  DispositionRuleGuard,
+  DxCandidateGuard,
+  OutputTemplateGuard,
+} from "../clinical/pipelineSafetyPatches";
 
 const router = Router();
 
@@ -140,12 +155,11 @@ const WORLD_B_PIPELINE_SOURCE_MAP: PipelineSourceMapEntry[] = [
 ];
 
 function normalizeFeature(value: any): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  return String(value ?? "").trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
+
+// buildClinicalTokens (from clinicalExprEvaluator) is used in buildTrace below.
 
 function getAny(row: SheetRow, keys: string[], fallback = ""): string {
   for (const key of keys) {
@@ -173,14 +187,14 @@ function buildEarlyDifferentialRows(cfg: ComplaintConfig): SheetRow[] {
   return [
     ...toSourceRows(cfg.clusterPrimaryDiagnosis, "CLUSTER_PRIMARY_DIAGNOSIS"),
     ...toSourceRows(cfg.globalClusterMaster, "GLOBAL_CLUSTER_MASTER"),
-    ...toSourceRows(cfg.scoringDefs as unknown as SheetRow[], "SCORING_DEFS"),
-    ...toSourceRows(cfg.dxCandidates as unknown as SheetRow[], "DX_CANDIDATES"),
+    ...toSourceRows(asSheetRows(cfg.scoringDefs, ScoringDefGuard), "SCORING_DEFS"),
+    ...toSourceRows(asSheetRows(cfg.dxCandidates, DxCandidateGuard), "DX_CANDIDATES"),
   ];
 }
 
 function buildDiagnosisRankingRows(cfg: ComplaintConfig): SheetRow[] {
   return [
-    ...toSourceRows(cfg.dxCandidates as unknown as SheetRow[], "DX_CANDIDATES"),
+    ...toSourceRows(asSheetRows(cfg.dxCandidates, DxCandidateGuard), "DX_CANDIDATES"),
     ...toSourceRows(cfg.clusterPrimaryDiagnosis, "CLUSTER_PRIMARY_DIAGNOSIS"),
     ...toSourceRows(cfg.globalClusterMaster, "GLOBAL_CLUSTER_MASTER"),
   ];
@@ -188,8 +202,8 @@ function buildDiagnosisRankingRows(cfg: ComplaintConfig): SheetRow[] {
 
 function buildDispositionPlanRows(cfg: ComplaintConfig): SheetRow[] {
   return [
-    ...toSourceRows(cfg.dispositionRules as unknown as SheetRow[], "DISPOSITION_RULES"),
-    ...toSourceRows(cfg.outputTemplates as unknown as SheetRow[], "OUTPUT_TEMPLATES"),
+    ...toSourceRows(asSheetRows(cfg.dispositionRules, DispositionRuleGuard), "DISPOSITION_RULES"),
+    ...toSourceRows(asSheetRows(cfg.outputTemplates, OutputTemplateGuard), "OUTPUT_TEMPLATES"),
   ];
 }
 
@@ -216,7 +230,7 @@ function buildPipelineLayers(cfg: ComplaintConfig) {
     ),
     questions: layer(
       [
-        ...toSourceRows(cfg.coreQuestions as unknown as SheetRow[], "CORE_QUESTIONS"),
+        ...toSourceRows(cfg.coreQuestions as SheetRow[], "CORE_QUESTIONS"),
         ...toSourceRows(cfg.globalSecondary, "GLOBAL_SECONDARY"),
       ],
       ["CORE_QUESTIONS", "GLOBAL_SECONDARY"],
@@ -237,7 +251,7 @@ function buildPipelineLayers(cfg: ComplaintConfig) {
     ),
     redFlags: layer(
       [
-        ...toSourceRows(cfg.redFlagRules as unknown as SheetRow[], "RED_FLAG_RULES"),
+        ...toSourceRows(asSheetRows(cfg.redFlagRules, RedFlagRuleGuard), "RED_FLAG_RULES"),
         ...toSourceRows(cfg.redFlagsMaster, "RED_FLAGS_MASTER"),
       ],
       ["RED_FLAG_RULES", "RED_FLAGS_MASTER"],
@@ -245,9 +259,9 @@ function buildPipelineLayers(cfg: ComplaintConfig) {
     ),
     clusterScoring: layer(
       [
-        ...toSourceRows(cfg.clusterScoringRules as unknown as SheetRow[], "CLUSTER_SCORING_RULES"),
+        ...toSourceRows(asSheetRows(cfg.clusterScoringRules, ClusterScoringGuard), "CLUSTER_SCORING_RULES"),
         ...toSourceRows(cfg.scoringSystems, "SCORING_SYSTEMS"),
-        ...toSourceRows(cfg.scoringDefs as unknown as SheetRow[], "SCORING_DEFS"),
+        ...toSourceRows(asSheetRows(cfg.scoringDefs, ScoringDefGuard), "SCORING_DEFS"),
       ],
       ["CLUSTER_SCORING_RULES", "SCORING_SYSTEMS", "SCORING_DEFS"],
       "cluster scoring"
@@ -270,44 +284,12 @@ function buildPipelineLayers(cfg: ComplaintConfig) {
   };
 }
 
-function tokenizeInput(symptoms: unknown[], freeText: string): Set<string> {
-  const tokens = new Set<string>();
-  for (const symptom of symptoms) {
-    const normalized = normalizeFeature(symptom);
-    if (normalized) tokens.add(normalized);
-  }
-  for (const token of String(freeText ?? "").split(/[^a-zA-Z0-9]+/)) {
-    const normalized = normalizeFeature(token);
-    if (normalized) tokens.add(normalized);
-  }
-  return tokens;
-}
-
-function exprMatches(expr: string | undefined, tokens: Set<string>): boolean {
-  const raw = String(expr ?? "").trim();
-  if (!raw) return false;
-  const lower = raw.toLowerCase();
-  if (["true", "1", "always", "default"].includes(lower)) return true;
-
-  const candidates = raw
-    .split(/[^a-zA-Z0-9_]+/)
-    .map(normalizeFeature)
-    .filter(t => t && !["and", "or", "not", "if", "then", "true", "false", "yes", "no"].includes(t));
-
-  return candidates.some(candidate => tokens.has(candidate));
-}
-
-function rowMatchesInput(row: SheetRow, tokens: Set<string>): boolean {
-  const expr = getAny(row, ["WHEN_EXPR", "TRIGGER_EXPR", "ASK_IF", "INDICATIONS_CLUSTER", "CONDITION", "CONDITION_ID"]);
-  if (exprMatches(expr, tokens)) return true;
-
-  const searchable = Object.entries(row)
-    .filter(([key]) => !key.startsWith("__"))
-    .map(([, value]) => String(value ?? ""))
-    .join(" ");
-  const rowTokens = new Set(searchable.split(/[^a-zA-Z0-9_]+/).map(normalizeFeature).filter(Boolean));
-  return Array.from(tokens).some(token => rowTokens.has(token));
-}
+// evaluateExpr / evaluateRowExpr / buildClinicalTokens imported from clinicalExprEvaluator.
+// These replace the old tokenizeInput / exprMatches / rowMatchesInput implementations.
+// Key behavioral differences:
+//   - evaluateExpr handles AND/OR/NOT correctly (old exprMatches ignored AND/NOT)
+//   - evaluateExpr handles numeric thresholds (O2_sat < 94)
+//   - evaluateRowExpr returns false when no expr field found (old rowMatchesInput scanned ALL row values)
 
 function compactRow(row: SheetRow, sourceTable = row.__sourceTable) {
   const id = getAny(row, ["RULE_ID", "ruleId", "RF_ID", "rfId", "Q_ID", "qId", "DX_ID", "dxId", "CLUSTER_ID", "clusterId", "DISP_RULE_ID", "dispRuleId", "TEMPLATE_ID", "templateId", "MEDICATION_NAME", "Medication_Name", "id"], "—");
@@ -321,11 +303,18 @@ function compactRow(row: SheetRow, sourceTable = row.__sourceTable) {
 }
 
 function buildTrace(cfg: ComplaintConfig, symptoms: string[], freeText: string) {
-  const tokens = tokenizeInput(symptoms, freeText);
+  // Build ClinicalTokens map — supports full boolean/threshold expression evaluation.
+  // freeText words are added as symptom-presence tokens.
+  const allSymptoms = [
+    ...symptoms,
+    ...String(freeText ?? "").split(/[^a-zA-Z0-9]+/).map(s => s.trim()).filter(Boolean),
+  ];
+  const tokens: ClinicalTokens = buildClinicalTokens({ symptoms: allSymptoms });
+
   const earlyDifferentialRows = buildEarlyDifferentialRows(cfg);
   const modifierRows = cfg.modifiers;
   const questionRows = [
-    ...toSourceRows(cfg.coreQuestions as unknown as SheetRow[], "CORE_QUESTIONS"),
+    ...toSourceRows(cfg.coreQuestions as SheetRow[], "CORE_QUESTIONS"),
     ...toSourceRows(cfg.globalSecondary, "GLOBAL_SECONDARY"),
   ];
   const workupRows = cfg.urgentCareSpotInterventions;
@@ -334,26 +323,28 @@ function buildTrace(cfg: ComplaintConfig, symptoms: string[], freeText: string) 
     ...toSourceRows(cfg.medConditionIntelligenceRules, "MED_CONDITION_INTELLIGENCE_RULES"),
   ];
   const redFlagRows = [
-    ...toSourceRows(cfg.redFlagRules as unknown as SheetRow[], "RED_FLAG_RULES"),
+    ...toSourceRows(asSheetRows(cfg.redFlagRules, RedFlagRuleGuard), "RED_FLAG_RULES"),
     ...toSourceRows(cfg.redFlagsMaster, "RED_FLAGS_MASTER"),
   ];
   const clusterRows = [
-    ...toSourceRows(cfg.clusterScoringRules as unknown as SheetRow[], "CLUSTER_SCORING_RULES"),
+    ...toSourceRows(asSheetRows(cfg.clusterScoringRules, ClusterScoringGuard), "CLUSTER_SCORING_RULES"),
     ...toSourceRows(cfg.scoringSystems, "SCORING_SYSTEMS"),
-    ...toSourceRows(cfg.scoringDefs as unknown as SheetRow[], "SCORING_DEFS"),
+    ...toSourceRows(asSheetRows(cfg.scoringDefs, ScoringDefGuard), "SCORING_DEFS"),
   ];
 
-  const matchedModifiers = modifierRows.filter(row => rowMatchesInput(row, tokens)).slice(0, 10);
+  // evaluateRowExpr: uses the full evaluator on the row's expression field.
+  // Returns false when no expression field exists (no longer scans ALL row values).
+  const matchedModifiers = modifierRows.filter(row => evaluateRowExpr(row as Record<string, any>, tokens)).slice(0, 10);
   const matchedQuestions = questionRows.filter(row => {
     const askIf = getAny(row, ["ASK_IF", "askIf"], "true");
-    return exprMatches(askIf, tokens);
+    return evaluateExpr(askIf, tokens);
   }).slice(0, 10);
-  const matchedWorkup = workupRows.filter(row => rowMatchesInput(row, tokens)).slice(0, 10);
-  const matchedMedication = medicationRows.filter(row => rowMatchesInput(row, tokens)).slice(0, 10);
+  const matchedWorkup = workupRows.filter(row => evaluateRowExpr(row as Record<string, any>, tokens)).slice(0, 10);
+  const matchedMedication = medicationRows.filter(row => evaluateRowExpr(row as Record<string, any>, tokens)).slice(0, 10);
 
   const triggeredRedFlags = redFlagRows.filter(row => {
     const expr = getAny(row, ["TRIGGER_EXPR", "triggerExpr", "WHEN_EXPR", "whenExpr", "RULE_EXPR"]);
-    return exprMatches(expr, tokens) || rowMatchesInput(row, tokens);
+    return evaluateExpr(expr, tokens);
   }).slice(0, 10);
 
   const redFlagForcesEscalation = triggeredRedFlags.some(row => {
@@ -364,7 +355,8 @@ function buildTrace(cfg: ComplaintConfig, symptoms: string[], freeText: string) 
 
   const scoredClusters = new Map<string, { clusterId: string; score: number; evidence: any[] }>();
   for (const row of cfg.clusterScoringRules) {
-    if (!exprMatches(row.whenExpr, tokens) && !rowMatchesInput(row as unknown as SheetRow, tokens)) continue;
+    // evaluateExpr with full boolean+threshold logic — no more fallback scan
+    if (!evaluateExpr(row.whenExpr, tokens)) continue;
     const current = scoredClusters.get(row.clusterId) ?? { clusterId: row.clusterId, score: 0, evidence: [] };
     current.score += row.points;
     current.evidence.push({ ruleId: row.ruleId, points: row.points, evidenceLabel: row.evidenceLabel });
@@ -391,7 +383,7 @@ function buildTrace(cfg: ComplaintConfig, symptoms: string[], freeText: string) 
     .sort((a, b) => (b.score - a.score) || (a.rank - b.rank))
     .slice(0, 8);
 
-  const dispositionRule = cfg.dispositionRules.find(row => exprMatches(row.whenExpr, tokens))
+  const dispositionRule = cfg.dispositionRules.find(row => evaluateExpr(row.whenExpr, tokens))
     ?? cfg.dispositionRules.find(row => ["true", "always", "default"].includes(row.whenExpr.toLowerCase()))
     ?? cfg.dispositionRules[0]
     ?? null;
