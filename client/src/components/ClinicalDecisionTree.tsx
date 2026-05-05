@@ -369,59 +369,66 @@ function FlowchartSVG({ fc }: { fc: Flowchart }) {
 
 // ─── System prefix → display label ───────────────────────────────────────────
 
-const SYSTEM_LABELS: Record<string, string> = {
-  chest:    "Chest / Cardiac",
-  cardio:   "Cardiology",
-  pulm:     "Pulmonology",
-  ent:      "ENT",
-  gi:       "Gastroenterology",
-  gu:       "Genitourinary",
-  neuro:    "Neurology",
-  msk:      "Musculoskeletal",
-  derm:     "Dermatology",
-  psych:    "Psychiatry",
-  tox:      "Toxicology",
-  obs:      "OB / GYN",
-  peds:     "Pediatrics",
-  ortho:    "Orthopedics",
-  oph:      "Ophthalmology",
-  endo:     "Endocrinology",
-  hem:      "Hematology",
-  infect:   "Infectious Disease",
-  obesity:  "Primary Care",
-  general:  "General",
-  sore:     "ENT",
-  cough:    "Respiratory",
-  fever:    "Infectious Disease",
-  dizziness:"Neurology / ENT",
-  back:     "Musculoskeletal",
-  head:     "Neurology",
-};
+const SYSTEM_MAP: Array<[RegExp, string]> = [
+  [/^(chest|cardiac|cardio|heart|ami|acs|afib|svt|vtach|palpita)/i,         "Chest / Cardiac"],
+  [/^(pulm|cough|dyspnea|sob|wheez|asthma|copd|resp|bronch|pneumo|pleural|hemopt|rsv|pertussis|croup)/i, "Respiratory"],
+  [/^(ent|ear|sore|throat|tonsil|sinus|nasal|rhinit|epistaxis|vertigo|hearing|laryn)/i, "ENT"],
+  [/^(gi|abd|abdominal|nausea|vomit|diarrhea|constip|bowel|rectal|hepat|pancrea|gallbladder|gerd|liver)/i, "Gastroenterology"],
+  [/^(neuro|head|migrain|seizure|stroke|tia|dizzi|syncope|altered|confusion|weakness|facial|tremor|memory)/i, "Neurology"],
+  [/^(gu|urin|dysuria|hematuria|kidney|renal|bladder|prostate|testicular|scrotal|uti)/i, "Genitourinary"],
+  [/^(msk|back|joint|knee|shoulder|hip|ankle|wrist|elbow|foot|toe|arthrit|muscle|tendon|bursit|gout)/i, "Musculoskeletal"],
+  [/^(ortho|fracture|disloc|sprain|strain)/i,                                "Musculoskeletal"],
+  [/^(derm|rash|skin|acne|cellulitis|urticaria|eczema|psoriasis|wound|lacerat|burn|bites|insect)/i, "Dermatology"],
+  [/^(psych|anxiety|depress|panic|bipolar|psychosis|suicid|mental|mood|ptsd)/i, "Psychiatry"],
+  [/^(tox|overdose|poison|substance|alcohol|withdrawal|drug|ingestion|exposure)/i, "Toxicology"],
+  [/^(obs|ob|gyn|pregnan|vaginal|pelvic|menstrual|menopaus|breast|ovarian|cervical|ectopic|labor)/i, "OB / GYN"],
+  [/^(peds|pediatric|infant|newborn|child|neonat|toddler|growth|feeding)/i,  "Pediatrics"],
+  [/^(endo|diabetes|thyroid|adrenal|pituitary|hormone|hypoglyc|hyperglyce|obesity|weight)/i, "Endocrinology"],
+  [/^(hem|anemia|bleeding|coagul|thrombocytopenia|leukemia|lymphoma|sickle|blood|platelet)/i, "Hematology / Oncology"],
+  [/^(infect|fever|sepsis|hiv|covid|influenza|hepatitis|malaria|lyme|tb|mono)/i, "Infectious Disease"],
+  [/^(eye|vision|oph|ocular|corneal|glaucoma|retinal)/i,                     "Ophthalmology"],
+  [/^(aller|anaphylaxis|angioedema|hypersensit)/i,                            "Allergy / Immunology"],
+  [/^(trauma|mvа|mva|fall|assault|lacerat|blunt)/i,                           "Trauma / EM"],
+  [/^(chronic|persist|recurrent|intermittent)/i,                              "Chronic / Follow-up"],
+  [/^(acute)/i,                                                               "Acute Presentations"],
+  [/^(general|global|multi|systemic|fatigue|malaise|weight)/i,               "General / Primary Care"],
+];
 
 function systemGroup(id: string): string {
-  const prefix = id.split("_")[0].toLowerCase();
-  return SYSTEM_LABELS[prefix] ?? prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  const lower = id.toLowerCase();
+  for (const [pattern, label] of SYSTEM_MAP) {
+    if (pattern.test(lower)) return label;
+  }
+  const word = lower.split("_")[0];
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 const SYSTEM_COLORS: Record<string, string> = {
-  "Chest / Cardiac":    "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  "Cardiology":         "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  "Pulmonology":        "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
-  "ENT":                "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  "Gastroenterology":   "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
-  "Genitourinary":      "bg-pink-100 text-pink-700 dark:bg-pink-950 dark:text-pink-300",
-  "Neurology":          "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
-  "Neurology / ENT":    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
-  "Musculoskeletal":    "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300",
-  "Dermatology":        "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
-  "Psychiatry":         "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
-  "Toxicology":         "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  "OB / GYN":           "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950 dark:text-fuchsia-300",
-  "Pediatrics":         "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
-  "Primary Care":       "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
-  "Respiratory":        "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
-  "Infectious Disease": "bg-lime-100 text-lime-700 dark:bg-lime-950 dark:text-lime-300",
-  "Endocrinology":      "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  "Chest / Cardiac":        "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "Cardiology":             "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "Respiratory":            "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  "Pulmonology":            "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  "ENT":                    "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  "Gastroenterology":       "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  "Genitourinary":          "bg-pink-100 text-pink-700 dark:bg-pink-950 dark:text-pink-300",
+  "Neurology":              "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  "Neurology / ENT":        "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  "Musculoskeletal":        "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300",
+  "Dermatology":            "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  "Psychiatry":             "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  "Toxicology":             "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "OB / GYN":               "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950 dark:text-fuchsia-300",
+  "Pediatrics":             "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
+  "Primary Care":           "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  "General / Primary Care": "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  "Infectious Disease":     "bg-lime-100 text-lime-700 dark:bg-lime-950 dark:text-lime-300",
+  "Endocrinology":          "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  "Hematology / Oncology":  "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  "Ophthalmology":          "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  "Allergy / Immunology":   "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  "Trauma / EM":            "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  "Chronic / Follow-up":    "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+  "Acute Presentations":    "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
 };
 
 // ─── Complaint Picklist ───────────────────────────────────────────────────────

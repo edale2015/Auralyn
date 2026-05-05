@@ -113,16 +113,23 @@ router.get("/flowchart/:complaint_id", ...auth, async (req, res) => {
       }
     }
 
-    // Fetch the complaint's rules from the master rule table
+    // Fetch the complaint's rules — also include related sub-complaints (e.g. cough_acute, chronic_cough for "cough")
     const { rows: rules } = await db.execute(sql`
       SELECT rule_name, rule_type, logic_description, logic_type,
-             input_fields, disposition_impact, safety_level, priority,
-             question_dependencies
+             input_fields, disposition_impact, workup_impact, safety_level, priority,
+             question_dependencies, diagnosis_id, confidence_weight
       FROM   kb_master_rules
-      WHERE  (complaint_id = ${complaint_id} OR complaint_id = 'ALL')
+      WHERE  (
+               complaint_id = ${complaint_id}
+               OR complaint_id = 'ALL'
+               OR complaint_id ILIKE ${complaint_id + "_%"}
+               OR complaint_id ILIKE ${"%" + complaint_id}
+             )
         AND  active = true
-      ORDER  BY priority ASC, safety_level DESC
-      LIMIT  50
+      ORDER  BY
+        CASE safety_level WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MODERATE' THEN 3 ELSE 4 END,
+        priority ASC
+      LIMIT  80
     `);
 
     if (rules.length === 0) {

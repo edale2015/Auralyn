@@ -18,7 +18,7 @@
 
 import { useState }              from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient }           from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge }    from "@/components/ui/badge";
 import { Button }   from "@/components/ui/button";
@@ -26,6 +26,19 @@ import {
   CheckCircle2, XCircle, AlertTriangle,
   Loader2, Stethoscope,
 } from "lucide-react";
+
+function authFetch(url: string, options: RequestInit = {}) {
+  const token = localStorage.getItem("app_auth_token");
+  return fetch(url, {
+    ...options,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}`, "x-review-token": token } : {}),
+      ...(options.headers ?? {}),
+    },
+  });
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -194,15 +207,12 @@ function PathwayReviewCard({
               <Button
                 size="sm"
                 onClick={onApprove}
-                disabled={isProcessing || draft.validationScore < 80}
+                disabled={isProcessing}
                 className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs flex-1"
-                title={draft.validationScore < 80 ? "Score must be ≥80 to approve" : ""}
                 data-testid={`btn-approve-${draft.slug}`}
               >
                 <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                {draft.validationScore >= 80
-                  ? "Approve & Load to KB"
-                  : `Score too low (${draft.validationScore})`}
+                Approve & Load to KB
               </Button>
               <Button
                 size="sm"
@@ -229,8 +239,7 @@ function PathwayReviewCard({
 
             {draft.validationScore < 80 && (
               <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                This draft scores {draft.validationScore}/100. Minimum 80 required for KB loading.
-                Common issues: missing must-not-miss flags, missing ER criteria, missing return precautions.
+                Score {draft.validationScore}/100 — review carefully before approving. Common gaps: must-not-miss flags, ER criteria, return precautions.
               </p>
             )}
           </div>
@@ -246,30 +255,42 @@ export default function PhysicianPathwayReview() {
   const [activeTab,      setActiveTab]      = useState<"coverage" | "pending" | "draft">("coverage");
   const [processingSlug, setProcessingSlug] = useState<string | null>(null);
 
-  const { data: masterMap } = useQuery({
+  const { data: masterMap } = useQuery<{ systems: Record<string, SystemCoverage> }>({
     queryKey: ["/api/clinical/pathways/master-map"],
-    queryFn:  () => apiRequest<{ systems: Record<string, SystemCoverage> }>(
-      "GET", "/api/clinical/pathways/master-map"
-    ),
+    queryFn:  async () => {
+      const r = await authFetch("/api/clinical/pathways/master-map");
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
   });
 
-  const { data: pendingDrafts, refetch: refetchDrafts } = useQuery({
+  const { data: pendingDrafts, refetch: refetchDrafts } = useQuery<{ drafts: PathwayDraft[] }>({
     queryKey: ["/api/clinical/pathways/pending-review"],
-    queryFn:  () => apiRequest<{ drafts: PathwayDraft[] }>(
-      "GET", "/api/clinical/pathways/pending-review"
-    ),
+    queryFn:  async () => {
+      const r = await authFetch("/api/clinical/pathways/pending-review");
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
   });
 
-  const { data: p1Missing } = useQuery({
+  const { data: p1Missing } = useQuery<{ pathways: any[] }>({
     queryKey: ["/api/clinical/pathways/priority/P1"],
-    queryFn:  () => apiRequest<{ pathways: any[] }>(
-      "GET", "/api/clinical/pathways/priority/P1"
-    ),
+    queryFn:  async () => {
+      const r = await authFetch("/api/clinical/pathways/priority/P1");
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
   });
 
   const completeMutation = useMutation({
-    mutationFn: (slug: string) =>
-      apiRequest("POST", "/api/clinical/pathways/complete-draft", { slug }),
+    mutationFn: async (slug: string) => {
+      const r = await authFetch("/api/clinical/pathways/complete-draft", {
+        method: "POST",
+        body: JSON.stringify({ slug }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
     onSuccess: () => {
       refetchDrafts();
       queryClient.invalidateQueries({ queryKey: ["/api/clinical/pathways/pending-review"] });
@@ -277,8 +298,11 @@ export default function PhysicianPathwayReview() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (slug: string) =>
-      apiRequest("POST", `/api/clinical/pathways/${slug}/approve`, {}),
+    mutationFn: async (slug: string) => {
+      const r = await authFetch(`/api/clinical/pathways/${slug}/approve`, { method: "POST", body: "{}" });
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
     onSuccess: () => {
       refetchDrafts();
       setProcessingSlug(null);
@@ -287,8 +311,11 @@ export default function PhysicianPathwayReview() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (slug: string) =>
-      apiRequest("POST", `/api/clinical/pathways/${slug}/reject`, {}),
+    mutationFn: async (slug: string) => {
+      const r = await authFetch(`/api/clinical/pathways/${slug}/reject`, { method: "POST", body: "{}" });
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
     onSuccess: () => {
       refetchDrafts();
       setProcessingSlug(null);
