@@ -21,7 +21,7 @@ import {
   ShieldCheck, FileBarChart2, Search, ChevronRight, Loader2,
   ClipboardList, Pill, HelpCircle, Stethoscope, Activity,
   ListTree, Play, ChevronDown, ChevronUp, ArrowRight,
-  Zap, Filter, BookOpen,
+  Zap, Filter, BookOpen, FlaskConical, XCircle, Clock,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -1108,6 +1108,204 @@ function PipelineTab() {
   );
 }
 
+// ── Golden Cases tab ──────────────────────────────────────────────────────────
+function GoldenCasesTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const { data, isLoading, refetch } = useQuery<any>({
+    queryKey: ["/api/golden-cases"],
+  });
+
+  const { data: runsData } = useQuery<any>({
+    queryKey: ["/api/golden-cases/runs"],
+  });
+
+  const runAll = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/golden-cases/run-all"),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/golden-cases"] });
+      qc.invalidateQueries({ queryKey: ["/api/golden-cases/runs"] });
+      refetch();
+      toast({
+        title: `Golden cases complete`,
+        description: `${res.passed}/${res.total} passed · ${res.passRate}% pass rate`,
+      });
+    },
+    onError: (e: any) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
+  });
+
+  const cases: any[] = data?.cases ?? [];
+  const summary = runsData?.summary;
+  const neverRun = !summary?.total_runs || summary.total_runs === "0";
+
+  function passIcon(passed: boolean | null) {
+    if (passed === null || passed === undefined) return <span className="text-slate-400 text-xs">—</span>;
+    return passed
+      ? <CheckCircle2 className="h-4 w-4 text-green-500" />
+      : <XCircle className="h-4 w-4 text-red-500" />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary strip */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <FlaskConical className="h-5 w-5 text-indigo-500" />
+          <span className="font-semibold text-sm">Golden Case Runner</span>
+        </div>
+        <div className="flex gap-3 text-xs ml-2">
+          {summary && !neverRun ? (
+            <>
+              <span className="text-green-600 font-bold">{summary.total_passed} passed</span>
+              <span className="text-red-500 font-bold">{summary.total_failed} failed</span>
+              <span className="text-muted-foreground">{summary.total_runs} runs · avg {summary.avg_score}%</span>
+              <span className="text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {summary.last_run_at ? new Date(summary.last_run_at).toLocaleString() : "—"}
+              </span>
+            </>
+          ) : (
+            <span className="text-amber-600 font-medium">Never run — click Run All to validate rules</span>
+          )}
+        </div>
+        <Button
+          data-testid="button-run-all-golden"
+          size="sm"
+          onClick={() => runAll.mutate()}
+          disabled={runAll.isPending}
+          className="ml-auto"
+        >
+          {runAll.isPending
+            ? <><Loader2 className="animate-spin h-3 w-3 mr-1" />Running {cases.length} cases…</>
+            : <><Play className="h-3 w-3 mr-1" />Run All Cases</>}
+        </Button>
+      </div>
+
+      {/* How it works callout */}
+      <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md p-3 text-xs text-blue-800 dark:text-blue-200 space-y-1">
+        <p className="font-semibold">How traceability works</p>
+        <p>Each case runs through the 13-step rule engine. The engine checks every rule in <code>kb_master_rules</code> for the complaint — including your new ENT decision tree rules. Fired rules and disposition are compared to the expected values. Results are stored in the database so you have a permanent audit trail.</p>
+        <p className="font-semibold mt-1">To update the decision tree:</p>
+        <p>Edit any rule in the <b>Rule Catalog</b> tab → changes take effect immediately on the next patient case or golden case run. Then re-export to Google Sheets using the Export button.</p>
+      </div>
+
+      {/* Cases table */}
+      {isLoading
+        ? <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="animate-spin h-4 w-4" />Loading cases…</div>
+        : (
+          <div className="border rounded-md overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="text-xs bg-slate-50 dark:bg-slate-800">
+                  <TableHead className="w-8">Pass</TableHead>
+                  <TableHead>Case</TableHead>
+                  <TableHead>Complaint</TableHead>
+                  <TableHead>Expected Disposition</TableHead>
+                  <TableHead>Score</TableHead>
+                  <TableHead>Rules Fired</TableHead>
+                  <TableHead>Last Run</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {cases.map((gc: any) => {
+                  const lastResult = gc.last_result;
+                  const firedIds: string[] = lastResult
+                    ? (lastResult.steps ?? []).flatMap((s: any) => (s.rulesFired ?? []).map((r: any) => r.rule_id))
+                    : [];
+                  const isOpen = expanded === gc.case_id;
+                  return [
+                    <TableRow
+                      key={gc.case_id}
+                      className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 text-xs"
+                      data-testid={`row-gc-${gc.case_id}`}
+                      onClick={() => setExpanded(isOpen ? null : gc.case_id)}
+                    >
+                      <TableCell>{passIcon(gc.last_passed)}</TableCell>
+                      <TableCell>
+                        <div className="font-mono text-xs">{gc.case_id}</div>
+                        <div className="text-muted-foreground truncate max-w-48">{gc.title}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono text-xs">{gc.complaint}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={
+                          gc.expected_disposition?.includes("er") ? "bg-red-600 text-white"
+                          : gc.expected_disposition?.includes("urgent") ? "bg-orange-500 text-white"
+                          : "bg-slate-200 text-slate-700"
+                        }>
+                          {gc.expected_disposition ?? "—"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {gc.last_score != null
+                          ? <span className={gc.last_score >= 80 ? "text-green-600 font-bold" : gc.last_score >= 40 ? "text-amber-600 font-bold" : "text-red-500 font-bold"}>
+                              {gc.last_score}%
+                            </span>
+                          : <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell>
+                        {firedIds.length > 0
+                          ? <span className="text-blue-600 font-medium">{firedIds.length} rules</span>
+                          : <span className="text-muted-foreground text-xs">not run</span>}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {gc.last_run_at ? new Date(gc.last_run_at).toLocaleDateString() : "—"}
+                      </TableCell>
+                    </TableRow>,
+                    isOpen && (
+                      <TableRow key={`${gc.case_id}-expand`} className="bg-slate-50 dark:bg-slate-900">
+                        <TableCell colSpan={7} className="p-3">
+                          <div className="space-y-2 text-xs">
+                            {gc.last_fail_reason && (
+                              <div className="bg-red-50 dark:bg-red-950 border border-red-200 rounded p-2 text-red-700 dark:text-red-300">
+                                <span className="font-semibold">Fail reason: </span>{gc.last_fail_reason}
+                              </div>
+                            )}
+                            {firedIds.length > 0 && (
+                              <div>
+                                <p className="font-semibold mb-1 text-slate-600">Rules fired in this case:</p>
+                                <div className="flex flex-wrap gap-1">
+                                  {firedIds.map((id: string) => (
+                                    <Badge key={id} variant="outline" className={`font-mono text-xs ${id.startsWith("ENT_") ? "border-indigo-400 text-indigo-700 dark:text-indigo-300" : ""}`}>
+                                      {id}
+                                    </Badge>
+                                  ))}
+                                </div>
+                                {firedIds.some((id: string) => id.startsWith("ENT_")) && (
+                                  <p className="mt-1 text-indigo-600 dark:text-indigo-400 font-medium">
+                                    ✓ Physician decision tree rules (ENT_*) are active in this case
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                            {firedIds.length === 0 && (
+                              <p className="text-muted-foreground italic">Run the case to see which rules fired.</p>
+                            )}
+                            <div className="grid grid-cols-2 gap-2 mt-2 text-xs text-muted-foreground">
+                              <div><span className="font-medium text-slate-600">Inputs: </span>
+                                {JSON.stringify(gc.structured_inputs)}
+                              </div>
+                              <div><span className="font-medium text-slate-600">Modifiers: </span>
+                                {Array.isArray(gc.modifiers) ? gc.modifiers.join(", ") || "none" : JSON.stringify(gc.modifiers)}
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  ];
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function MasterRuleMapPage() {
   const qc = useQueryClient();
@@ -1152,16 +1350,21 @@ export default function MasterRuleMapPage() {
 
       <Tabs defaultValue="rules">
         <TabsList data-testid="tabs-rule-map" className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="rules"     data-testid="tab-rules">Rule Catalog</TabsTrigger>
-          <TabsTrigger value="pipeline"  data-testid="tab-pipeline">Pipeline Simulator</TabsTrigger>
-          <TabsTrigger value="overview"  data-testid="tab-overview">Coverage Overview</TabsTrigger>
-          <TabsTrigger value="drilldown" data-testid="tab-drilldown">Drill-down</TabsTrigger>
-          <TabsTrigger value="gaps"      data-testid="tab-gaps">Gaps</TabsTrigger>
-          <TabsTrigger value="tools"     data-testid="tab-tools">Tools & RLHF</TabsTrigger>
+          <TabsTrigger value="rules"        data-testid="tab-rules">Rule Catalog</TabsTrigger>
+          <TabsTrigger value="golden"       data-testid="tab-golden">Golden Cases</TabsTrigger>
+          <TabsTrigger value="pipeline"     data-testid="tab-pipeline">Pipeline Simulator</TabsTrigger>
+          <TabsTrigger value="overview"     data-testid="tab-overview">Coverage Overview</TabsTrigger>
+          <TabsTrigger value="drilldown"    data-testid="tab-drilldown">Drill-down</TabsTrigger>
+          <TabsTrigger value="gaps"         data-testid="tab-gaps">Gaps</TabsTrigger>
+          <TabsTrigger value="tools"        data-testid="tab-tools">Tools & RLHF</TabsTrigger>
         </TabsList>
 
         <TabsContent value="rules" className="mt-4">
           <RulesTab />
+        </TabsContent>
+
+        <TabsContent value="golden" className="mt-4">
+          <GoldenCasesTab />
         </TabsContent>
 
         <TabsContent value="pipeline" className="mt-4">
