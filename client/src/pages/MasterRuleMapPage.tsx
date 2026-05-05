@@ -24,6 +24,8 @@ import {
   ListTree, Play, ChevronDown, ChevronUp, ArrowRight,
   Zap, Filter, BookOpen, FlaskConical, XCircle, Clock,
 } from "lucide-react";
+import SystemCoverageTab from "@/components/SystemCoverageTab";
+import PipelineFlowchart from "@/components/PipelineFlowchart";
 import { useToast } from "@/hooks/use-toast";
 
 function scoreBadge(score: number) {
@@ -1606,6 +1608,8 @@ export default function MasterRuleMapPage() {
           <TabsTrigger value="golden"       data-testid="tab-golden">Golden Cases</TabsTrigger>
           <TabsTrigger value="pipeline"     data-testid="tab-pipeline">Pipeline Simulator</TabsTrigger>
           <TabsTrigger value="overview"     data-testid="tab-overview">Coverage Overview</TabsTrigger>
+          <TabsTrigger value="systems"      data-testid="tab-systems">System Coverage</TabsTrigger>
+          <TabsTrigger value="flowchart"    data-testid="tab-flowchart">Pipeline Flowchart</TabsTrigger>
           <TabsTrigger value="drilldown"    data-testid="tab-drilldown">Drill-down</TabsTrigger>
           <TabsTrigger value="gaps"         data-testid="tab-gaps">Gaps</TabsTrigger>
           <TabsTrigger value="tools"        data-testid="tab-tools">Tools & RLHF</TabsTrigger>
@@ -1628,6 +1632,14 @@ export default function MasterRuleMapPage() {
             ? <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="animate-spin h-4 w-4" />Loading…</div>
             : <OverviewTab data={summary} />
           }
+        </TabsContent>
+
+        <TabsContent value="systems" className="mt-4">
+          <SystemCoverageTab />
+        </TabsContent>
+
+        <TabsContent value="flowchart" className="mt-4">
+          <PipelineFlowchart />
         </TabsContent>
 
         <TabsContent value="drilldown" className="mt-4">

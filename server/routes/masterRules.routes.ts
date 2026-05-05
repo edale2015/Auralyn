@@ -76,6 +76,36 @@ router.get("/stats", ...auth, async (_req, res) => {
   }
 });
 
+// Complaint coverage — all complaint_ids with per-type rule counts
+// NOTE: must be registered BEFORE /:rule_id to avoid route capture
+router.get("/complaints", ...auth, async (_req, res) => {
+  try {
+    const { rows } = await db.execute(sql`
+      SELECT
+        complaint_id,
+        COUNT(*)                                               AS rule_cnt,
+        COUNT(*) FILTER (WHERE rule_type = 'red_flag')        AS red_flags,
+        COUNT(*) FILTER (WHERE rule_type = 'question')        AS questions,
+        COUNT(*) FILTER (WHERE rule_type = 'diagnosis')       AS diagnoses,
+        COUNT(*) FILTER (WHERE rule_type = 'medication')      AS medications,
+        COUNT(*) FILTER (WHERE rule_type = 'disposition')     AS dispositions,
+        COUNT(*) FILTER (WHERE rule_type = 'workup')          AS workups,
+        COUNT(*) FILTER (WHERE rule_type = 'modifier')        AS modifiers,
+        COUNT(*) FILTER (WHERE rule_type = 'cluster_scoring') AS cluster_scoring,
+        COUNT(*) FILTER (WHERE safety_level = 'CRITICAL')     AS critical
+      FROM kb_master_rules
+      WHERE complaint_id IS NOT NULL
+        AND complaint_id != 'ALL'
+        AND active = true
+      GROUP BY complaint_id
+      ORDER BY complaint_id
+    `);
+    res.json({ complaints: rows, total: rows.length });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Pipeline view — rules ordered by 13-step execution for a complaint
 // NOTE: must be registered BEFORE /:rule_id to avoid route capture
 router.get("/pipeline/:complaint_id", ...auth, async (req, res) => {
