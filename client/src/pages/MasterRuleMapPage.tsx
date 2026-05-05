@@ -16,6 +16,7 @@ import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Textarea } from "@/components/ui/textarea";
+import { Link } from "wouter";
 import {
   Map, AlertTriangle, CheckCircle2, RefreshCw, Download,
   ShieldCheck, FileBarChart2, Search, ChevronRight, Loader2,
@@ -1574,18 +1575,29 @@ export default function MasterRuleMapPage() {
             <p className="text-sm text-muted-foreground">Complete clinical rule coverage across all 89 complaints · 30 systems</p>
           </div>
         </div>
-        <Button
-          data-testid="button-refresh-map"
-          variant="outline"
-          onClick={() => refresh.mutate()}
-          disabled={refresh.isPending}
-        >
-          {refresh.isPending
-            ? <Loader2 className="animate-spin h-4 w-4 mr-2" />
-            : <RefreshCw className="h-4 w-4 mr-2" />
-          }
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link href="/encounter">
+            <Button
+              data-testid="button-open-encounter-simulator"
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              <Stethoscope className="h-4 w-4 mr-2" />
+              Live Encounter Simulator
+            </Button>
+          </Link>
+          <Button
+            data-testid="button-refresh-map"
+            variant="outline"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+          >
+            {refresh.isPending
+              ? <Loader2 className="animate-spin h-4 w-4 mr-2" />
+              : <RefreshCw className="h-4 w-4 mr-2" />
+            }
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="rules">

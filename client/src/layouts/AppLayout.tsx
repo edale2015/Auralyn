@@ -82,6 +82,7 @@ const NAV_ITEMS = [
   { path: "/cme-quiz",                 label: "CME Quiz",                   icon: GraduationCap },
   { path: "/pathway-review",           label: "Pathway Review",             icon: ClipboardCheck },
   { path: "/rule-map",                 label: "Master Rule Map",            icon: Map },
+  { path: "/encounter",               label: "Encounter Simulator",        icon: Stethoscope },
   { path: "/infra-status",             label: "Infrastructure",             icon: Activity },
   { path: "/intent-analytics",         label: "Intent Analytics",           icon: BarChart3 },
   { path: "/system-monitor", label: "System Monitor", icon: MonitorDot },
