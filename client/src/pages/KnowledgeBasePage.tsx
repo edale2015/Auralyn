@@ -14,7 +14,7 @@ import {
   AlertTriangle, Pill, Activity, FileText, ClipboardCheck, TestTube,
   Stethoscope, Shield, BookOpen, ChevronRight, RefreshCw, Download,
   GitBranch, TrendingUp, Brain, ThumbsUp, ThumbsDown, Zap,
-  BarChart2, Sliders, Cpu, Package,
+  BarChart2, Sliders, Cpu, Package, ClipboardList,
 } from "lucide-react";
 import DiagnosisFeatureEditor from "@/components/DiagnosisFeatureEditor";
 
@@ -1149,6 +1149,13 @@ export default function KnowledgeBasePage() {
           )}
         </div>
         <nav className="flex-1 overflow-y-auto p-2">
+          {/* ── Top pin: Clinical KB Editor ── */}
+          <a href="/kb-editor"
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm text-left mb-3 font-bold border bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 transition-colors"
+            data-testid="nav-kb-editor-link">
+            <ClipboardList className="h-4 w-4 flex-shrink-0" />
+            Clinical KB Editor ↗
+          </a>
           {TABS.map(t => {
             const Icon = t.icon;
             return (
