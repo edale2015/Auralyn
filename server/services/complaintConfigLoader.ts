@@ -16,11 +16,29 @@ export interface ComplaintRegistryEntry {
   system: string;
   label: string;
   version: number;
+  coreQuestionsVersion: number;
+  redFlagSetId: string;
+  scoringId: string;
+  dispositionSetId: string;
+  outputTemplateSetId: string;
   defaultCluster: string;
   scoringModule: string;
   graphId: string;
   enabled: boolean;
   engineType: "LEGACY" | "GENERIC_V1";
+  aliases: string[];
+}
+
+export interface WorldBRow extends Record<string, any> {
+  __sourceTable?: string;
+}
+
+export interface LoadComplaintConfigOptions {
+  /**
+   * Default true. Set false for admin/pipeline visualization so partially
+   * populated Google Sheet bundles show their gaps instead of throwing.
+   */
+  strict?: boolean;
 }
 
 export interface CoreQuestion {
@@ -103,6 +121,17 @@ export interface ComplaintConfig {
   outputTemplates: OutputTemplate[];
   clusterScoringRules: ClusterScoringRule[];
   dxCandidates: DxCandidateRow[];
+
+  // World B normalized Google Sheets layers
+  modifiers: WorldBRow[];
+  scoringSystems: WorldBRow[];
+  globalSecondary: WorldBRow[];
+  globalClusterMaster: WorldBRow[];
+  clusterPrimaryDiagnosis: WorldBRow[];
+  redFlagsMaster: WorldBRow[];
+  globalMedicationsMaster: WorldBRow[];
+  urgentCareSpotInterventions: WorldBRow[];
+  medConditionIntelligenceRules: WorldBRow[];
 }
 
 interface CachedConfig {
@@ -135,6 +164,64 @@ function parseCsvList(s: any): string[] {
   return String(s ?? "").split(",").map(x => x.trim()).filter(Boolean);
 }
 
+function firstPresent(row: SheetRow, keys: string[]): any {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") {
+      return row[key];
+    }
+  }
+  return undefined;
+}
+
+function normalizeKey(s: any): string {
+  return String(s ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function parseSheetVersion(row: SheetRow): number {
+  return parseNumber(firstPresent(row, ["VERSION", "CORE_QUESTIONS_VERSION", "QUESTION_VERSION"]), 1);
+}
+
+function withSource(tableName: string, rows: SheetRow[]): WorldBRow[] {
+  return rows.map(row => ({ ...row, __sourceTable: tableName }));
+}
+
+function directComplaintValue(row: SheetRow): string {
+  return normalizeKey(firstPresent(row, [
+    "CC_ID", "COMPLAINT_ID", "complaint_id", "ccId",
+    "COMPLAINT", "CHIEF_COMPLAINT", "chief_complaint",
+  ]));
+}
+
+function rowMentionsComplaint(row: SheetRow, ccId: string, registry: ComplaintRegistryEntry): boolean {
+  const direct = directComplaintValue(row);
+  if (direct) return direct === ccId || registry.aliases.includes(direct);
+
+  const system = normalizeKey(registry.system);
+  const aliases = new Set([ccId, system, ...registry.aliases].filter(Boolean));
+  const haystack = Object.values(row)
+    .map(v => String(v ?? "").toLowerCase().replace(/[\s-]+/g, "_"))
+    .join(" ");
+  for (const alias of aliases) {
+    if (alias && haystack.includes(alias)) return true;
+  }
+  return false;
+}
+
+function rowsForComplaint(
+  tableName: string,
+  rows: SheetRow[],
+  ccId: string,
+  registry: ComplaintRegistryEntry,
+  options: { includeGlobalRowsWithoutComplaint?: boolean } = {},
+): WorldBRow[] {
+  const scoped = rows.filter(row => {
+    if (rowMentionsComplaint(row, ccId, registry)) return true;
+    if (!options.includeGlobalRowsWithoutComplaint) return false;
+    return directComplaintValue(row) === "";
+  });
+  return withSource(tableName, scoped);
+}
+
 function parseThresholds(s: any): Record<string, string> {
   const result: Record<string, string> = {};
   const parts = String(s ?? "").split(";").map(x => x.trim()).filter(Boolean);
@@ -145,112 +232,121 @@ function parseThresholds(s: any): Record<string, string> {
   return result;
 }
 
-function rowToRegistry(row: SheetRow): ComplaintRegistryEntry & { aliases: string[] } | null {
-  const ccId = normLower(row.CC_ID);
+function rowToRegistry(row: SheetRow): ComplaintRegistryEntry | null {
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
   if (!ccId) return null;
-  const aliases = String(row.ALIASES ?? "").split(";").map(a => a.trim().toLowerCase().replace(/[\s-]+/g, "_")).filter(Boolean);
+  const aliases = String(firstPresent(row, ["ALIASES", "ALIAS", "SYNONYMS"]) ?? "")
+    .split(/[;,]/)
+    .map(a => normalizeKey(a))
+    .filter(Boolean);
+  const version = parseSheetVersion(row);
   return {
     ccId,
-    system: norm(row.SYSTEM),
-    label: norm(row.LABEL),
-    version: parseNumber(row.VERSION, 1),
-    defaultCluster: norm(row.DEFAULT_CLUSTER),
-    scoringModule: norm(row.SCORING_MODULE),
-    graphId: norm(row.GRAPH_ID),
-    enabled: parseBoolean(row.ENABLED),
-    engineType: norm(row.ENGINE_TYPE).toUpperCase() === "GENERIC_V1" ? "GENERIC_V1" : "LEGACY",
+    system: norm(firstPresent(row, ["SYSTEM", "DOMAIN", "SPECIALTY"])),
+    label: norm(firstPresent(row, ["LABEL", "CC_LABEL", "COMPLAINT_LABEL", "DISPLAY_NAME"])),
+    version,
+    coreQuestionsVersion: version,
+    redFlagSetId: norm(firstPresent(row, ["RED_FLAG_SET_ID", "RF_SET_ID"])),
+    scoringId: norm(firstPresent(row, ["SCORING_ID", "SCORING_SYSTEM_ID"])),
+    dispositionSetId: norm(firstPresent(row, ["DISPOSITION_SET_ID", "DISP_SET_ID"])),
+    outputTemplateSetId: norm(firstPresent(row, ["OUTPUT_TEMPLATE_SET_ID", "TEMPLATE_SET_ID"])),
+    defaultCluster: norm(firstPresent(row, ["DEFAULT_CLUSTER", "DEFAULT_CLUSTER_ID"])),
+    scoringModule: norm(firstPresent(row, ["SCORING_MODULE", "MODULE"])),
+    graphId: norm(firstPresent(row, ["GRAPH_ID", "GRAPH"])),
+    enabled: parseBoolean(firstPresent(row, ["ENABLED", "ACTIVE"])),
+    engineType: norm(firstPresent(row, ["ENGINE_TYPE", "ENGINE"])).toUpperCase() === "GENERIC_V1" ? "GENERIC_V1" : "LEGACY",
     aliases,
   };
 }
 
 function rowToCoreQuestion(row: SheetRow): CoreQuestion | null {
-  const ccId = normLower(row.CC_ID);
-  const qId = norm(row.Q_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const qId = norm(firstPresent(row, ["Q_ID", "QUESTION_ID", "question_id"]));
   if (!ccId || !qId) return null;
   return {
     ccId,
-    version: parseNumber(row.VERSION, 1),
+    version: parseSheetVersion(row),
     qId,
-    askOrder: parseNumber(row.ASK_ORDER, 0),
-    questionText: norm(row.QUESTION_TEXT),
-    answerType: normLower(row.ANSWER_TYPE) || "tri",
-    required: parseBoolean(row.REQUIRED),
-    askIf: norm(row.ASK_IF) || "true",
-    category: normLower(row.CATEGORY) || "general",
+    askOrder: parseNumber(firstPresent(row, ["ASK_ORDER", "ORDER", "QUESTION_ORDER", "SEQUENCE"]), 0),
+    questionText: norm(firstPresent(row, ["QUESTION_TEXT", "QUESTION", "PROMPT"])),
+    answerType: normLower(firstPresent(row, ["ANSWER_TYPE", "TYPE"])) || "tri",
+    required: parseBoolean(firstPresent(row, ["REQUIRED", "IS_REQUIRED"])),
+    askIf: norm(firstPresent(row, ["ASK_IF", "WHEN_EXPR", "CONDITION"])) || "true",
+    category: normLower(firstPresent(row, ["CATEGORY", "QUESTION_CATEGORY"])) || "general",
   };
 }
 
 function rowToRedFlagRule(row: SheetRow): RedFlagRule | null {
-  const ccId = normLower(row.CC_ID);
-  const rfId = norm(row.RF_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const rfId = norm(firstPresent(row, ["RF_ID", "RULE_ID", "RED_FLAG_ID"]));
   if (!ccId || !rfId) return null;
   return {
     ccId,
     rfId,
-    label: norm(row.LABEL),
-    triggerExpr: norm(row.TRIGGER_EXPR),
-    severity: norm(row.SEVERITY).toUpperCase() === "HARD" ? "HARD" : "SOFT",
-    action: norm(row.ACTION),
-    immediateActions: norm(row.IMMEDIATE_ACTIONS),
-    rationale: norm(row.RATIONALE),
+    label: norm(firstPresent(row, ["LABEL", "DESCRIPTION", "RED_FLAG_LABEL"])),
+    triggerExpr: norm(firstPresent(row, ["TRIGGER_EXPR", "WHEN_EXPR", "CONDITION", "RULE_EXPR"])),
+    severity: norm(firstPresent(row, ["SEVERITY", "RISK_LEVEL"])).toUpperCase() === "HARD" ? "HARD" : "SOFT",
+    action: norm(firstPresent(row, ["ACTION", "IMMEDIATE_ACTION", "GATE_RESULT"])),
+    immediateActions: norm(firstPresent(row, ["IMMEDIATE_ACTIONS", "IMMEDIATE_ACTION", "ACTIONS"])),
+    rationale: norm(firstPresent(row, ["RATIONALE", "REASON", "CLINICAL_RATIONALE"])),
   };
 }
 
 function rowToScoringDef(row: SheetRow): ScoringDef | null {
-  const ccId = normLower(row.CC_ID);
-  const scoreId = norm(row.SCORE_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const scoreId = norm(firstPresent(row, ["SCORE_ID", "SCORING_ID", "ID"]));
   if (!ccId || !scoreId) return null;
   return {
     ccId,
     scoreId,
-    label: norm(row.LABEL),
-    module: norm(row.MODULE),
-    inputs: parseCsvList(row.INPUTS),
-    thresholds: parseThresholds(row.THRESHOLDS),
-    notes: norm(row.NOTES),
+    label: norm(firstPresent(row, ["LABEL", "NAME"])),
+    module: norm(firstPresent(row, ["MODULE", "SCORING_MODULE"])),
+    inputs: parseCsvList(firstPresent(row, ["INPUTS", "INPUT_FIELDS"])),
+    thresholds: parseThresholds(firstPresent(row, ["THRESHOLDS", "THRESHOLD_MAP"])),
+    notes: norm(firstPresent(row, ["NOTES", "RATIONALE"])),
   };
 }
 
 function rowToDispositionRule(row: SheetRow): DispositionRule | null {
-  const ccId = normLower(row.CC_ID);
-  const dispRuleId = norm(row.DISP_RULE_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const dispRuleId = norm(firstPresent(row, ["DISP_RULE_ID", "RULE_ID", "DISPOSITION_RULE_ID"]));
   if (!ccId || !dispRuleId) return null;
   return {
     ccId,
     dispRuleId,
-    priority: parseNumber(row.PRIORITY, 99),
-    whenExpr: norm(row.WHEN_EXPR) || "true",
-    dispositionLevel: normLower(row.DISPOSITION_LEVEL) || "routine",
-    rationaleTemplateId: norm(row.RATIONALE_TEMPLATE_ID),
-    confidenceHint: norm(row.CONFIDENCE_HINT) || "LOW",
+    priority: parseNumber(firstPresent(row, ["PRIORITY", "SORT_ORDER"]), 99),
+    whenExpr: norm(firstPresent(row, ["WHEN_EXPR", "CONDITION", "TRIGGER_EXPR"])) || "true",
+    dispositionLevel: normLower(firstPresent(row, ["DISPOSITION_LEVEL", "DISPOSITION", "LEVEL"])) || "routine",
+    rationaleTemplateId: norm(firstPresent(row, ["RATIONALE_TEMPLATE_ID", "TEMPLATE_ID", "PLAN_TEMPLATE_ID"])),
+    confidenceHint: norm(firstPresent(row, ["CONFIDENCE_HINT", "CONFIDENCE"])) || "LOW",
   };
 }
 
 function rowToOutputTemplate(row: SheetRow): OutputTemplate | null {
-  const ccId = normLower(row.CC_ID);
-  const templateId = norm(row.TEMPLATE_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const templateId = norm(firstPresent(row, ["TEMPLATE_ID", "PLAN_TEMPLATE_ID", "RATIONALE_TEMPLATE_ID"]));
   if (!ccId || !templateId) return null;
   return {
     ccId,
     templateId,
-    label: norm(row.LABEL),
-    channel: normLower(row.CHANNEL) || "all",
-    body: norm(row.BODY),
+    label: norm(firstPresent(row, ["LABEL", "TITLE", "TEMPLATE_LABEL"])),
+    channel: normLower(firstPresent(row, ["CHANNEL", "AUDIENCE"])) || "all",
+    body: norm(firstPresent(row, ["BODY", "TEMPLATE_BODY", "TEXT", "PLAN_TEXT"])),
   };
 }
 
 function rowToClusterScoringRule(row: SheetRow): ClusterScoringRule | null {
-  const ccId = normLower(row.CC_ID);
-  const clusterId = norm(row.CLUSTER_ID);
-  const ruleId = norm(row.RULE_ID);
+  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+  const clusterId = norm(firstPresent(row, ["CLUSTER_ID", "CLUSTER", "DX_CLUSTER_ID"]));
+  const ruleId = norm(firstPresent(row, ["RULE_ID", "SCORING_RULE_ID"]));
   if (!ccId || !clusterId || !ruleId) return null;
   return {
     ccId,
     clusterId,
     ruleId,
-    points: parseNumber(row.POINTS, 0),
-    whenExpr: norm(row.WHEN_EXPR) || "false",
-    evidenceLabel: norm(row.EVIDENCE_LABEL) || ruleId,
+    points: parseNumber(firstPresent(row, ["POINTS", "SCORE", "WEIGHT"]), 0),
+    whenExpr: norm(firstPresent(row, ["WHEN_EXPR", "CONDITION", "TRIGGER_EXPR"])) || "false",
+    evidenceLabel: norm(firstPresent(row, ["EVIDENCE_LABEL", "LABEL", "RATIONALE"])) || ruleId,
   };
 }
 
@@ -433,16 +529,15 @@ function loadDxCandidatesTable(): Map<string, DxCandidateRow[]> {
   return out;
 }
 
-export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig | null> {
+export async function loadComplaintConfig(ccId: string, options: LoadComplaintConfigOptions = {}): Promise<ComplaintConfig | null> {
   const key = ccId.toLowerCase().trim().replace(/[\s-]+/g, "_");
   const now = Date.now();
 
   const cached = CONFIG_CACHE.get(key);
   if (cached && cached.expiresAt > now) return cached.config;
-  // stale entry kept below as last-known-good fallback
 
   const registryRows = await getTable("COMPLAINT_REGISTRY");
-  const allEntries = registryRows.map(rowToRegistry).filter((e): e is NonNullable<typeof e> => e !== null && e.enabled);
+  const allEntries = registryRows.map(rowToRegistry).filter((e): e is ComplaintRegistryEntry => e !== null && e.enabled);
   let regEntry = allEntries.find(e => e.ccId === key);
   if (!regEntry) {
     regEntry = allEntries.find(e => e.aliases.includes(key));
@@ -452,16 +547,37 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   const canonicalKey = regEntry.ccId;
 
   let qRows: SheetRow[], rfRows: SheetRow[], sRows: SheetRow[],
-      dRows: SheetRow[], tRows: SheetRow[], csrRows: SheetRow[];
+      dRows: SheetRow[], tRows: SheetRow[], csrRows: SheetRow[],
+      modifiersRows: SheetRow[], globalModifiersRows: SheetRow[], globalModifiersCleanRows: SheetRow[],
+      cardsModifierRows: SheetRow[], scoringSystemsRows: SheetRow[], globalSecondaryRows: SheetRow[],
+      globalClusterRows: SheetRow[], clusterPrimaryDiagnosisRows: SheetRow[], redFlagsMasterRows: SheetRow[],
+      globalMedicationRows: SheetRow[], urgentCareSpotRows: SheetRow[], medConditionRows: SheetRow[];
 
   try {
-    [qRows, rfRows, sRows, dRows, tRows, csrRows] = await Promise.all([
+    [
+      qRows, rfRows, sRows, dRows, tRows, csrRows,
+      modifiersRows, globalModifiersRows, globalModifiersCleanRows, cardsModifierRows,
+      scoringSystemsRows, globalSecondaryRows, globalClusterRows, clusterPrimaryDiagnosisRows,
+      redFlagsMasterRows, globalMedicationRows, urgentCareSpotRows, medConditionRows,
+    ] = await Promise.all([
       getTable("CORE_QUESTIONS"),
       getTable("RED_FLAG_RULES"),
       getTable("SCORING_DEFS"),
       getTable("DISPOSITION_RULES"),
       getTable("OUTPUT_TEMPLATES"),
       getTable("CLUSTER_SCORING_RULES"),
+      getTable("MODIFIERS"),
+      getTable("GLOBAL_MODIFIERS"),
+      getTable("GLOBAL_MODIFIERS_CLEAN"),
+      getTable("CARDS_MODIFIER_MASTER"),
+      getTable("SCORING_SYSTEMS"),
+      getTable("GLOBAL_SECONDARY"),
+      getTable("GLOBAL_CLUSTER_MASTER"),
+      getTable("CLUSTER_PRIMARY_DIAGNOSIS"),
+      getTable("RED_FLAGS_MASTER"),
+      getTable("GLOBAL_MEDICATIONS_MASTER"),
+      getTable("URGENT_CARE_SPOT_INTERVENTIONS"),
+      getTable("MED_CONDITION_INTELLIGENCE_RULES"),
     ]);
 
     assertCoreQuestionsNotCorrupt(qRows);
@@ -480,7 +596,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     throw loadErr;
   }
 
-  const version = regEntry.version;
+  const version = regEntry.coreQuestionsVersion || regEntry.version;
 
   const coreQuestions = qRows
     .map(rowToCoreQuestion)
@@ -511,6 +627,21 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   const dxCandidatesByCc = loadDxCandidatesTable();
   const dxCandidates = dxCandidatesByCc.get(canonicalKey) ?? [];
 
+  const modifiers = [
+    ...rowsForComplaint("MODIFIERS", modifiersRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
+    ...rowsForComplaint("GLOBAL_MODIFIERS", globalModifiersRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
+    ...rowsForComplaint("GLOBAL_MODIFIERS_CLEAN", globalModifiersCleanRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
+    ...rowsForComplaint("CARDS_MODIFIER_MASTER", cardsModifierRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
+  ];
+  const scoringSystems    = rowsForComplaint("SCORING_SYSTEMS", scoringSystemsRows, canonicalKey, regEntry);
+  const globalSecondary   = rowsForComplaint("GLOBAL_SECONDARY", globalSecondaryRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true });
+  const globalClusterMaster = rowsForComplaint("GLOBAL_CLUSTER_MASTER", globalClusterRows, canonicalKey, regEntry);
+  const clusterPrimaryDiagnosis = rowsForComplaint("CLUSTER_PRIMARY_DIAGNOSIS", clusterPrimaryDiagnosisRows, canonicalKey, regEntry);
+  const redFlagsMaster    = rowsForComplaint("RED_FLAGS_MASTER", redFlagsMasterRows, canonicalKey, regEntry);
+  const globalMedicationsMaster = rowsForComplaint("GLOBAL_MEDICATIONS_MASTER", globalMedicationRows, canonicalKey, regEntry);
+  const urgentCareSpotInterventions = rowsForComplaint("URGENT_CARE_SPOT_INTERVENTIONS", urgentCareSpotRows, canonicalKey, regEntry);
+  const medConditionIntelligenceRules = rowsForComplaint("MED_CONDITION_INTELLIGENCE_RULES", medConditionRows, canonicalKey, regEntry);
+
   const config: ComplaintConfig = {
     registry: regEntry,
     coreQuestions,
@@ -520,13 +651,25 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
     outputTemplates,
     clusterScoringRules,
     dxCandidates,
+    modifiers,
+    scoringSystems,
+    globalSecondary,
+    globalClusterMaster,
+    clusterPrimaryDiagnosis,
+    redFlagsMaster,
+    globalMedicationsMaster,
+    urgentCareSpotInterventions,
+    medConditionIntelligenceRules,
   };
 
   const issues = validateComplaintBundle(config);
   const errors = issues.filter(i => i.level === "ERROR");
   if (errors.length) {
     const msg = errors.map(e => `${e.code}: ${e.message}`).join(" | ");
-    throw new Error(`Complaint bundle invalid for CC_ID=${canonicalKey}: ${msg}`);
+    if (options.strict !== false) {
+      throw new Error(`Complaint bundle invalid for CC_ID=${canonicalKey}: ${msg}`);
+    }
+    console.warn(`[ComplaintBundleValidator] CC_ID=${canonicalKey} non-strict load with ERROR gaps: ${msg}`);
   }
   const warns = issues.filter(i => i.level === "WARN");
   if (warns.length) {
@@ -540,7 +683,7 @@ export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig
   if (key !== canonicalKey) {
     CONFIG_CACHE.set(canonicalKey, { config, expiresAt: now + CONFIG_TTL_MS });
   }
-  console.log(`[ComplaintConfig] Loaded config for ${key}: ${coreQuestions.length} questions, ${redFlagRules.length} RF rules, ${dispositionRules.length} disposition rules, ${outputTemplates.length} templates`);
+  console.log(`[ComplaintConfig] Loaded config for ${key}: ${coreQuestions.length} questions, ${modifiers.length} modifiers, ${redFlagRules.length} RF rules, ${clusterScoringRules.length} cluster rules, ${dispositionRules.length} disposition rules, ${outputTemplates.length} templates`);
   return config;
 }
 

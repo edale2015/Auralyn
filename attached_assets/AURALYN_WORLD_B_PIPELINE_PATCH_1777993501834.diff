@@ -1,0 +1,1639 @@
+--- a/server/data/registry.ts
++++ b/server/data/registry.ts
+@@ -15,6 +15,8 @@
+   CHIEF_COMPLAINT_ROUTER: { tab: "CHIEF_COMPLAINT_ROUTER" },
+   INTEGRATION_MAP: { tab: "INTEGRATION_MAP" },
+   GLOBAL_SECONDARY: { tab: "GLOBAL_SECONDARY", range: "A1:Z5000" },
++  MODIFIERS: { tab: "MODIFIERS", range: "A1:Z5000", ttlMs: 60_000 },
++  GLOBAL_MODIFIERS: { tab: "GLOBAL_MODIFIERS", range: "A1:Z5000", ttlMs: 60_000 },
+   CARDS_MODIFIER_MASTER: { tab: "CARDS_MODIFIER_MASTER", range: "A1:Z5000" },
+   RULESTRIGGERS: { tab: "RULESTRIGGERS", range: "A1:Z5000" },
+ 
+@@ -54,6 +56,14 @@
+ };
+ 
+ const CSV_ENABLED_TABLES = new Set([
++  "MODIFIERS",
++  "GLOBAL_MODIFIERS",
++  "GLOBAL_MODIFIERS_CLEAN",
++  "CARDS_MODIFIER_MASTER",
++  "GLOBAL_SECONDARY",
++  "GLOBAL_CLUSTER_MASTER",
++  "CLUSTER_PRIMARY_DIAGNOSIS",
++  "GLOBAL_MEDICATIONS_MASTER",
+   "MED_CONDITION_INTELLIGENCE_RULES",
+   "URGENT_CARE_SPOT_INTERVENTIONS",
+   "RED_FLAGS_MASTER",
+
+--- a/server/services/complaintConfigLoader.ts
++++ b/server/services/complaintConfigLoader.ts
+@@ -16,11 +16,17 @@
+   system: string;
+   label: string;
+   version: number;
++  coreQuestionsVersion: number;
++  redFlagSetId: string;
++  scoringId: string;
++  dispositionSetId: string;
++  outputTemplateSetId: string;
+   defaultCluster: string;
+   scoringModule: string;
+   graphId: string;
+   enabled: boolean;
+   engineType: "LEGACY" | "GENERIC_V1";
++  aliases: string[];
+ }
+ 
+ export interface CoreQuestion {
+@@ -94,6 +100,10 @@
+   RANK: number;
+ }
+ 
++export interface WorldBRow extends SheetRow {
++  __sourceTable?: string;
++}
++
+ export interface ComplaintConfig {
+   registry: ComplaintRegistryEntry;
+   coreQuestions: CoreQuestion[];
+@@ -103,6 +113,27 @@
+   outputTemplates: OutputTemplate[];
+   clusterScoringRules: ClusterScoringRule[];
+   dxCandidates: DxCandidateRow[];
++
++  // World B normalized Google Sheets layers. These are raw rows because the
++  // sheets have evolved across several versions; the pipeline page should
++  // expose them without pretending every tab has a single frozen schema.
++  modifiers: WorldBRow[];
++  scoringSystems: WorldBRow[];
++  globalSecondary: WorldBRow[];
++  globalClusterMaster: WorldBRow[];
++  clusterPrimaryDiagnosis: WorldBRow[];
++  redFlagsMaster: WorldBRow[];
++  globalMedicationsMaster: WorldBRow[];
++  urgentCareSpotInterventions: WorldBRow[];
++  medConditionIntelligenceRules: WorldBRow[];
++}
++
++export interface LoadComplaintConfigOptions {
++  /**
++   * Default true. Set false for admin/pipeline visualization so partially
++   * populated Google Sheet bundles show their gaps instead of throwing.
++   */
++  strict?: boolean;
+ }
+ 
+ interface CachedConfig {
+@@ -133,6 +164,23 @@
+ 
+ function parseCsvList(s: any): string[] {
+   return String(s ?? "").split(",").map(x => x.trim()).filter(Boolean);
++}
++
++function firstPresent(row: SheetRow, keys: string[]): any {
++  for (const key of keys) {
++    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") {
++      return row[key];
++    }
++  }
++  return undefined;
++}
++
++function normalizeKey(s: any): string {
++  return String(s ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
++}
++
++function parseSheetVersion(row: SheetRow): number {
++  return parseNumber(firstPresent(row, ["VERSION", "CORE_QUESTIONS_VERSION", "QUESTION_VERSION"]), 1);
+ }
+ 
+ function parseThresholds(s: any): Record<string, string> {
+@@ -145,113 +193,163 @@
+   return result;
+ }
+ 
+-function rowToRegistry(row: SheetRow): ComplaintRegistryEntry & { aliases: string[] } | null {
+-  const ccId = normLower(row.CC_ID);
++function rowToRegistry(row: SheetRow): ComplaintRegistryEntry | null {
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
+   if (!ccId) return null;
+-  const aliases = String(row.ALIASES ?? "").split(";").map(a => a.trim().toLowerCase().replace(/[\s-]+/g, "_")).filter(Boolean);
++  const aliases = String(firstPresent(row, ["ALIASES", "ALIAS", "SYNONYMS"]) ?? "")
++    .split(/[;,]/)
++    .map(a => normalizeKey(a))
++    .filter(Boolean);
++  const version = parseSheetVersion(row);
+   return {
+     ccId,
+-    system: norm(row.SYSTEM),
+-    label: norm(row.LABEL),
+-    version: parseNumber(row.VERSION, 1),
+-    defaultCluster: norm(row.DEFAULT_CLUSTER),
+-    scoringModule: norm(row.SCORING_MODULE),
+-    graphId: norm(row.GRAPH_ID),
+-    enabled: parseBoolean(row.ENABLED),
+-    engineType: norm(row.ENGINE_TYPE).toUpperCase() === "GENERIC_V1" ? "GENERIC_V1" : "LEGACY",
++    system: norm(firstPresent(row, ["SYSTEM", "DOMAIN", "SPECIALTY"])),
++    label: norm(firstPresent(row, ["LABEL", "CC_LABEL", "COMPLAINT_LABEL", "DISPLAY_NAME"])),
++    version,
++    coreQuestionsVersion: version,
++    redFlagSetId: norm(firstPresent(row, ["RED_FLAG_SET_ID", "RF_SET_ID"])),
++    scoringId: norm(firstPresent(row, ["SCORING_ID", "SCORING_SYSTEM_ID"])),
++    dispositionSetId: norm(firstPresent(row, ["DISPOSITION_SET_ID", "DISP_SET_ID"])),
++    outputTemplateSetId: norm(firstPresent(row, ["OUTPUT_TEMPLATE_SET_ID", "TEMPLATE_SET_ID"])),
++    defaultCluster: norm(firstPresent(row, ["DEFAULT_CLUSTER", "DEFAULT_CLUSTER_ID"])),
++    scoringModule: norm(firstPresent(row, ["SCORING_MODULE", "MODULE"])),
++    graphId: norm(firstPresent(row, ["GRAPH_ID", "GRAPH"])),
++    enabled: parseBoolean(firstPresent(row, ["ENABLED", "ACTIVE"])),
++    engineType: norm(firstPresent(row, ["ENGINE_TYPE", "ENGINE"])).toUpperCase() === "GENERIC_V1" ? "GENERIC_V1" : "LEGACY",
+     aliases,
+   };
+ }
+ 
+ function rowToCoreQuestion(row: SheetRow): CoreQuestion | null {
+-  const ccId = normLower(row.CC_ID);
+-  const qId = norm(row.Q_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const qId = norm(firstPresent(row, ["Q_ID", "QUESTION_ID", "question_id"]));
+   if (!ccId || !qId) return null;
+   return {
+     ccId,
+-    version: parseNumber(row.VERSION, 1),
++    version: parseSheetVersion(row),
+     qId,
+-    askOrder: parseNumber(row.ASK_ORDER, 0),
+-    questionText: norm(row.QUESTION_TEXT),
+-    answerType: normLower(row.ANSWER_TYPE) || "tri",
+-    required: parseBoolean(row.REQUIRED),
+-    askIf: norm(row.ASK_IF) || "true",
+-    category: normLower(row.CATEGORY) || "general",
++    askOrder: parseNumber(firstPresent(row, ["ASK_ORDER", "ORDER", "QUESTION_ORDER", "SEQUENCE"]), 0),
++    questionText: norm(firstPresent(row, ["QUESTION_TEXT", "QUESTION", "PROMPT"])),
++    answerType: normLower(firstPresent(row, ["ANSWER_TYPE", "TYPE"])) || "tri",
++    required: parseBoolean(firstPresent(row, ["REQUIRED", "IS_REQUIRED"])),
++    askIf: norm(firstPresent(row, ["ASK_IF", "WHEN_EXPR", "CONDITION"])) || "true",
++    category: normLower(firstPresent(row, ["CATEGORY", "QUESTION_CATEGORY"])) || "general",
+   };
+ }
+ 
+ function rowToRedFlagRule(row: SheetRow): RedFlagRule | null {
+-  const ccId = normLower(row.CC_ID);
+-  const rfId = norm(row.RF_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const rfId = norm(firstPresent(row, ["RF_ID", "RULE_ID", "RED_FLAG_ID"]));
+   if (!ccId || !rfId) return null;
+   return {
+     ccId,
+     rfId,
+-    label: norm(row.LABEL),
+-    triggerExpr: norm(row.TRIGGER_EXPR),
+-    severity: norm(row.SEVERITY).toUpperCase() === "HARD" ? "HARD" : "SOFT",
+-    action: norm(row.ACTION),
+-    immediateActions: norm(row.IMMEDIATE_ACTIONS),
+-    rationale: norm(row.RATIONALE),
++    label: norm(firstPresent(row, ["LABEL", "DESCRIPTION", "RED_FLAG_LABEL"])),
++    triggerExpr: norm(firstPresent(row, ["TRIGGER_EXPR", "WHEN_EXPR", "CONDITION", "RULE_EXPR"])),
++    severity: norm(firstPresent(row, ["SEVERITY", "RISK_LEVEL"])).toUpperCase() === "HARD" ? "HARD" : "SOFT",
++    action: norm(firstPresent(row, ["ACTION", "IMMEDIATE_ACTION", "GATE_RESULT"])),
++    immediateActions: norm(firstPresent(row, ["IMMEDIATE_ACTIONS", "IMMEDIATE_ACTION", "ACTIONS"])),
++    rationale: norm(firstPresent(row, ["RATIONALE", "REASON", "CLINICAL_RATIONALE"])),
+   };
+ }
+ 
+ function rowToScoringDef(row: SheetRow): ScoringDef | null {
+-  const ccId = normLower(row.CC_ID);
+-  const scoreId = norm(row.SCORE_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const scoreId = norm(firstPresent(row, ["SCORE_ID", "SCORING_ID", "ID"]));
+   if (!ccId || !scoreId) return null;
+   return {
+     ccId,
+     scoreId,
+-    label: norm(row.LABEL),
+-    module: norm(row.MODULE),
+-    inputs: parseCsvList(row.INPUTS),
+-    thresholds: parseThresholds(row.THRESHOLDS),
+-    notes: norm(row.NOTES),
++    label: norm(firstPresent(row, ["LABEL", "NAME"])),
++    module: norm(firstPresent(row, ["MODULE", "SCORING_MODULE"])),
++    inputs: parseCsvList(firstPresent(row, ["INPUTS", "INPUT_FIELDS"])),
++    thresholds: parseThresholds(firstPresent(row, ["THRESHOLDS", "THRESHOLD_MAP"])),
++    notes: norm(firstPresent(row, ["NOTES", "RATIONALE"])),
+   };
+ }
+ 
+ function rowToDispositionRule(row: SheetRow): DispositionRule | null {
+-  const ccId = normLower(row.CC_ID);
+-  const dispRuleId = norm(row.DISP_RULE_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const dispRuleId = norm(firstPresent(row, ["DISP_RULE_ID", "RULE_ID", "DISPOSITION_RULE_ID"]));
+   if (!ccId || !dispRuleId) return null;
+   return {
+     ccId,
+     dispRuleId,
+-    priority: parseNumber(row.PRIORITY, 99),
+-    whenExpr: norm(row.WHEN_EXPR) || "true",
+-    dispositionLevel: normLower(row.DISPOSITION_LEVEL) || "routine",
+-    rationaleTemplateId: norm(row.RATIONALE_TEMPLATE_ID),
+-    confidenceHint: norm(row.CONFIDENCE_HINT) || "LOW",
++    priority: parseNumber(firstPresent(row, ["PRIORITY", "SORT_ORDER"]), 99),
++    whenExpr: norm(firstPresent(row, ["WHEN_EXPR", "CONDITION", "TRIGGER_EXPR"])) || "true",
++    dispositionLevel: normLower(firstPresent(row, ["DISPOSITION_LEVEL", "DISPOSITION", "LEVEL"])) || "routine",
++    rationaleTemplateId: norm(firstPresent(row, ["RATIONALE_TEMPLATE_ID", "TEMPLATE_ID", "PLAN_TEMPLATE_ID"])),
++    confidenceHint: norm(firstPresent(row, ["CONFIDENCE_HINT", "CONFIDENCE"])) || "LOW",
+   };
+ }
+ 
+ function rowToOutputTemplate(row: SheetRow): OutputTemplate | null {
+-  const ccId = normLower(row.CC_ID);
+-  const templateId = norm(row.TEMPLATE_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const templateId = norm(firstPresent(row, ["TEMPLATE_ID", "PLAN_TEMPLATE_ID", "RATIONALE_TEMPLATE_ID"]));
+   if (!ccId || !templateId) return null;
+   return {
+     ccId,
+     templateId,
+-    label: norm(row.LABEL),
+-    channel: normLower(row.CHANNEL) || "all",
+-    body: norm(row.BODY),
++    label: norm(firstPresent(row, ["LABEL", "TITLE", "TEMPLATE_LABEL"])),
++    channel: normLower(firstPresent(row, ["CHANNEL", "AUDIENCE"])) || "all",
++    body: norm(firstPresent(row, ["BODY", "TEMPLATE_BODY", "TEXT", "PLAN_TEXT"])),
+   };
+ }
+ 
+ function rowToClusterScoringRule(row: SheetRow): ClusterScoringRule | null {
+-  const ccId = normLower(row.CC_ID);
+-  const clusterId = norm(row.CLUSTER_ID);
+-  const ruleId = norm(row.RULE_ID);
++  const ccId = normalizeKey(firstPresent(row, ["CC_ID", "COMPLAINT_ID", "complaint_id", "ccId"]));
++  const clusterId = norm(firstPresent(row, ["CLUSTER_ID", "CLUSTER", "DX_CLUSTER_ID"]));
++  const ruleId = norm(firstPresent(row, ["RULE_ID", "SCORING_RULE_ID"]));
+   if (!ccId || !clusterId || !ruleId) return null;
+   return {
+     ccId,
+     clusterId,
+     ruleId,
+-    points: parseNumber(row.POINTS, 0),
+-    whenExpr: norm(row.WHEN_EXPR) || "false",
+-    evidenceLabel: norm(row.EVIDENCE_LABEL) || ruleId,
++    points: parseNumber(firstPresent(row, ["POINTS", "SCORE", "WEIGHT"]), 0),
++    whenExpr: norm(firstPresent(row, ["WHEN_EXPR", "CONDITION", "TRIGGER_EXPR"])) || "false",
++    evidenceLabel: norm(firstPresent(row, ["EVIDENCE_LABEL", "LABEL", "RATIONALE"])) || ruleId,
+   };
++}
++
++function withSource(tableName: string, rows: SheetRow[]): WorldBRow[] {
++  return rows.map(row => ({ ...row, __sourceTable: tableName }));
++}
++
++function directComplaintValue(row: SheetRow): string {
++  return normalizeKey(firstPresent(row, [
++    "CC_ID", "COMPLAINT_ID", "complaint_id", "ccId",
++    "COMPLAINT", "CHIEF_COMPLAINT", "chief_complaint"
++  ]));
++}
++
++function rowMentionsComplaint(row: SheetRow, ccId: string, registry: ComplaintRegistryEntry): boolean {
++  const direct = directComplaintValue(row);
++  if (direct) return direct === ccId || registry.aliases.includes(direct);
++
++  const system = normalizeKey(registry.system);
++  const aliases = new Set([ccId, system, ...registry.aliases].filter(Boolean));
++  const haystack = Object.values(row)
++    .map(v => String(v ?? "").toLowerCase().replace(/[\s-]+/g, "_"))
++    .join(" ");
++  for (const alias of aliases) {
++    if (alias && haystack.includes(alias)) return true;
++  }
++  return false;
++}
++
++function rowsForComplaint(
++  tableName: string,
++  rows: SheetRow[],
++  ccId: string,
++  registry: ComplaintRegistryEntry,
++  options: { includeGlobalRowsWithoutComplaint?: boolean } = {},
++): WorldBRow[] {
++  const scoped = rows.filter(row => {
++    if (rowMentionsComplaint(row, ccId, registry)) return true;
++    if (!options.includeGlobalRowsWithoutComplaint) return false;
++    return directComplaintValue(row) === "";
++  });
++  return withSource(tableName, scoped);
+ }
+ 
+ export type BundleIssue = {
+@@ -433,7 +531,7 @@
+   return out;
+ }
+ 
+-export async function loadComplaintConfig(ccId: string): Promise<ComplaintConfig | null> {
++export async function loadComplaintConfig(ccId: string, options: LoadComplaintConfigOptions = {}): Promise<ComplaintConfig | null> {
+   const key = ccId.toLowerCase().trim().replace(/[\s-]+/g, "_");
+   const now = Date.now();
+ 
+@@ -452,16 +550,37 @@
+   const canonicalKey = regEntry.ccId;
+ 
+   let qRows: SheetRow[], rfRows: SheetRow[], sRows: SheetRow[],
+-      dRows: SheetRow[], tRows: SheetRow[], csrRows: SheetRow[];
++      dRows: SheetRow[], tRows: SheetRow[], csrRows: SheetRow[],
++      modifiersRows: SheetRow[], globalModifiersRows: SheetRow[], globalModifiersCleanRows: SheetRow[],
++      cardsModifierRows: SheetRow[], scoringSystemsRows: SheetRow[], globalSecondaryRows: SheetRow[],
++      globalClusterRows: SheetRow[], clusterPrimaryDiagnosisRows: SheetRow[], redFlagsMasterRows: SheetRow[],
++      globalMedicationRows: SheetRow[], urgentCareSpotRows: SheetRow[], medConditionRows: SheetRow[];
+ 
+   try {
+-    [qRows, rfRows, sRows, dRows, tRows, csrRows] = await Promise.all([
++    [
++      qRows, rfRows, sRows, dRows, tRows, csrRows,
++      modifiersRows, globalModifiersRows, globalModifiersCleanRows, cardsModifierRows,
++      scoringSystemsRows, globalSecondaryRows, globalClusterRows, clusterPrimaryDiagnosisRows,
++      redFlagsMasterRows, globalMedicationRows, urgentCareSpotRows, medConditionRows,
++    ] = await Promise.all([
+       getTable("CORE_QUESTIONS"),
+       getTable("RED_FLAG_RULES"),
+       getTable("SCORING_DEFS"),
+       getTable("DISPOSITION_RULES"),
+       getTable("OUTPUT_TEMPLATES"),
+       getTable("CLUSTER_SCORING_RULES"),
++      getTable("MODIFIERS"),
++      getTable("GLOBAL_MODIFIERS"),
++      getTable("GLOBAL_MODIFIERS_CLEAN"),
++      getTable("CARDS_MODIFIER_MASTER"),
++      getTable("SCORING_SYSTEMS"),
++      getTable("GLOBAL_SECONDARY"),
++      getTable("GLOBAL_CLUSTER_MASTER"),
++      getTable("CLUSTER_PRIMARY_DIAGNOSIS"),
++      getTable("RED_FLAGS_MASTER"),
++      getTable("GLOBAL_MEDICATIONS_MASTER"),
++      getTable("URGENT_CARE_SPOT_INTERVENTIONS"),
++      getTable("MED_CONDITION_INTELLIGENCE_RULES"),
+     ]);
+ 
+     assertCoreQuestionsNotCorrupt(qRows);
+@@ -480,7 +599,7 @@
+     throw loadErr;
+   }
+ 
+-  const version = regEntry.version;
++  const version = regEntry.coreQuestionsVersion || regEntry.version;
+ 
+   const coreQuestions = qRows
+     .map(rowToCoreQuestion)
+@@ -510,6 +629,21 @@
+ 
+   const dxCandidatesByCc = loadDxCandidatesTable();
+   const dxCandidates = dxCandidatesByCc.get(canonicalKey) ?? [];
++
++  const modifiers = [
++    ...rowsForComplaint("MODIFIERS", modifiersRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
++    ...rowsForComplaint("GLOBAL_MODIFIERS", globalModifiersRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
++    ...rowsForComplaint("GLOBAL_MODIFIERS_CLEAN", globalModifiersCleanRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
++    ...rowsForComplaint("CARDS_MODIFIER_MASTER", cardsModifierRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true }),
++  ];
++  const scoringSystems = rowsForComplaint("SCORING_SYSTEMS", scoringSystemsRows, canonicalKey, regEntry);
++  const globalSecondary = rowsForComplaint("GLOBAL_SECONDARY", globalSecondaryRows, canonicalKey, regEntry, { includeGlobalRowsWithoutComplaint: true });
++  const globalClusterMaster = rowsForComplaint("GLOBAL_CLUSTER_MASTER", globalClusterRows, canonicalKey, regEntry);
++  const clusterPrimaryDiagnosis = rowsForComplaint("CLUSTER_PRIMARY_DIAGNOSIS", clusterPrimaryDiagnosisRows, canonicalKey, regEntry);
++  const redFlagsMaster = rowsForComplaint("RED_FLAGS_MASTER", redFlagsMasterRows, canonicalKey, regEntry);
++  const globalMedicationsMaster = rowsForComplaint("GLOBAL_MEDICATIONS_MASTER", globalMedicationRows, canonicalKey, regEntry);
++  const urgentCareSpotInterventions = rowsForComplaint("URGENT_CARE_SPOT_INTERVENTIONS", urgentCareSpotRows, canonicalKey, regEntry);
++  const medConditionIntelligenceRules = rowsForComplaint("MED_CONDITION_INTELLIGENCE_RULES", medConditionRows, canonicalKey, regEntry);
+ 
+   const config: ComplaintConfig = {
+     registry: regEntry,
+@@ -520,13 +654,25 @@
+     outputTemplates,
+     clusterScoringRules,
+     dxCandidates,
++    modifiers,
++    scoringSystems,
++    globalSecondary,
++    globalClusterMaster,
++    clusterPrimaryDiagnosis,
++    redFlagsMaster,
++    globalMedicationsMaster,
++    urgentCareSpotInterventions,
++    medConditionIntelligenceRules,
+   };
+ 
+   const issues = validateComplaintBundle(config);
+   const errors = issues.filter(i => i.level === "ERROR");
+   if (errors.length) {
+     const msg = errors.map(e => `${e.code}: ${e.message}`).join(" | ");
+-    throw new Error(`Complaint bundle invalid for CC_ID=${canonicalKey}: ${msg}`);
++    if (options.strict !== false) {
++      throw new Error(`Complaint bundle invalid for CC_ID=${canonicalKey}: ${msg}`);
++    }
++    console.warn(`[ComplaintBundleValidator] CC_ID=${canonicalKey} non-strict load with ERROR gaps: ${msg}`);
+   }
+   const warns = issues.filter(i => i.level === "WARN");
+   if (warns.length) {
+@@ -540,7 +686,7 @@
+   if (key !== canonicalKey) {
+     CONFIG_CACHE.set(canonicalKey, { config, expiresAt: now + CONFIG_TTL_MS });
+   }
+-  console.log(`[ComplaintConfig] Loaded config for ${key}: ${coreQuestions.length} questions, ${redFlagRules.length} RF rules, ${dispositionRules.length} disposition rules, ${outputTemplates.length} templates`);
++  console.log(`[ComplaintConfig] Loaded config for ${key}: ${coreQuestions.length} questions, ${modifiers.length} modifiers, ${redFlagRules.length} RF rules, ${clusterScoringRules.length} cluster rules, ${dispositionRules.length} disposition rules, ${outputTemplates.length} templates`);
+   return config;
+ }
+ 
+
+--- a/server/routes/clinicalPipelineRoutes.ts
++++ b/server/routes/clinicalPipelineRoutes.ts
+@@ -1,50 +1,197 @@
+ import { Router, Request, Response } from "express";
+ import { requireRole } from "../middleware/requireRole";
+ import { db } from "../db";
+-import { eq, desc } from "drizzle-orm";
++import { desc, eq } from "drizzle-orm";
++import { kbComplaints, kbKnowledgeChanges } from "../../shared/schema";
++import type { CaseState } from "../../shared/agentTypes";
+ import {
+-  kbComplaints, kbQuestions, kbRedFlagRules, kbDiagnosisRules,
+-  kbWorkupRules, kbTreatmentRules, kbDispositionRules, kbKnowledgeChanges,
+-} from "../../shared/schema";
++  listAvailableComplaints,
++  loadComplaintConfig,
++  type ComplaintConfig,
++  type WorldBRow,
++} from "../services/complaintConfigLoader";
++import {
++  findTemplate,
++  renderTemplate,
++  runDisposition,
++  runRedFlagsComplaint,
++} from "../services/complaintEngines";
++import { computeScoresFromRules } from "../engines/genericComplaintEngineV1";
+ 
+ const router = Router();
+ 
+ router.use(requireRole(["admin", "physician", "clinician"]));
+ 
+-// ── Full complaint bundle — one call returns all KB layers ─────────────────────
++type LayerRow = {
++  count: number;
++  rows: any[];
++  sourceTables: string[];
++  unit: string;
++};
++
++function layer(rows: any[], sourceTables: string[], unit: string): LayerRow {
++  return { count: rows.length, rows, sourceTables, unit };
++}
++
++function uniqueSources(rows: Array<WorldBRow | Record<string, any>>, fallback: string[]): string[] {
++  const sources = rows
++    .map(row => String((row as WorldBRow).__sourceTable ?? "").trim())
++    .filter(Boolean);
++  return Array.from(new Set(sources.length > 0 ? sources : fallback));
++}
++
++function rowId(row: Record<string, any>): string {
++  return String(
++    row.RULE_ID ?? row.ruleId ?? row.RF_ID ?? row.DISP_RULE_ID ?? row.TEMPLATE_ID ??
++    row.Q_ID ?? row.QUESTION_ID ?? row.DX_ID ?? row.Diagnosis_ID ?? row.INTERVENTION_ID ??
++    row.MEDICATION_ID ?? row.Medication_Name ?? row.MEDICATION_NAME ?? row.__sourceTable ?? "row"
++  );
++}
++
++function rowLabel(row: Record<string, any>): string {
++  return String(
++    row.LABEL ?? row.label ?? row.DESCRIPTION ?? row.description ?? row.QUESTION_TEXT ??
++    row.DX_LABEL ?? row.Diagnosis_Name ?? row.DIAGNOSIS_NAME ?? row.Medication_Name ??
++    row.MEDICATION_NAME ?? row.INTERVENTION_LABEL ?? row.TITLE ?? row.BODY ?? rowId(row)
++  );
++}
++
++function summarizeRows(rows: any[], max = 5): any[] {
++  return rows.slice(0, max).map(row => ({
++    id: rowId(row),
++    label: rowLabel(row),
++    sourceTable: row.__sourceTable,
++    raw: row,
++  }));
++}
++
++function normalizeFeature(input: string): string {
++  return input.trim().toLowerCase().replace(/[\s-]+/g, "_");
++}
++
++function buildCaseState(complaintId: string, symptoms: string[], freeText: string, answers: Record<string, any>): CaseState {
++  const normalizedSymptoms = symptoms.map(normalizeFeature).filter(Boolean);
++  const answerMap: Record<string, any> = { ...answers };
++
++  for (const symptom of normalizedSymptoms) {
++    answerMap[symptom] = answerMap[symptom] ?? true;
++    answerMap[`Q_${symptom.toUpperCase()}`] = answerMap[`Q_${symptom.toUpperCase()}`] ?? true;
++  }
++
++  if (freeText) {
++    answerMap.free_text = freeText;
++  }
++
++  return {
++    caseId: `trace-${Date.now()}`,
++    createdAt: new Date().toISOString(),
++    updatedAt: new Date().toISOString(),
++    chiefComplaint: complaintId,
++    normalizedComplaint: normalizeFeature(complaintId),
++    answers: answerMap,
++    scores: {},
++    activeClusters: [],
++    diagnosisClusterIds: [],
++    dispositionReasonCodes: [],
++    candidateMeds: [],
++    candidateDiagnoses: [],
++    ruleTrace: [],
++    scoringSystems: [],
++    redFlags: [],
++    requiredQuestionIdsMissing: [],
++    recommendedActions: [],
++    questionQueue: [],
++    modifierAnswers: {},
++    spotInterventions: [],
++    confidence: { global: "MODERATE", by_inference: [] },
++    normalizedSymptoms,
++  } as CaseState;
++}
++
++function buildWorldBLayers(config: ComplaintConfig): Record<string, LayerRow> {
++  const diagnosisRows = [
++    ...config.dxCandidates,
++    ...config.clusterPrimaryDiagnosis,
++    ...config.globalClusterMaster,
++  ];
++  const clusterScoringRows = [
++    ...config.clusterScoringRules,
++    ...config.scoringDefs,
++    ...config.scoringSystems,
++  ];
++  const medicationRows = [
++    ...config.globalMedicationsMaster,
++    ...config.medConditionIntelligenceRules,
++  ];
++  const dispositionPlanRows = [
++    ...config.dispositionRules,
++    ...config.outputTemplates,
++  ];
++
++  // User-requested display/order model:
++  // Step 4 = workup, Step 5 = medication, Step 6 = red flags.
++  // Red flags still force final disposition in trace output below.
++  return {
++    complaintIdentification: layer([config.registry], ["COMPLAINT_REGISTRY"], "complaint"),
++    modifiers: layer(config.modifiers, uniqueSources(config.modifiers, ["MODIFIERS", "GLOBAL_MODIFIERS", "GLOBAL_MODIFIERS_CLEAN", "CARDS_MODIFIER_MASTER"]), "modifier"),
++    questions: layer(config.coreQuestions, ["CORE_QUESTIONS"], "question"),
++    workup: layer(config.urgentCareSpotInterventions, uniqueSources(config.urgentCareSpotInterventions, ["URGENT_CARE_SPOT_INTERVENTIONS"]), "workup"),
++    medication: layer(medicationRows, uniqueSources(medicationRows, ["GLOBAL_MEDICATIONS_MASTER", "MED_CONDITION_INTELLIGENCE_RULES"]), "medication"),
++    redFlags: layer(config.redFlagRules, ["RED_FLAG_RULES"], "red flag"),
++    clusterScoring: layer(clusterScoringRows, uniqueSources(clusterScoringRows, ["CLUSTER_SCORING_RULES", "SCORING_DEFS", "SCORING_SYSTEMS"]), "cluster scoring"),
++    diagnosis: layer(diagnosisRows, uniqueSources(diagnosisRows, ["DX_CANDIDATES", "CLUSTER_PRIMARY_DIAGNOSIS", "GLOBAL_CLUSTER_MASTER"]), "diagnosis"),
++    dispositionPlan: layer(dispositionPlanRows, ["DISPOSITION_RULES", "OUTPUT_TEMPLATES"], "disposition/plan"),
++    audit: layer([], ["audit_logs", "appendAuditEvent"], "audit event"),
++  };
++}
++
++async function loadChangeHistory(complaintId: string): Promise<any[]> {
++  try {
++    return await db
++      .select()
++      .from(kbKnowledgeChanges)
++      .where(eq(kbKnowledgeChanges.complaintId, complaintId))
++      .orderBy(desc(kbKnowledgeChanges.createdAt))
++      .limit(20);
++  } catch {
++    return [];
++  }
++}
++
++// ── World B complaint bundle — one call returns all normalized Google Sheets layers ──
+ router.get("/:complaintId/bundle", async (req: Request, res: Response) => {
+   const { complaintId } = req.params;
+   try {
+-    const [complaint, questions, redFlags, diagnosis, workup, treatment, disposition, changes] = await Promise.all([
+-      db.select().from(kbComplaints).where(eq(kbComplaints.complaintId, complaintId)),
+-      db.select().from(kbQuestions).where(eq(kbQuestions.complaintId, complaintId)).orderBy(kbQuestions.order),
+-      db.select().from(kbRedFlagRules).where(eq(kbRedFlagRules.complaintId, complaintId)),
+-      db.select().from(kbDiagnosisRules).where(eq(kbDiagnosisRules.complaintId, complaintId)),
+-      db.select().from(kbWorkupRules).where(eq(kbWorkupRules.complaintId, complaintId)),
+-      db.select().from(kbTreatmentRules).where(eq(kbTreatmentRules.complaintId, complaintId)),
+-      db.select().from(kbDispositionRules).where(eq(kbDispositionRules.complaintId, complaintId)),
+-      db.select().from(kbKnowledgeChanges).where(eq(kbKnowledgeChanges.complaintId, complaintId)).orderBy(desc(kbKnowledgeChanges.createdAt)).limit(20),
+-    ]);
+-
+-    if (!complaint[0]) return res.status(404).json({ error: "Complaint not found" });
++    const config = await loadComplaintConfig(complaintId, { strict: false });
++    if (!config) return res.status(404).json({ error: "Complaint not found in COMPLAINT_REGISTRY" });
++
++    const layers = buildWorldBLayers(config);
++    const changes = await loadChangeHistory(config.registry.ccId);
+ 
+     res.json({
+-      complaint: complaint[0],
+-      layers: {
+-        questions: { count: questions.length, rows: questions },
+-        redFlags: { count: redFlags.length, rows: redFlags },
+-        diagnosis: { count: diagnosis.length, rows: diagnosis },
+-        workup: { count: workup.length, rows: workup },
+-        treatment: { count: treatment.length, rows: treatment },
+-        disposition: { count: disposition.length, rows: disposition },
++      complaint: {
++        complaintId: config.registry.ccId,
++        label: config.registry.label || config.registry.ccId,
++        category: config.registry.system,
++        urgencyLevel: config.registry.defaultCluster || undefined,
++        engineType: config.registry.engineType,
++        sourceTable: "COMPLAINT_REGISTRY",
+       },
++      layers,
+       changeHistory: changes,
+       summary: {
+-        totalRules: questions.length + redFlags.length + diagnosis.length + workup.length + treatment.length + disposition.length,
+-        hasRedFlags: redFlags.length > 0,
+-        hasDisposition: disposition.length > 0,
+-        hasDiagnosis: diagnosis.length > 0,
++        totalRules: Object.values(layers).reduce((sum, current) => sum + current.count, 0),
++        hasModifiers: layers.modifiers.count > 0,
++        hasQuestions: layers.questions.count > 0,
++        hasWorkup: layers.workup.count > 0,
++        hasMedication: layers.medication.count > 0,
++        hasRedFlags: layers.redFlags.count > 0,
++        hasClusterScoring: layers.clusterScoring.count > 0,
++        hasDispositionPlan: layers.dispositionPlan.count > 0,
++        hasDisposition: layers.dispositionPlan.count > 0,
++        hasDiagnosis: layers.diagnosis.count > 0,
+         lastChanged: changes[0]?.createdAt ?? null,
++        source: "WORLD_B_GOOGLE_SHEETS",
+       },
+     });
+   } catch (e: any) {
+@@ -52,103 +199,215 @@
+   }
+ });
+ 
+-// ── Live clinical trace — run symptoms through Bayesian engine with full KB provenance ──
++// ── Live clinical trace — World B provenance and requested stage order ─────────
+ router.post("/:complaintId/trace", async (req: Request, res: Response) => {
+   const { complaintId } = req.params;
+-  const { symptoms = [], freeText = "" } = req.body;
++  const { symptoms = [], freeText = "", answers = {} } = req.body;
+ 
+   if (!Array.isArray(symptoms) || symptoms.length === 0) {
+     return res.status(400).json({ error: "symptoms must be a non-empty array of strings" });
+   }
+ 
+   try {
+-    const { runDifferential, getSourceTrace } = await import("../clinical/bayesianEngine");
+-    const { getKbCacheStatus, reloadAndRewireKbCache } = await import("../kb/kbRuntime");
+-
+-    const cacheStatus = getKbCacheStatus();
+-    if (!cacheStatus || cacheStatus.priors?.count === 0) {
+-      await reloadAndRewireKbCache();
+-    }
+-
+-    const sourceTrace = getSourceTrace();
+-    const differentials = runDifferential(symptoms);
+-
+-    const [redFlags, disposition] = await Promise.all([
+-      db.select().from(kbRedFlagRules).where(eq(kbRedFlagRules.complaintId, complaintId)),
+-      db.select().from(kbDispositionRules).where(eq(kbDispositionRules.complaintId, complaintId)),
+-    ]);
+-
+-    const triggeredRedFlags = redFlags.filter(rf => {
+-      const trigger = (rf.triggerKeywords ?? []) as string[];
+-      return trigger.some(kw => symptoms.includes(kw) || freeText.toLowerCase().includes(kw.toLowerCase()));
+-    });
+-
+-    const topDx = differentials[0];
+-    let suggestedDisposition: any = null;
+-    if (topDx) {
+-      suggestedDisposition = disposition.find(d =>
+-        (d.conditionId ?? "").toLowerCase().includes(topDx.diagnosis.toLowerCase().slice(0, 6))
+-      ) ?? disposition[0] ?? null;
+-    }
++    const config = await loadComplaintConfig(complaintId, { strict: false });
++    if (!config) return res.status(404).json({ error: "Complaint not found in COMPLAINT_REGISTRY" });
++
++    const state = buildCaseState(config.registry.ccId, symptoms, String(freeText ?? ""), answers ?? {});
++    const layers = buildWorldBLayers(config);
++
++    const questionResults = config.coreQuestions.slice(0, 8).map(q => ({
++      questionId: q.qId,
++      question: q.questionText,
++      required: q.required,
++      askIf: q.askIf,
++      tableName: "CORE_QUESTIONS",
++    }));
++
++    const scoringResult = computeScoresFromRules(config.clusterScoringRules, state, config.registry.ccId);
++    state.scores = { ...state.scores, ...scoringResult.scores };
++    state.activeClusters = scoringResult.ranked.slice(0, 3).map(r => r.clusterId);
++
++    const rfResult = runRedFlagsComplaint(state, config.redFlagRules);
++    state.redFlagGate = {
++      evaluated: true,
++      flagsFound: rfResult.triggeredFlags.map(f => ({
++        flagId: f.rfId,
++        label: f.label,
++        severity: f.severity,
++        action: f.action,
++        reasons: [f.rationale],
++        immediateActions: f.immediateActions,
++        source: "RED_FLAG_RULES",
++      })),
++      gateResult: rfResult.gateResult,
++    } as any;
++    state.redFlags = rfResult.triggeredFlags.map(f => f.rfId);
++
++    const dispResult = runDisposition(state, config.dispositionRules);
++    const forcedByRedFlagGate = rfResult.gateResult !== "PASS";
++    const finalDisposition = forcedByRedFlagGate
++      ? rfResult.gateResult
++      : dispResult.dispositionLevel;
++    state.disposition = finalDisposition;
++
++    const planTemplate = findTemplate(config.outputTemplates, dispResult.rationaleTemplateId);
++    const renderedPlan = planTemplate
++      ? renderTemplate(planTemplate, state, {
++          disposition: finalDisposition,
++          red_flag_gate: rfResult.gateResult,
++          top_cluster: scoringResult.topCluster || "none",
++        })
++      : null;
++
++    const diagnosisResults = [
++      ...config.dxCandidates.slice(0, 8).map((d, index) => ({
++        rank: d.RANK || index + 1,
++        diagnosis: d.DX_LABEL,
++        diagnosisId: d.DX_ID,
++        clusterId: d.BEST_CLUSTER_ID,
++        baseScore: d.BASE_SCORE,
++        sourceTable: "DX_CANDIDATES",
++      })),
++      ...config.clusterPrimaryDiagnosis.slice(0, Math.max(0, 8 - Math.min(8, config.dxCandidates.length))).map(row => ({
++        diagnosis: rowLabel(row),
++        diagnosisId: rowId(row),
++        sourceTable: row.__sourceTable,
++      })),
++    ].slice(0, 8);
++
++    const workupResults = summarizeRows(config.urgentCareSpotInterventions, 6);
++    const medicationRows = [...config.globalMedicationsMaster, ...config.medConditionIntelligenceRules];
++    const medicationResults = summarizeRows(medicationRows, 6);
+ 
+     res.json({
+       ok: true,
+-      complaintId,
++      complaintId: config.registry.ccId,
+       symptoms,
+       freeText,
+-      engineSource: sourceTrace.source,
+-      activeRuleCount: sourceTrace.priorCount,
++      engineSource: "WORLD_B_GOOGLE_SHEETS",
++      activeRuleCount: Object.values(layers).reduce((sum, current) => sum + current.count, 0),
+       pipeline: [
+         {
+-          stage: "red_flag_check",
+-          label: "Red Flag Detection",
+-          triggered: triggeredRedFlags.length > 0,
+-          results: triggeredRedFlags.map(rf => ({
+-            ruleId: rf.ruleId,
+-            description: rf.description,
++          stage: "complaint_identification",
++          stepNumber: 1,
++          label: "Step 1 — Complaint Identification",
++          triggered: true,
++          results: [{ complaintId: config.registry.ccId, label: config.registry.label, sourceTable: "COMPLAINT_REGISTRY" }],
++          allRuleCount: layers.complaintIdentification.count,
++          sourceTables: layers.complaintIdentification.sourceTables,
++        },
++        {
++          stage: "modifier_collection",
++          stepNumber: 2,
++          label: "Step 2 — Modifier Collection",
++          triggered: layers.modifiers.count > 0,
++          results: summarizeRows(config.modifiers, 6),
++          allRuleCount: layers.modifiers.count,
++          sourceTables: layers.modifiers.sourceTables,
++        },
++        {
++          stage: "question_engine",
++          stepNumber: 3,
++          label: "Step 3 — Question Engine",
++          triggered: config.coreQuestions.length > 0,
++          results: questionResults,
++          allRuleCount: layers.questions.count,
++          sourceTables: layers.questions.sourceTables,
++        },
++        {
++          stage: "workup_selection",
++          stepNumber: 4,
++          label: "Step 4 — Workup Selection",
++          triggered: workupResults.length > 0,
++          results: workupResults,
++          allRuleCount: layers.workup.count,
++          sourceTables: layers.workup.sourceTables,
++        },
++        {
++          stage: "medication_safety",
++          stepNumber: 5,
++          label: "Step 5 — Medication Selection / Safety",
++          triggered: medicationResults.length > 0,
++          results: medicationResults,
++          allRuleCount: layers.medication.count,
++          sourceTables: layers.medication.sourceTables,
++        },
++        {
++          stage: "safety_screen",
++          stepNumber: 6,
++          label: "Step 6 — Safety Screen (Red Flags)",
++          triggered: rfResult.triggeredFlags.length > 0,
++          results: rfResult.triggeredFlags.map(rf => ({
++            ruleId: rf.rfId,
++            description: rf.label,
+             severity: rf.severity,
+             action: rf.action,
+-            tableName: "kb_red_flag_rules",
++            rationale: rf.rationale,
++            immediateActions: rf.immediateActions,
++            tableName: "RED_FLAG_RULES",
+           })),
+-          allRuleCount: redFlags.length,
+-        },
+-        {
+-          stage: "bayesian_differential",
+-          label: "Bayesian Differential Engine",
+-          triggered: differentials.length > 0,
+-          results: differentials.slice(0, 5).map((d, i) => ({
+-            rank: i + 1,
+-            diagnosis: d.diagnosis,
+-            posterior: d.posterior,
+-            confidence: d.confidence,
+-            matchedFeatures: d.matchedFeatures,
+-            ruleId: d.ruleId ?? null,
+-            tableName: d.tableName ?? (d.source === "KB_DB" ? "kb_diagnosis_rules" : "hardcoded"),
+-            source: d.source ?? sourceTrace.source,
++          allRuleCount: layers.redFlags.count,
++          sourceTables: layers.redFlags.sourceTables,
++        },
++        {
++          stage: "cluster_scoring",
++          stepNumber: 7,
++          label: "Step 7 — Cluster Scoring",
++          triggered: scoringResult.ranked.length > 0,
++          results: scoringResult.ranked.slice(0, 6).map(r => ({
++            clusterId: r.clusterId,
++            points: r.points,
++            evidence: r.evidence,
++            tableName: "CLUSTER_SCORING_RULES",
+           })),
+-          allRuleCount: sourceTrace.priorCount,
+-        },
+-        {
+-          stage: "disposition_lookup",
+-          label: "Disposition Rule Selection",
+-          triggered: suggestedDisposition !== null,
+-          results: suggestedDisposition
+-            ? [{
+-                ruleId: suggestedDisposition.ruleId,
+-                disposition: suggestedDisposition.disposition,
+-                priority: suggestedDisposition.priority,
+-                conditionId: suggestedDisposition.conditionId,
+-                tableName: "kb_disposition_rules",
+-              }]
+-            : [],
+-          allRuleCount: disposition.length,
++          allRuleCount: layers.clusterScoring.count,
++          sourceTables: layers.clusterScoring.sourceTables,
++        },
++        {
++          stage: "diagnosis_ranking",
++          stepNumber: 8,
++          label: "Step 8 — Diagnosis Ranking",
++          triggered: diagnosisResults.length > 0,
++          results: diagnosisResults,
++          allRuleCount: layers.diagnosis.count,
++          sourceTables: layers.diagnosis.sourceTables,
++        },
++        {
++          stage: "disposition_plan",
++          stepNumber: 9,
++          label: "Step 9 — Disposition + Plan",
++          triggered: true,
++          results: [{
++            ruleId: dispResult.matchedRuleId,
++            disposition: finalDisposition,
++            priority: config.dispositionRules.find(r => r.dispRuleId === dispResult.matchedRuleId)?.priority ?? null,
++            confidenceHint: forcedByRedFlagGate ? "HIGH" : dispResult.confidenceHint,
++            planTemplateId: renderedPlan?.templateId ?? dispResult.rationaleTemplateId ?? null,
++            plan: renderedPlan?.rendered ?? null,
++            forcedByRedFlagGate,
++            redFlagGate: rfResult.gateResult,
++            sourceTables: ["DISPOSITION_RULES", "OUTPUT_TEMPLATES"],
++          }],
++          allRuleCount: layers.dispositionPlan.count,
++          sourceTables: layers.dispositionPlan.sourceTables,
++        },
++        {
++          stage: "audit_trail",
++          stepNumber: 13,
++          label: "Step 13 — Audit Trail",
++          triggered: true,
++          results: [{
++            mode: "trace_only",
++            note: "Live pipeline trace is returned to the UI. Persisted clinical decisions must append an audit event during physician review.",
++            sourceTable: "audit_logs",
++          }],
++          allRuleCount: 1,
++          sourceTables: layers.audit.sourceTables,
+         },
+       ],
+-      finalDisposition: triggeredRedFlags.length > 0
+-        ? "ESCALATE_IMMEDIATELY"
+-        : (suggestedDisposition?.disposition ?? topDx?.confidence === "high" ? "refer_specialist" : "routine_care"),
+-      isEscalated: triggeredRedFlags.length > 0,
+-      topDiagnosis: topDx ?? null,
++      finalDisposition,
++      isEscalated: forcedByRedFlagGate,
++      topDiagnosis: diagnosisResults[0] ?? null,
+       tracedAt: new Date().toISOString(),
+     });
+   } catch (e: any) {
+@@ -156,16 +415,28 @@
+   }
+ });
+ 
+-// ── All complaints list (for selector) ──────────────────────────────────────────
++// ── All complaints list (World B selector, with legacy DB fallback) ────────────
+ router.get("/", async (_req: Request, res: Response) => {
+   try {
++    const worldBRows = await listAvailableComplaints();
++    if (worldBRows.length > 0) {
++      return res.json(worldBRows.map(row => ({
++        complaintId: row.ccId,
++        label: row.label || row.ccId,
++        category: row.system,
++        urgencyLevel: row.defaultCluster || undefined,
++        engineType: row.engineType,
++        sourceTable: "COMPLAINT_REGISTRY",
++      })));
++    }
++
+     const rows = await db.select({
+       complaintId: kbComplaints.complaintId,
+       label: kbComplaints.label,
+       category: kbComplaints.category,
+       urgencyLevel: kbComplaints.urgencyLevel,
+     }).from(kbComplaints).orderBy(kbComplaints.label);
+-    res.json(rows);
++    res.json(rows.map(row => ({ ...row, sourceTable: "kb_complaints" })));
+   } catch (e: any) {
+     res.status(500).json({ error: e.message });
+   }
+
+--- a/client/src/pages/ClinicalDecisionPipelinePage.tsx
++++ b/client/src/pages/ClinicalDecisionPipelinePage.tsx
+@@ -12,10 +12,9 @@
+ import { apiRequest } from "@/lib/queryClient";
+ import { Link } from "wouter";
+ import {
+-  AlertTriangle, CheckCircle2, ChevronRight, Database, Edit3,
+-  ExternalLink, FileText, Filter, GitBranch, History, Layers,
+-  Play, RefreshCw, Search, Shield, Stethoscope, Zap,
+-  ArrowDown, BookOpen, ClipboardList, Activity, FlaskConical,
++  AlertTriangle, CheckCircle2, Database, Edit3, FileText, Filter,
++  GitBranch, History, Layers, Play, RefreshCw, Shield, Stethoscope,
++  Zap, ArrowDown, BookOpen, ClipboardList, Activity, FlaskConical,
+ } from "lucide-react";
+ 
+ type Complaint = {
+@@ -23,27 +22,46 @@
+   label: string;
+   category?: string;
+   urgencyLevel?: string;
++  engineType?: string;
++  sourceTable?: string;
+ };
+ 
+-type LayerRow = { count: number; rows: any[] };
++type LayerKey =
++  | "complaintIdentification"
++  | "modifiers"
++  | "questions"
++  | "workup"
++  | "medication"
++  | "redFlags"
++  | "clusterScoring"
++  | "diagnosis"
++  | "dispositionPlan"
++  | "audit";
++
++type LayerRow = {
++  count: number;
++  rows: any[];
++  sourceTables: string[];
++  unit: string;
++};
+ 
+ type Bundle = {
+   complaint: Complaint;
+-  layers: {
+-    questions: LayerRow;
+-    redFlags: LayerRow;
+-    diagnosis: LayerRow;
+-    workup: LayerRow;
+-    treatment: LayerRow;
+-    disposition: LayerRow;
+-  };
++  layers: Record<LayerKey, LayerRow>;
+   changeHistory: any[];
+   summary: {
+     totalRules: number;
++    hasModifiers: boolean;
++    hasQuestions: boolean;
++    hasWorkup: boolean;
++    hasMedication: boolean;
+     hasRedFlags: boolean;
++    hasClusterScoring: boolean;
++    hasDispositionPlan: boolean;
+     hasDisposition: boolean;
+     hasDiagnosis: boolean;
+     lastChanged: string | null;
++    source: string;
+   };
+ };
+ 
+@@ -53,10 +71,12 @@
+   symptoms: string[];
+   pipeline: Array<{
+     stage: string;
++    stepNumber: number;
+     label: string;
+     triggered: boolean;
+     results: any[];
+     allRuleCount: number;
++    sourceTables?: string[];
+   }>;
+   finalDisposition: string;
+   isEscalated: boolean;
+@@ -66,19 +86,51 @@
+   tracedAt: string;
+ };
+ 
+-const PIPELINE_STAGES = [
+-  { key: "questions", label: "Clinical Questions", icon: ClipboardList, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
+-  { key: "redFlags", label: "Red Flag Rules", icon: Shield, color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
+-  { key: "diagnosis", label: "Bayesian Diagnosis", icon: Zap, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
+-  { key: "workup", label: "Workup Protocols", icon: FlaskConical, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
+-  { key: "treatment", label: "Treatment Rules", icon: Stethoscope, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+-  { key: "disposition", label: "Disposition Rules", icon: GitBranch, color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
++const PIPELINE_STAGES: Array<{
++  key: LayerKey;
++  traceStage: string;
++  step: number;
++  label: string;
++  unit: string;
++  icon: any;
++  color: string;
++  bg: string;
++}> = [
++  { key: "complaintIdentification", traceStage: "complaint_identification", step: 1, label: "Complaint Identification", unit: "complaint", icon: Layers, color: "text-slate-600", bg: "bg-slate-50 dark:bg-slate-950/30" },
++  { key: "modifiers", traceStage: "modifier_collection", step: 2, label: "Modifier Collection", unit: "modifier", icon: Filter, color: "text-cyan-600", bg: "bg-cyan-50 dark:bg-cyan-950/30" },
++  { key: "questions", traceStage: "question_engine", step: 3, label: "Question Engine", unit: "question", icon: ClipboardList, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
++  { key: "workup", traceStage: "workup_selection", step: 4, label: "Workup Selection", unit: "workup", icon: FlaskConical, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
++  { key: "medication", traceStage: "medication_safety", step: 5, label: "Medication Selection / Safety", unit: "medication", icon: Stethoscope, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
++  { key: "redFlags", traceStage: "safety_screen", step: 6, label: "Safety Screen (Red Flags)", unit: "red flag", icon: Shield, color: "text-red-600", bg: "bg-red-50 dark:bg-red-950/30" },
++  { key: "clusterScoring", traceStage: "cluster_scoring", step: 7, label: "Cluster Scoring", unit: "cluster scoring", icon: Activity, color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
++  { key: "diagnosis", traceStage: "diagnosis_ranking", step: 8, label: "Diagnosis Ranking", unit: "diagnosis", icon: Zap, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
++  { key: "dispositionPlan", traceStage: "disposition_plan", step: 9, label: "Disposition + Plan", unit: "disposition/plan", icon: GitBranch, color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
++  { key: "audit", traceStage: "audit_trail", step: 13, label: "Audit Trail", unit: "audit event", icon: FileText, color: "text-zinc-600", bg: "bg-zinc-50 dark:bg-zinc-950/30" },
+ ];
++
++function fallbackLayer(stage: typeof PIPELINE_STAGES[number]): LayerRow {
++  return { count: 0, rows: [], sourceTables: [], unit: stage.unit };
++}
++
++function getRuleId(rule: any): string {
++  return String(
++    rule.ruleId ?? rule.id ?? rule.questionId ?? rule.qId ?? rule.rfId ?? rule.dispRuleId ??
++    rule.templateId ?? rule.DX_ID ?? rule.Diagnosis_ID ?? rule.id ?? "—"
++  );
++}
++
++function getRuleLabel(rule: any): string {
++  return String(
++    rule.label ?? rule.question ?? rule.questionText ?? rule.description ?? rule.diagnosisLabel ??
++    rule.DX_LABEL ?? rule.diagnosis ?? rule.disposition ?? rule.treatmentPlan ?? rule.body ??
++    rule.raw?.LABEL ?? rule.raw?.DESCRIPTION ?? getRuleId(rule)
++  );
++}
+ 
+ function RuleRow({ rule, tableName, layer }: { rule: any; tableName: string; layer: string }) {
+   const [expanded, setExpanded] = useState(false);
+-  const id = rule.ruleId ?? rule.id ?? rule.questionId ?? "—";
+-  const label = rule.label ?? rule.question ?? rule.description ?? rule.diagnosisLabel ?? rule.disposition ?? rule.treatmentPlan ?? id;
++  const id = getRuleId(rule);
++  const label = getRuleLabel(rule);
+   return (
+     <div
+       className="border-b last:border-b-0 py-2.5 px-1 hover:bg-muted/30 cursor-pointer"
+@@ -88,26 +140,16 @@
+       <div className="flex items-center gap-3">
+         <code className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono flex-shrink-0">{id}</code>
+         <span className="text-sm flex-1 min-w-0 truncate">{label}</span>
+-        {rule.severity && (
+-          <Badge variant={rule.severity === "critical" ? "destructive" : "outline"} className="text-[10px] flex-shrink-0">
+-            {rule.severity}
+-          </Badge>
+-        )}
+-        {rule.confidence && (
+-          <Badge variant="outline" className="text-[10px] flex-shrink-0">{rule.confidence}</Badge>
+-        )}
+-        {rule.priority && (
+-          <Badge variant="outline" className="text-[10px] flex-shrink-0">P{rule.priority}</Badge>
+-        )}
++        {rule.severity && <Badge variant="outline" className="text-[10px] flex-shrink-0">{rule.severity}</Badge>}
++        {rule.confidenceHint && <Badge variant="outline" className="text-[10px] flex-shrink-0">{rule.confidenceHint}</Badge>}
++        {rule.priority && <Badge variant="outline" className="text-[10px] flex-shrink-0">P{rule.priority}</Badge>}
+       </div>
+       {expanded && (
+         <div className="mt-2 pl-4 text-xs text-muted-foreground space-y-1 border-l-2 border-muted">
+           <div className="flex items-center gap-1.5">
+             <Database className="w-3 h-3" /> <code className="font-mono">{tableName}</code>
+           </div>
+-          {Object.entries(rule).filter(([k]) =>
+-            !["id", "ruleId", "questionId", "label", "question", "description", "diagnosisLabel", "disposition"].includes(k)
+-          ).slice(0, 8).map(([k, v]) => (
++          {Object.entries(rule).filter(([k]) => !["raw"].includes(k)).slice(0, 10).map(([k, v]) => (
+             <div key={k} className="flex gap-2">
+               <span className="text-muted-foreground font-medium w-32 flex-shrink-0">{k}:</span>
+               <span className="truncate">{JSON.stringify(v)}</span>
+@@ -127,12 +169,7 @@
+ }
+ 
+ function TraceStageCard({ stage }: { stage: PipelineTrace["pipeline"][0] }) {
+-  const conf = PIPELINE_STAGES.find(s =>
+-    stage.stage.includes(s.key.replace(/([A-Z])/g, '_$1').toLowerCase().replace('_flags','_flag'))
+-    || stage.stage === "red_flag_check" && s.key === "redFlags"
+-    || stage.stage === "bayesian_differential" && s.key === "diagnosis"
+-    || stage.stage === "disposition_lookup" && s.key === "disposition"
+-  ) ?? PIPELINE_STAGES[0];
++  const conf = PIPELINE_STAGES.find(s => s.traceStage === stage.stage) ?? PIPELINE_STAGES[0];
+ 
+   return (
+     <div className={`rounded-lg border p-3 ${stage.triggered ? "border-primary/30" : "border-dashed opacity-60"}`}
+@@ -141,25 +178,22 @@
+         <conf.icon className={`w-4 h-4 ${conf.color}`} />
+         <span className="font-medium text-sm">{stage.label}</span>
+         {stage.triggered ? (
+-          <Badge className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 text-[10px] ml-auto">TRIGGERED</Badge>
++          <Badge className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 text-[10px] ml-auto">ACTIVE</Badge>
+         ) : (
+-          <Badge variant="secondary" className="text-[10px] ml-auto">skipped</Badge>
++          <Badge variant="secondary" className="text-[10px] ml-auto">empty</Badge>
+         )}
+-        <span className="text-[10px] text-muted-foreground">{stage.allRuleCount} rules</span>
++        <span className="text-[10px] text-muted-foreground">{stage.allRuleCount} {conf.unit}{stage.allRuleCount !== 1 ? "s" : ""}</span>
+       </div>
++      {stage.sourceTables && stage.sourceTables.length > 0 && (
++        <div className="text-[10px] text-muted-foreground mb-2 font-mono">
++          {stage.sourceTables.join(" + ")}
++        </div>
++      )}
+       {stage.results.length > 0 && (
+         <div className="space-y-1.5">
+           {stage.results.map((r, i) => (
+             <div key={i} className="bg-muted/40 rounded p-2 text-xs">
+-              {stage.stage === "bayesian_differential" ? (
+-                <div className="flex items-center gap-2">
+-                  <span className="font-medium text-muted-foreground">#{r.rank}</span>
+-                  <span className="font-medium flex-1">{r.diagnosis}</span>
+-                  <Badge variant="outline" className="text-[10px]">{(r.posterior * 100).toFixed(1)}%</Badge>
+-                  <Badge variant={r.confidence === "high" ? "default" : "secondary"} className="text-[10px]">{r.confidence}</Badge>
+-                  {r.ruleId && <code className="text-muted-foreground font-mono text-[9px]">{r.ruleId}</code>}
+-                </div>
+-              ) : stage.stage === "red_flag_check" ? (
++              {stage.stage === "safety_screen" ? (
+                 <div>
+                   <div className="flex items-center gap-2">
+                     <AlertTriangle className="w-3 h-3 text-red-500" />
+@@ -168,10 +202,31 @@
+                   </div>
+                   <div className="text-muted-foreground mt-0.5">Action: {r.action} · Rule: <code className="font-mono">{r.ruleId}</code></div>
+                 </div>
++              ) : stage.stage === "cluster_scoring" ? (
++                <div className="flex items-center gap-2">
++                  <span className="font-medium flex-1">{r.clusterId}</span>
++                  <Badge variant="outline" className="text-[10px]">{r.points} pts</Badge>
++                </div>
++              ) : stage.stage === "diagnosis_ranking" ? (
++                <div className="flex items-center gap-2">
++                  {r.rank && <span className="font-medium text-muted-foreground">#{r.rank}</span>}
++                  <span className="font-medium flex-1">{r.diagnosis}</span>
++                  {r.baseScore !== undefined && <Badge variant="outline" className="text-[10px]">score {r.baseScore}</Badge>}
++                </div>
++              ) : stage.stage === "disposition_plan" ? (
++                <div>
++                  <div className="flex items-center gap-2">
++                    <span className="font-semibold">{r.disposition}</span>
++                    {r.forcedByRedFlagGate && <Badge variant="destructive" className="text-[10px]">red-flag forced</Badge>}
++                    {r.confidenceHint && <Badge variant="outline" className="text-[10px]">{r.confidenceHint}</Badge>}
++                  </div>
++                  {r.plan && <div className="text-muted-foreground mt-1 line-clamp-3">{r.plan}</div>}
++                  {r.ruleId && <code className="text-muted-foreground font-mono text-[9px]">{r.ruleId}</code>}
++                </div>
+               ) : (
+                 <div>
+-                  <div className="font-medium">{r.disposition ?? r.conditionId ?? JSON.stringify(r).slice(0, 60)}</div>
+-                  {r.ruleId && <code className="text-muted-foreground font-mono text-[9px]">{r.ruleId}</code>}
++                  <div className="font-medium">{r.label ?? r.question ?? r.complaintId ?? r.id ?? JSON.stringify(r).slice(0, 80)}</div>
++                  {r.sourceTable && <code className="text-muted-foreground font-mono text-[9px]">{r.sourceTable}</code>}
+                 </div>
+               )}
+             </div>
+@@ -217,7 +272,7 @@
+     traceMutation.mutate({ complaintId: selectedComplaint, syms: symptoms });
+   }
+ 
+-  const kbEditBase = `/knowledge-base`;
++  const kbEditBase = "/knowledge-base";
+ 
+   return (
+     <div className="flex flex-col h-full" data-testid="clinical-decision-pipeline">
+@@ -227,7 +282,7 @@
+             <Layers className="w-6 h-6 text-primary" /> Clinical Decision Pipeline
+           </h1>
+           <p className="text-sm text-muted-foreground mt-1">
+-            Trace the full medical decision flow from source KB rules to final disposition
++            World B Google Sheets flow: modifiers, questions, workup, meds, safety, scoring, diagnosis, disposition + plan, and audit trace.
+           </p>
+         </div>
+         <div className="flex items-center gap-2">
+@@ -245,8 +300,7 @@
+       </div>
+ 
+       <div className="flex flex-1 overflow-hidden">
+-        {/* Left: Complaint Selector + Pipeline Overview */}
+-        <div className="w-72 border-r flex flex-col bg-muted/20">
++        <div className="w-80 border-r flex flex-col bg-muted/20">
+           <div className="p-4 border-b">
+             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 block">
+               Select Complaint
+@@ -276,8 +330,7 @@
+                   Pipeline Layers
+                 </div>
+                 {PIPELINE_STAGES.map((stage, i) => {
+-                  const layerKey = stage.key as keyof typeof bundle.layers;
+-                  const layer = bundle.layers[layerKey];
++                  const currentLayer = bundle.layers[stage.key] ?? fallbackLayer(stage);
+                   return (
+                     <div key={stage.key}>
+                       <div className="flex items-center gap-2 py-1.5">
+@@ -285,10 +338,12 @@
+                           <stage.icon className={`w-3.5 h-3.5 ${stage.color}`} />
+                         </div>
+                         <div className="flex-1 min-w-0">
+-                          <div className="text-xs font-medium">{stage.label}</div>
+-                          <div className="text-[10px] text-muted-foreground">{layer.count} rule{layer.count !== 1 ? "s" : ""}</div>
++                          <div className="text-xs font-medium">Step {stage.step} — {stage.label}</div>
++                          <div className="text-[10px] text-muted-foreground">
++                            {currentLayer.count} {currentLayer.unit}{currentLayer.count !== 1 ? "s" : ""}
++                          </div>
+                         </div>
+-                        {layer.count > 0 ? (
++                        {currentLayer.count > 0 || stage.key === "audit" ? (
+                           <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                         ) : (
+                           <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+@@ -307,26 +362,22 @@
+ 
+                 <div className="space-y-1.5 text-xs">
+                   <div className="flex justify-between">
+-                    <span className="text-muted-foreground">Total rules</span>
++                    <span className="text-muted-foreground">Total rows</span>
+                     <span className="font-medium">{bundle.summary.totalRules}</span>
++                  </div>
++                  <div className="flex justify-between">
++                    <span className="text-muted-foreground">Source</span>
++                    <Badge variant="outline" className="text-[10px]">{bundle.summary.source}</Badge>
+                   </div>
+                   <div className="flex justify-between">
+                     <span className="text-muted-foreground">Last changed</span>
+                     <span className="font-medium text-[10px]">
+-                      {bundle.summary.lastChanged
+-                        ? new Date(bundle.summary.lastChanged).toLocaleDateString()
+-                        : "Never"}
++                      {bundle.summary.lastChanged ? new Date(bundle.summary.lastChanged).toLocaleDateString() : "Never"}
+                     </span>
+                   </div>
+                   <div className="flex justify-between">
+                     <span className="text-muted-foreground">Category</span>
+                     <span className="font-medium">{bundle.complaint.category ?? "—"}</span>
+-                  </div>
+-                  <div className="flex justify-between">
+-                    <span className="text-muted-foreground">Urgency</span>
+-                    <Badge variant="outline" className="text-[10px]">
+-                      {bundle.complaint.urgencyLevel ?? "—"}
+-                    </Badge>
+                   </div>
+                 </div>
+               </div>
+@@ -337,13 +388,12 @@
+             <div className="flex-1 flex items-center justify-center p-6 text-center">
+               <div>
+                 <Layers className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
+-                <p className="text-xs text-muted-foreground">Select a complaint to explore its decision pipeline</p>
++                <p className="text-xs text-muted-foreground">Select a complaint to explore its World B decision pipeline</p>
+               </div>
+             </div>
+           )}
+         </div>
+ 
+-        {/* Right: Tab-based deep dive */}
+         <div className="flex-1 overflow-hidden flex flex-col">
+           {!selectedComplaint ? (
+             <div className="flex-1 flex items-center justify-center">
+@@ -351,8 +401,7 @@
+                 <Activity className="w-12 h-12 text-muted-foreground/20 mx-auto mb-3" />
+                 <h3 className="text-lg font-medium text-muted-foreground mb-2">Select a Complaint</h3>
+                 <p className="text-sm text-muted-foreground">
+-                  Choose a chief complaint from the left panel to view the complete
+-                  KB-driven decision pipeline — from source rules to final disposition recommendation.
++                  Choose a chief complaint from the left panel to view the complete World B Google Sheets flow.
+                 </p>
+               </div>
+             </div>
+@@ -369,29 +418,29 @@
+                 </div>
+                 <TabsList>
+                   <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
+-                  <TabsTrigger value="rules" data-testid="tab-rules">Source Rules</TabsTrigger>
++                  <TabsTrigger value="rules" data-testid="tab-rules">Source Rows</TabsTrigger>
+                   <TabsTrigger value="trace" data-testid="tab-trace">Live Trace</TabsTrigger>
+                   <TabsTrigger value="history" data-testid="tab-history">Change History</TabsTrigger>
+                 </TabsList>
+               </div>
+ 
+-              {/* OVERVIEW TAB */}
+               <TabsContent value="overview" className="flex-1 overflow-auto p-6 space-y-4">
+-                <div className="grid grid-cols-3 gap-3">
++                <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+                   {PIPELINE_STAGES.map(stage => {
+-                    const layer = bundle.layers[stage.key as keyof typeof bundle.layers];
++                    const currentLayer = bundle.layers[stage.key] ?? fallbackLayer(stage);
+                     return (
+-                      <Card key={stage.key} className={layer.count === 0 ? "border-dashed opacity-70" : ""}>
++                      <Card key={stage.key} className={currentLayer.count === 0 && stage.key !== "audit" ? "border-dashed opacity-70" : ""}>
+                         <CardContent className="p-3">
+                           <div className="flex items-center gap-2 mb-1">
+                             <div className={`w-7 h-7 rounded-md ${stage.bg} flex items-center justify-center`}>
+                               <stage.icon className={`w-3.5 h-3.5 ${stage.color}`} />
+                             </div>
+-                            <span className="text-xs font-medium">{stage.label}</span>
++                            <span className="text-xs font-medium">Step {stage.step}</span>
+                           </div>
+-                          <div className={`text-2xl font-bold ${stage.color}`}>{layer.count}</div>
++                          <div className="text-xs text-muted-foreground mb-1">{stage.label}</div>
++                          <div className={`text-2xl font-bold ${stage.color}`}>{currentLayer.count}</div>
+                           <div className="text-[10px] text-muted-foreground">
+-                            {layer.count === 0 ? "⚠ No rules configured" : `active rule${layer.count !== 1 ? "s" : ""}`}
++                            {currentLayer.count === 0 ? `⚠ No ${stage.unit}s configured` : `${currentLayer.unit}${currentLayer.count !== 1 ? "s" : ""}`}
+                           </div>
+                         </CardContent>
+                       </Card>
+@@ -399,7 +448,19 @@
+                   })}
+                 </div>
+ 
+-                {/* Warning cards for missing critical layers */}
++                {!bundle.summary.hasModifiers && (
++                  <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
++                    <CardContent className="p-3 flex items-start gap-2">
++                      <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
++                      <div>
++                        <div className="text-sm font-medium text-amber-800 dark:text-amber-400">No Modifier Rows</div>
++                        <div className="text-xs text-amber-700 dark:text-amber-500 mt-0.5">
++                          Modifier collection is Step 2 in World B. Add rows in MODIFIERS, GLOBAL_MODIFIERS, GLOBAL_MODIFIERS_CLEAN, or CARDS_MODIFIER_MASTER.
++                        </div>
++                      </div>
++                    </CardContent>
++                  </Card>
++                )}
+                 {!bundle.summary.hasRedFlags && (
+                   <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+                     <CardContent className="p-3 flex items-start gap-2">
+@@ -407,73 +468,55 @@
+                       <div>
+                         <div className="text-sm font-medium text-amber-800 dark:text-amber-400">No Red Flag Rules</div>
+                         <div className="text-xs text-amber-700 dark:text-amber-500 mt-0.5">
+-                          This complaint has no red flag detection rules. Critical safety signals may be missed.
+-                          <Link href={kbEditBase}>
+-                            <span className="ml-1 underline cursor-pointer">Add red flags →</span>
+-                          </Link>
++                          Red flags are displayed as Step 6 and still force the final disposition when triggered.
++                          <Link href={kbEditBase}><span className="ml-1 underline cursor-pointer">Add red flags →</span></Link>
+                         </div>
+                       </div>
+                     </CardContent>
+                   </Card>
+                 )}
+-                {!bundle.summary.hasDisposition && (
++                {!bundle.summary.hasDispositionPlan && (
+                   <Card className="border-red-300 bg-red-50 dark:bg-red-950/20">
+                     <CardContent className="p-3 flex items-start gap-2">
+                       <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+                       <div>
+-                        <div className="text-sm font-medium text-red-800 dark:text-red-400">No Disposition Rules</div>
++                        <div className="text-sm font-medium text-red-800 dark:text-red-400">No Disposition + Plan Rows</div>
+                         <div className="text-xs text-red-700 dark:text-red-500 mt-0.5">
+-                          Without disposition rules, the system cannot make a final recommendation for this complaint.
++                          Step 9 is now merged. It needs DISPOSITION_RULES plus OUTPUT_TEMPLATES for the final proposal text.
+                         </div>
+                       </div>
+                     </CardContent>
+                   </Card>
+                 )}
+ 
+-                {/* Quick actions */}
+                 <Card>
+-                  <CardHeader className="pb-2">
+-                    <CardTitle className="text-sm">Quick Actions</CardTitle>
+-                  </CardHeader>
++                  <CardHeader className="pb-2"><CardTitle className="text-sm">Quick Actions</CardTitle></CardHeader>
+                   <CardContent className="flex flex-wrap gap-2">
++                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=modifiers`}>
++                      <Button variant="outline" size="sm" className="gap-1.5"><Filter className="w-3.5 h-3.5" /> Edit Modifiers</Button>
++                    </Link>
++                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=workup`}>
++                      <Button variant="outline" size="sm" className="gap-1.5"><FlaskConical className="w-3.5 h-3.5" /> Edit Workup</Button>
++                    </Link>
++                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=medication`}>
++                      <Button variant="outline" size="sm" className="gap-1.5"><Stethoscope className="w-3.5 h-3.5" /> Edit Medication</Button>
++                    </Link>
+                     <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=red-flags`}>
+-                      <Button variant="outline" size="sm" className="gap-1.5">
+-                        <Shield className="w-3.5 h-3.5" /> Edit Red Flags
+-                      </Button>
++                      <Button variant="outline" size="sm" className="gap-1.5"><Shield className="w-3.5 h-3.5" /> Edit Red Flags</Button>
+                     </Link>
+-                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=disposition`}>
+-                      <Button variant="outline" size="sm" className="gap-1.5">
+-                        <GitBranch className="w-3.5 h-3.5" /> Edit Disposition
+-                      </Button>
+-                    </Link>
+-                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=diagnosis`}>
+-                      <Button variant="outline" size="sm" className="gap-1.5">
+-                        <Zap className="w-3.5 h-3.5" /> Edit Diagnosis Rules
+-                      </Button>
+-                    </Link>
+-                    <Link href={`/audit-reports?complaint=${selectedComplaint}`}>
+-                      <Button variant="outline" size="sm" className="gap-1.5">
+-                        <FileText className="w-3.5 h-3.5" /> Audit Reports
+-                      </Button>
++                    <Link href={`/knowledge-base?complaint=${selectedComplaint}&layer=disposition-plan`}>
++                      <Button variant="outline" size="sm" className="gap-1.5"><GitBranch className="w-3.5 h-3.5" /> Edit Disposition + Plan</Button>
+                     </Link>
+                   </CardContent>
+                 </Card>
+               </TabsContent>
+ 
+-              {/* SOURCE RULES TAB */}
+               <TabsContent value="rules" className="flex-1 overflow-hidden flex flex-col">
+                 <ScrollArea className="flex-1">
+                   <div className="p-6 space-y-4">
+                     {PIPELINE_STAGES.map(stage => {
+-                      const layer = bundle.layers[stage.key as keyof typeof bundle.layers];
+-                      const tableMap: Record<string, string> = {
+-                        questions: "kb_questions",
+-                        redFlags: "kb_red_flag_rules",
+-                        diagnosis: "kb_diagnosis_rules",
+-                        workup: "kb_workup_rules",
+-                        treatment: "kb_treatment_rules",
+-                        disposition: "kb_disposition_rules",
+-                      };
++                      const currentLayer = bundle.layers[stage.key] ?? fallbackLayer(stage);
++                      const tableName = currentLayer.sourceTables.join(" + ") || "—";
+                       return (
+                         <Card key={stage.key} data-testid={`layer-card-${stage.key}`}>
+                           <CardHeader className="py-3 px-4">
+@@ -481,20 +524,20 @@
+                               <div className={`w-7 h-7 rounded-md ${stage.bg} flex items-center justify-center`}>
+                                 <stage.icon className={`w-3.5 h-3.5 ${stage.color}`} />
+                               </div>
+-                              <CardTitle className="text-sm">{stage.label}</CardTitle>
+-                              <Badge variant="outline" className="text-[10px] ml-auto">{layer.count} rule{layer.count !== 1 ? "s" : ""}</Badge>
+-                              <code className="text-[9px] text-muted-foreground font-mono">{tableMap[stage.key]}</code>
++                              <CardTitle className="text-sm">Step {stage.step} — {stage.label}</CardTitle>
++                              <Badge variant="outline" className="text-[10px] ml-auto">{currentLayer.count} {currentLayer.unit}{currentLayer.count !== 1 ? "s" : ""}</Badge>
++                              <code className="text-[9px] text-muted-foreground font-mono max-w-[280px] truncate">{tableName}</code>
+                             </div>
+                           </CardHeader>
+-                          {layer.rows.length > 0 ? (
++                          {currentLayer.rows.length > 0 ? (
+                             <CardContent className="px-4 pb-3 pt-0">
+-                              {layer.rows.map((row, i) => (
+-                                <RuleRow key={i} rule={row} tableName={tableMap[stage.key]} layer={stage.key} />
++                              {currentLayer.rows.slice(0, 100).map((row, i) => (
++                                <RuleRow key={i} rule={row} tableName={tableName} layer={stage.key} />
+                               ))}
+                             </CardContent>
+                           ) : (
+                             <CardContent className="px-4 pb-4 pt-0">
+-                              <p className="text-xs text-muted-foreground italic">No rules configured for this layer.</p>
++                              <p className="text-xs text-muted-foreground italic">No rows configured for this layer.</p>
+                             </CardContent>
+                           )}
+                         </Card>
+@@ -504,7 +547,6 @@
+                 </ScrollArea>
+               </TabsContent>
+ 
+-              {/* LIVE TRACE TAB */}
+               <TabsContent value="trace" className="flex-1 overflow-hidden flex flex-col p-6 gap-4">
+                 <Card>
+                   <CardHeader className="pb-3">
+@@ -514,7 +556,7 @@
+                   </CardHeader>
+                   <CardContent className="space-y-3">
+                     <div className="text-xs text-muted-foreground">
+-                      Enter symptom features (e.g. <code>fever</code>, <code>sore_throat</code>, <code>ear_pain</code>) to run a live trace through the full KB pipeline.
++                      Enter symptom features, for example <code>chest_pain</code>, <code>shortness_of_breath</code>, or <code>radiation_left_arm</code>, to trace through the World B pipeline.
+                     </div>
+                     <div className="flex gap-2">
+                       <Input
+@@ -554,14 +596,9 @@
+                 {traceResult && (
+                   <ScrollArea className="flex-1">
+                     <div className="space-y-3">
+-                      {/* Disposition Banner */}
+                       <Card className={`border-2 ${traceResult.isEscalated ? "border-red-400 bg-red-50 dark:bg-red-950/20" : "border-green-400 bg-green-50 dark:bg-green-950/20"}`}>
+                         <CardContent className="p-3 flex items-center gap-3">
+-                          {traceResult.isEscalated ? (
+-                            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0" />
+-                          ) : (
+-                            <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+-                          )}
++                          {traceResult.isEscalated ? <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0" /> : <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />}
+                           <div className="flex-1">
+                             <div className="font-semibold text-sm">Final Disposition</div>
+                             <div className={`text-xs font-mono font-bold ${traceResult.isEscalated ? "text-red-700 dark:text-red-400" : "text-green-700 dark:text-green-400"}`}>
+@@ -575,34 +612,28 @@
+                         </CardContent>
+                       </Card>
+ 
+-                      {/* Pipeline stages */}
+                       <div className="space-y-2">
+                         {traceResult.pipeline.map((stage, i) => (
+                           <div key={stage.stage} className="flex gap-2">
+                             <div className="flex flex-col items-center">
+                               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${stage.triggered ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+-                                {i + 1}
++                                {stage.stepNumber}
+                               </div>
+-                              {i < traceResult.pipeline.length - 1 && (
+-                                <div className="w-0.5 flex-1 bg-muted mt-0.5" />
+-                              )}
++                              {i < traceResult.pipeline.length - 1 && <div className="w-0.5 flex-1 bg-muted mt-0.5" />}
+                             </div>
+-                            <div className="flex-1 pb-2">
+-                              <TraceStageCard stage={stage} />
+-                            </div>
++                            <div className="flex-1 pb-2"><TraceStageCard stage={stage} /></div>
+                           </div>
+                         ))}
+                       </div>
+ 
+                       <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+-                        <Activity className="w-3 h-3" /> Traced at {new Date(traceResult.tracedAt).toLocaleTimeString()} · {traceResult.activeRuleCount} active rules
++                        <Activity className="w-3 h-3" /> Traced at {new Date(traceResult.tracedAt).toLocaleTimeString()} · {traceResult.activeRuleCount} active rows
+                       </div>
+                     </div>
+                   </ScrollArea>
+                 )}
+               </TabsContent>
+ 
+-              {/* CHANGE HISTORY TAB */}
+               <TabsContent value="history" className="flex-1 overflow-hidden">
+                 <ScrollArea className="h-full">
+                   <div className="p-6 space-y-2">
+@@ -623,13 +654,9 @@
+                             </div>
+                             <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+                               <span>{new Date(ch.createdAt ?? ch.created_at).toLocaleString()}</span>
+-                              {ch.changedBy ?? ch.changed_by ? (
+-                                <span>by <strong>{ch.changedBy ?? ch.changed_by}</strong></span>
+-                              ) : null}
++                              {ch.changedBy ?? ch.changed_by ? <span>by <strong>{ch.changedBy ?? ch.changed_by}</strong></span> : null}
+                               {ch.reviewedBy ?? ch.reviewed_by ? (
+-                                <Badge className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 text-[9px]">
+-                                  <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" /> reviewed
+-                                </Badge>
++                                <Badge className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 text-[9px]"><CheckCircle2 className="w-2.5 h-2.5 mr-0.5" /> reviewed</Badge>
+                               ) : (
+                                 <Badge variant="outline" className="text-[9px]">pending review</Badge>
+                               )}
+
