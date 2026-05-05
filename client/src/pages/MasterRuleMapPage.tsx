@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import SystemCoverageTab from "@/components/SystemCoverageTab";
 import PipelineFlowchart from "@/components/PipelineFlowchart";
+import ClinicalDecisionTree from "@/components/ClinicalDecisionTree";
 import { useToast } from "@/hooks/use-toast";
 
 function scoreBadge(score: number) {
@@ -1610,6 +1611,7 @@ export default function MasterRuleMapPage() {
           <TabsTrigger value="overview"     data-testid="tab-overview">Coverage Overview</TabsTrigger>
           <TabsTrigger value="systems"      data-testid="tab-systems">System Coverage</TabsTrigger>
           <TabsTrigger value="flowchart"    data-testid="tab-flowchart">Pipeline Flowchart</TabsTrigger>
+          <TabsTrigger value="decision"     data-testid="tab-decision">Clinical Decision Tree</TabsTrigger>
           <TabsTrigger value="drilldown"    data-testid="tab-drilldown">Drill-down</TabsTrigger>
           <TabsTrigger value="gaps"         data-testid="tab-gaps">Gaps</TabsTrigger>
           <TabsTrigger value="tools"        data-testid="tab-tools">Tools & RLHF</TabsTrigger>
@@ -1640,6 +1642,10 @@ export default function MasterRuleMapPage() {
 
         <TabsContent value="flowchart" className="mt-4">
           <PipelineFlowchart />
+        </TabsContent>
+
+        <TabsContent value="decision" className="mt-4">
+          <ClinicalDecisionTree />
         </TabsContent>
 
         <TabsContent value="drilldown" className="mt-4">

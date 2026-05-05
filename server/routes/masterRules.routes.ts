@@ -5,6 +5,12 @@ import { requireRole } from "../middleware/requireRole";
 import { requireReviewAuth } from "../middleware/reviewAuth";
 import { exportMasterRulesToSheets } from "../scripts/exportMasterRulesToSheets";
 import { executePipeline } from "../clinical/ruleExecutionEngine";
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey:   process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL:  process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
 
 const router = Router();
 const auth = [requireReviewAuth, requireRole(["admin", "physician"])];
@@ -72,6 +78,132 @@ router.get("/stats", ...auth, async (_req, res) => {
     `);
     res.json({ ok: true, stats: rows.rows[0] });
   } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Clinical decision tree — AI-generated flowchart per complaint (cached in DB)
+// NOTE: must be registered BEFORE /:rule_id to avoid route capture
+router.get("/flowchart/:complaint_id", ...auth, async (req, res) => {
+  try {
+    const { complaint_id } = req.params;
+    const refresh = req.query.refresh === "true";
+
+    // Ensure cache table exists
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS kb_clinical_flowcharts (
+        complaint_id  TEXT PRIMARY KEY,
+        title         TEXT,
+        flowchart_json JSONB,
+        generated_at  TIMESTAMPTZ DEFAULT NOW(),
+        rule_count    INT
+      )
+    `);
+
+    // Serve from cache unless refresh requested
+    if (!refresh) {
+      const cached = await db.execute(sql`
+        SELECT flowchart_json, title, generated_at
+        FROM   kb_clinical_flowcharts
+        WHERE  complaint_id = ${complaint_id}
+      `);
+      if (cached.rows.length > 0) {
+        return res.json({ flowchart: cached.rows[0].flowchart_json, cached: true, generated_at: cached.rows[0].generated_at });
+      }
+    }
+
+    // Fetch the complaint's rules from the master rule table
+    const { rows: rules } = await db.execute(sql`
+      SELECT rule_name, rule_type, logic_description, logic_type,
+             input_fields, disposition_impact, safety_level, priority,
+             question_dependencies
+      FROM   kb_master_rules
+      WHERE  (complaint_id = ${complaint_id} OR complaint_id = 'ALL')
+        AND  active = true
+      ORDER  BY priority ASC, safety_level DESC
+      LIMIT  50
+    `);
+
+    if (rules.length === 0) {
+      return res.status(404).json({ error: `No active rules found for complaint: ${complaint_id}` });
+    }
+
+    const rulesText = rules
+      .map(r => `[${String(r.rule_type).toUpperCase()}] ${r.rule_name}: ${r.logic_description ?? ""} | Disp: ${r.disposition_impact ?? "N/A"} | Safety: ${r.safety_level}`)
+      .join("\n");
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      temperature: 0.15,
+      max_tokens: 2500,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `You are a clinical decision-tree architect for an emergency urgent-care triage system.
+Generate accurate, medically rigorous decision flowcharts based on the rules provided.
+Output ONLY valid JSON matching the exact schema requested — no prose, no markdown.`,
+        },
+        {
+          role: "user",
+          content: `Generate a clinical decision flowchart for complaint: "${complaint_id}"
+
+Clinical rules from the knowledge base:
+${rulesText}
+
+Return strict JSON with this schema:
+{
+  "title": "Clinical Decision: [Human-readable complaint name]",
+  "start_id": "n1",
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "start",
+      "label": "Patient presents with [chief complaint]",
+      "next_id": "n2"
+    }
+  ]
+}
+
+Node type rules:
+- "start"    — entry point (exactly 1). Has next_id.
+- "decision" — yes/no clinical question (e.g. "Fever ≥38.5°C?"). Has yes_id (positive path) and no_id (negative path).
+- "process"  — evaluation or workup step (e.g. "Obtain CBC, CMP, UA"). Has next_id. Optional detail:[].
+- "action"   — treatment or recommendation. Has next_id if more steps follow, otherwise omit. Optional detail:[] for bullet points.
+- "terminal" — final disposition. No next_id. Include disposition in label (e.g. "Discharge: treat and follow up in 3 days").
+
+Requirements:
+1. Include red flag checks early as decision nodes (use the red_flag rules).
+2. Branch into ER/escalate if critical flags present.
+3. Work through differential diagnosis narrowing.
+4. End each path with a specific disposition terminal node.
+5. Keep 10–16 nodes total. Be concise and medically accurate.
+6. Base the tree on the actual rules provided above.`,
+        },
+      ],
+    });
+
+    let flowchart: any;
+    try {
+      flowchart = JSON.parse(completion.choices[0].message.content ?? "{}");
+    } catch {
+      return res.status(500).json({ error: "OpenAI returned invalid JSON" });
+    }
+
+    // Cache result
+    await db.execute(sql`
+      INSERT INTO kb_clinical_flowcharts (complaint_id, title, flowchart_json, rule_count)
+      VALUES (${complaint_id}, ${flowchart.title ?? complaint_id}, ${JSON.stringify(flowchart)}, ${rules.length})
+      ON CONFLICT (complaint_id) DO UPDATE SET
+        flowchart_json = EXCLUDED.flowchart_json,
+        title          = EXCLUDED.title,
+        rule_count     = EXCLUDED.rule_count,
+        generated_at   = NOW()
+    `);
+
+    res.json({ flowchart, cached: false });
+  } catch (e: any) {
+    console.error("[Flowchart]", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
