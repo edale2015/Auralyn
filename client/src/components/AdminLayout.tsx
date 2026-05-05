@@ -194,6 +194,8 @@ const NAV_SECTIONS = [
       { path: "/pack-audit-log", label: "Pack Audit Log", icon: Shield },
       { path: "/coverage-dashboard", label: "Coverage Dashboard", icon: BarChart3 },
       { path: "/kb-explorer", label: "Knowledge Base Explorer", icon: BookOpen },
+      { path: "/kb-editor", label: "Clinical KB Editor", icon: ClipboardList },
+      { path: "/rule-map", label: "Master Rule Map", icon: BookOpen },
       { path: "/system-ops-grid", label: "System Operations Grid", icon: Cpu },
       { path: "/patient-grid", label: "Patient Grid (High Volume)", icon: Grid3X3 },
       { path: "/physician-command-strip", label: "Physician Command Strip", icon: HeartPulse },

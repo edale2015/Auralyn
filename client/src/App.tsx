@@ -99,6 +99,7 @@ import InfraStatusDashboard       from "@/pages/InfraStatusDashboard";
 import PhysicianCMEQuizTool       from "@/pages/PhysicianCMEQuizTool";
 import PhysicianPathwayReview     from "@/pages/PhysicianPathwayReview";
 import MasterRuleMapPage          from "@/pages/MasterRuleMapPage";
+import ClinicalKBEditorPage       from "@/pages/ClinicalKBEditorPage";
 import EncounterSimulatorPage     from "@/pages/EncounterSimulatorPage";
 import IntentAnalyticsDashboard   from "@/pages/IntentAnalyticsDashboard";
 import SkillMapPage from "@/pages/SkillMapPage";
@@ -249,6 +250,7 @@ function WorkbenchRouter() {
         <Route path="/cme-quiz">{() => <RoleGuard allowedRoles={["admin", "physician"]}><PhysicianCMEQuizTool /></RoleGuard>}</Route>
         <Route path="/pathway-review">{() => <RoleGuard allowedRoles={["admin", "physician"]}><PhysicianPathwayReview /></RoleGuard>}</Route>
         <Route path="/rule-map">{() => <RoleGuard allowedRoles={["admin", "physician"]}><MasterRuleMapPage /></RoleGuard>}</Route>
+        <Route path="/kb-editor">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalKBEditorPage /></RoleGuard>}</Route>
         <Route path="/encounter">{() => <RoleGuard allowedRoles={["admin", "physician"]}><EncounterSimulatorPage /></RoleGuard>}</Route>
         <Route path="/intent-analytics">{() => <RoleGuard allowedRoles={["admin"]}><IntentAnalyticsDashboard /></RoleGuard>}</Route>
         <Route path="/scope-command-center"  component={ScopeCommandCenter} />

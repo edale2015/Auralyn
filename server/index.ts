@@ -400,6 +400,7 @@ import recentRunsRoutes from "./routes/recentRunsRoutes";
 import decisionTreeRoutes, { suggestFixRouter } from "./routes/decisionTreeRoutes";
 import masterRuleMapRoutes from "./routes/masterRuleMap.routes";
 import masterRulesRoutes from "./routes/masterRules.routes";
+import kbEditorRoutes from "./routes/kbEditor.routes";
 import rlhfRoutes from "./routes/rlhf.routes";
 import exportZipRoutes from "./routes/exportZip.routes";
 // Register task agents (side-effects: all 7 agents added to registry)
@@ -931,6 +932,7 @@ app.use("/api/network", networkRoutes);
 app.use("/api/kb-governance", kbGovernanceRoutes);
 app.use("/api/rule-map", masterRuleMapRoutes);
 app.use("/api/master-rules", masterRulesRoutes);
+app.use("/api/kb-editor", kbEditorRoutes);
 app.use("/api/rlhf", rlhfRoutes);
 app.use("/api/export", exportZipRoutes);
 console.log("[MasterRuleMap] /api/rule-map/* active (summary·gaps·complaint·refresh·validate)");
