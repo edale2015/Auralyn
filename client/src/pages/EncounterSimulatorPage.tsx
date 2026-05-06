@@ -103,12 +103,37 @@ function adaptApiConfig(data: any): any {
 // ── Severity scale ────────────────────────────────────────────────────────────
 const SEVERITY_SCALE = [1,2,3,4,5,6,7,8,9,10];
 
+// ── Per-complaint question overrides (localStorage) ───────────────────────────
+type QuestionItem = { field: string; label: string };
+type SectionKey = "hpi" | "ros" | "pmh" | "fhx" | "meds";
+type QConfig = {
+  hidden: string[];
+  custom: Record<SectionKey, QuestionItem[]>;
+};
+function emptyQConfig(): QConfig {
+  return { hidden: [], custom: { hpi: [], ros: [], pmh: [], fhx: [], meds: [] } };
+}
+function loadQConfig(id: string): QConfig {
+  try {
+    const raw = localStorage.getItem(`auralyn_qcfg_${id}`);
+    if (!raw) return emptyQConfig();
+    const parsed = JSON.parse(raw);
+    return { ...emptyQConfig(), ...parsed, custom: { ...emptyQConfig().custom, ...(parsed.custom ?? {}) } };
+  } catch { return emptyQConfig(); }
+}
+function saveQConfig(id: string, cfg: QConfig) {
+  localStorage.setItem(`auralyn_qcfg_${id}`, JSON.stringify(cfg));
+}
+
 // ── Three-state yes / no / unknown toggle ─────────────────────────────────────
-function YNToggle({ label, field, inputs, setInputs, compact = false }: {
+function YNToggle({ label, field, inputs, setInputs, compact = false, editMode = false, isCustom = false, onDelete }: {
   label: string; field: string;
   inputs: Inputs;
   setInputs: (fn: (p: Inputs) => Inputs) => void;
   compact?: boolean;
+  editMode?: boolean;
+  isCustom?: boolean;
+  onDelete?: () => void;
 }) {
   const val = inputs[field] as "yes" | "no" | undefined;
   const cycle = () =>
@@ -120,15 +145,69 @@ function YNToggle({ label, field, inputs, setInputs, compact = false }: {
     val === "yes" ? "bg-green-100 border-green-500 text-green-800 dark:bg-green-900 dark:text-green-200"
     : val === "no"  ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-950 dark:text-red-300"
     : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400";
+  if (!editMode) {
+    return (
+      <button
+        data-testid={`yn-${field}`}
+        onClick={cycle}
+        className={`text-left rounded border transition-all ${compact ? "text-xs px-2 py-1" : "text-sm px-3 py-1.5"} ${cls} w-full`}
+      >
+        <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
+        {label}
+      </button>
+    );
+  }
   return (
-    <button
-      data-testid={`yn-${field}`}
-      onClick={cycle}
-      className={`text-left rounded border transition-all ${compact ? "text-xs px-2 py-1" : "text-sm px-3 py-1.5"} ${cls} w-full`}
-    >
-      <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
-      {label}
-    </button>
+    <div className="flex gap-1 group">
+      <button
+        data-testid={`yn-${field}`}
+        onClick={cycle}
+        className={`text-left rounded border transition-all text-sm px-3 py-1.5 flex-1 min-w-0 ${cls} ${isCustom ? "border-l-2 border-l-blue-400" : ""}`}
+      >
+        <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
+        <span className="truncate">{label}</span>
+        {isCustom && <span className="ml-1.5 text-xs text-blue-500 opacity-70">(custom)</span>}
+      </button>
+      {onDelete && (
+        <button
+          data-testid={`delete-q-${field}`}
+          onClick={onDelete}
+          title="Remove this question"
+          className="text-xs px-1.5 rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950 dark:border-red-800 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Inline add-question row ────────────────────────────────────────────────────
+function AddQuestionRow({ onAdd }: { onAdd: (label: string) => void }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="col-span-2 flex gap-1.5 pt-2 border-t border-dashed border-blue-200 dark:border-blue-800 mt-1">
+      <Input
+        data-testid="input-add-question"
+        placeholder="Type new question then press Enter or click + Add…"
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); }
+        }}
+        className="h-7 text-xs flex-1"
+      />
+      <Button
+        data-testid="button-add-question-confirm"
+        size="sm"
+        variant="outline"
+        className="h-7 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 shrink-0"
+        disabled={!text.trim()}
+        onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}
+      >
+        + Add
+      </Button>
+    </div>
   );
 }
 
@@ -427,6 +506,9 @@ export default function EncounterSimulatorPage() {
   const [complaintSearch, setComplaintSearch] = useState("");
   // Auto-enable full mode if the deep-linked complaint isn't in the static 15
   const [fullMode, setFullMode]           = useState(!STATIC_IDS.has(initialComplaint) && initialComplaint !== "chest_pain");
+  // ── Question editor ────────────────────────────────────────────────────────
+  const [editMode, setEditMode]           = useState(false);
+  const [qConfig, setQConfig]             = useState<QConfig>(() => loadQConfig(initialComplaint));
 
   // ── Section open/close state (ROS, PMH, FHx, Meds all start open) ─────────
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
@@ -573,6 +655,41 @@ export default function EncounterSimulatorPage() {
     });
   }
 
+  // ── Question editor helpers ────────────────────────────────────────────────
+  function getEffective(section: SectionKey, configList: { field: string; label: string }[]): QuestionItem[] {
+    const hiddenSet = new Set(qConfig.hidden);
+    const base = configList.filter(q => !hiddenSet.has(q.field));
+    return [...base, ...(qConfig.custom[section] ?? [])];
+  }
+  function hideQuestion(field: string) {
+    setQConfig(prev => {
+      const next = { ...prev, hidden: [...prev.hidden.filter(f => f !== field), field] };
+      saveQConfig(complaint, next);
+      return next;
+    });
+  }
+  function deleteCustomQuestion(section: SectionKey, field: string) {
+    setQConfig(prev => {
+      const next = { ...prev, custom: { ...prev.custom, [section]: prev.custom[section].filter(q => q.field !== field) } };
+      saveQConfig(complaint, next);
+      return next;
+    });
+  }
+  function addCustomQuestion(section: SectionKey, label: string) {
+    const field = `CUSTOM_${section.toUpperCase()}_${Date.now()}`;
+    setQConfig(prev => {
+      const next = { ...prev, custom: { ...prev.custom, [section]: [...(prev.custom[section] ?? []), { field, label }] } };
+      saveQConfig(complaint, next);
+      return next;
+    });
+  }
+  function restoreDefaults() {
+    const fresh = emptyQConfig();
+    saveQConfig(complaint, fresh);
+    setQConfig(fresh);
+    toast({ title: "Questions restored", description: "All custom edits cleared for this complaint." });
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
   const answeredCount = Object.values(inputs).filter(v => v !== undefined && v !== null && v !== "").length;
 
@@ -589,7 +706,7 @@ export default function EncounterSimulatorPage() {
           </div>
           <div className="flex items-center gap-2 ml-4">
             {/* Complaint selector */}
-            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); setComplaintSearch(""); setChiefComplaintText(""); setDuration(""); }}>
+            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); setComplaintSearch(""); setChiefComplaintText(""); setDuration(""); setQConfig(loadQConfig(v)); }}>
               <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-56"><SelectValue /></SelectTrigger>
               <SelectContent className="max-h-[420px]">
                 <div className="sticky top-0 bg-popover px-2 py-1.5 border-b z-10">
@@ -644,6 +761,17 @@ export default function EncounterSimulatorPage() {
         <div className="flex items-center gap-2">
           {answeredCount > 0 && <span className="text-xs text-muted-foreground">{answeredCount} answered</span>}
           {runCount > 0 && <span className="text-xs text-muted-foreground">· Run #{runCount}</span>}
+          {/* Edit Questions toggle */}
+          <Button
+            data-testid="button-edit-questions"
+            variant={editMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => setEditMode(prev => !prev)}
+            className={`h-8 text-xs gap-1 shrink-0 ${editMode ? "bg-amber-500 hover:bg-amber-600 border-amber-500 text-white" : "border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950"}`}
+          >
+            <Pencil className="h-3 w-3" />
+            {editMode ? "Done" : "Edit Qs"}
+          </Button>
           <Button data-testid="button-reset-encounter" variant="outline" size="sm" onClick={handleReset} className="h-8 text-xs">
             <RotateCcw className="h-3 w-3 mr-1" />Reset
           </Button>
@@ -729,118 +857,154 @@ export default function EncounterSimulatorPage() {
           </div>
 
           {/* ── 2. HPI ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2}
-            open={openSections.hpi} onToggle={() => toggleSection("hpi")} count={config.hpiQuestions.length} />
-          {openSections.hpi && (
-            <>
-              {/* Onset timing chips */}
-              {config.onsetOptions && config.onsetOptions.length > 0 && (
-                <div className="mb-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Onset timing — how did it start?</label>
-                  <div className="flex gap-1 flex-wrap">
-                    {config.onsetOptions.map(o => (
-                      <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
-                        onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
-                        className={`text-xs px-2.5 py-1.5 rounded border font-medium transition-all ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                      >{inputs.onset_timing === o ? "✓ " : ""}{o}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Severity scale */}
-              {config.hasSeverityScale && (
-                <div className="mb-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Pain / symptom severity — 1 (mild) to 10 (worst ever)</label>
-                  <div className="flex gap-0.5">
-                    {SEVERITY_SCALE.map(n => (
-                      <button key={n} data-testid={`severity-${n}`}
-                        onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
-                        className={`text-xs w-7 h-7 rounded border font-mono font-bold ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                      >{n}</button>
-                    ))}
-                    {inputs.severity && (
-                      <span className={`ml-2 text-xs font-semibold self-center ${Number(inputs.severity) >= 7 ? "text-red-600" : Number(inputs.severity) >= 4 ? "text-orange-500" : "text-blue-600"}`}>
-                        {Number(inputs.severity) >= 7 ? "Severe" : Number(inputs.severity) >= 4 ? "Moderate" : "Mild"}
-                      </span>
+          {(() => {
+            const effHpi = getEffective("hpi", config.hpiQuestions);
+            return (
+              <>
+                <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2}
+                  open={openSections.hpi} onToggle={() => toggleSection("hpi")} count={effHpi.length} />
+                {openSections.hpi && (
+                  <>
+                    {/* Onset timing chips */}
+                    {config.onsetOptions && config.onsetOptions.length > 0 && (
+                      <div className="mb-2">
+                        <label className="text-xs text-muted-foreground mb-1 block">Onset timing — how did it start?</label>
+                        <div className="flex gap-1 flex-wrap">
+                          {config.onsetOptions.map(o => (
+                            <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
+                              onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
+                              className={`text-xs px-2.5 py-1.5 rounded border font-medium transition-all ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                            >{inputs.onset_timing === o ? "✓ " : ""}{o}</button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </div>
-                </div>
-              )}
-
-              {/* Character picker */}
-              {config.characters && config.characters.length > 0 && (
-                <div className="mb-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Character / quality — select all that apply</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {config.characters.map(ch => (
-                      <button key={ch.field} data-testid={`char-${ch.field}`}
-                        onClick={() => toggleChar(ch)}
-                        className={`text-sm px-3 py-1.5 rounded border transition-all font-medium ${inputs[ch.field] === "yes" ? "bg-amber-100 border-amber-500 text-amber-900 dark:bg-amber-900 dark:text-amber-100" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                      >{inputs[ch.field] === "yes" ? "✓ " : ""}{ch.label}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* HPI yes/no questions */}
-              {config.hpiQuestions.length > 0 && (
-                <div className="grid grid-cols-2 gap-2 mt-1">
-                  {config.hpiQuestions.map(q => (
-                    <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-                  ))}
-                </div>
-              )}
-              {config.hpiQuestions.length === 0 && (
-                <p className="text-xs text-muted-foreground italic">No HPI questions configured for this complaint.</p>
-              )}
-            </>
-          )}
+                    {/* Severity scale */}
+                    {config.hasSeverityScale && (
+                      <div className="mb-2">
+                        <label className="text-xs text-muted-foreground mb-1 block">Pain / symptom severity — 1 (mild) to 10 (worst ever)</label>
+                        <div className="flex gap-0.5">
+                          {SEVERITY_SCALE.map(n => (
+                            <button key={n} data-testid={`severity-${n}`}
+                              onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
+                              className={`text-xs w-7 h-7 rounded border font-mono font-bold ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                            >{n}</button>
+                          ))}
+                          {inputs.severity && (
+                            <span className={`ml-2 text-xs font-semibold self-center ${Number(inputs.severity) >= 7 ? "text-red-600" : Number(inputs.severity) >= 4 ? "text-orange-500" : "text-blue-600"}`}>
+                              {Number(inputs.severity) >= 7 ? "Severe" : Number(inputs.severity) >= 4 ? "Moderate" : "Mild"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {/* Character picker */}
+                    {config.characters && config.characters.length > 0 && (
+                      <div className="mb-2">
+                        <label className="text-xs text-muted-foreground mb-1 block">Character / quality — select all that apply</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {config.characters.map(ch => (
+                            <button key={ch.field} data-testid={`char-${ch.field}`}
+                              onClick={() => toggleChar(ch)}
+                              className={`text-sm px-3 py-1.5 rounded border transition-all font-medium ${inputs[ch.field] === "yes" ? "bg-amber-100 border-amber-500 text-amber-900 dark:bg-amber-900 dark:text-amber-100" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                            >{inputs[ch.field] === "yes" ? "✓ " : ""}{ch.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* HPI yes/no questions */}
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      {effHpi.map(q => {
+                        const isCust = qConfig.custom.hpi.some(c => c.field === q.field);
+                        return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
+                          editMode={editMode} isCustom={isCust}
+                          onDelete={editMode ? () => isCust ? deleteCustomQuestion("hpi", q.field) : hideQuestion(q.field) : undefined} />;
+                      })}
+                      {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("hpi", label)} />}
+                    </div>
+                    {effHpi.length === 0 && !editMode && (
+                      <p className="text-xs text-muted-foreground italic">No HPI questions configured for this complaint.</p>
+                    )}
+                  </>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── 3. ROS ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3}
-            open={openSections.ros} onToggle={() => toggleSection("ros")} count={config.rosQuestions.length} />
-          {openSections.ros && (
-            config.rosQuestions.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {config.rosQuestions.map(q => (
-                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">No ROS questions configured for this complaint.</p>
-            )
-          )}
+          {(() => {
+            const effRos = getEffective("ros", config.rosQuestions);
+            return (
+              <>
+                <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3}
+                  open={openSections.ros} onToggle={() => toggleSection("ros")} count={effRos.length} />
+                {openSections.ros && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {effRos.map(q => {
+                      const isCust = qConfig.custom.ros.some(c => c.field === q.field);
+                      return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
+                        editMode={editMode} isCustom={isCust}
+                        onDelete={editMode ? () => isCust ? deleteCustomQuestion("ros", q.field) : hideQuestion(q.field) : undefined} />;
+                    })}
+                    {effRos.length === 0 && !editMode && (
+                      <p className="text-xs text-muted-foreground italic col-span-2">No ROS questions configured for this complaint.</p>
+                    )}
+                    {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("ros", label)} />}
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── 4. PMH ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4}
-            open={openSections.pmh} onToggle={() => toggleSection("pmh")} count={config.pmhQuestions.length} />
-          {openSections.pmh && (
-            config.pmhQuestions.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {config.pmhQuestions.map(q => (
-                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">No PMH questions configured.</p>
-            )
-          )}
+          {(() => {
+            const effPmh = getEffective("pmh", config.pmhQuestions);
+            return (
+              <>
+                <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4}
+                  open={openSections.pmh} onToggle={() => toggleSection("pmh")} count={effPmh.length} />
+                {openSections.pmh && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {effPmh.map(q => {
+                      const isCust = qConfig.custom.pmh.some(c => c.field === q.field);
+                      return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
+                        editMode={editMode} isCustom={isCust}
+                        onDelete={editMode ? () => isCust ? deleteCustomQuestion("pmh", q.field) : hideQuestion(q.field) : undefined} />;
+                    })}
+                    {effPmh.length === 0 && !editMode && (
+                      <p className="text-xs text-muted-foreground italic col-span-2">No PMH questions configured.</p>
+                    )}
+                    {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("pmh", label)} />}
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── 5. Family Hx ─────────────────────────────────────────── */}
-          <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5}
-            open={openSections.fhx} onToggle={() => toggleSection("fhx")} count={config.fhxQuestions.length} />
-          {openSections.fhx && (
-            config.fhxQuestions.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {config.fhxQuestions.map(q => (
-                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">No family history questions configured.</p>
-            )
-          )}
+          {(() => {
+            const effFhx = getEffective("fhx", config.fhxQuestions);
+            return (
+              <>
+                <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5}
+                  open={openSections.fhx} onToggle={() => toggleSection("fhx")} count={effFhx.length} />
+                {openSections.fhx && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {effFhx.map(q => {
+                      const isCust = qConfig.custom.fhx.some(c => c.field === q.field);
+                      return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
+                        editMode={editMode} isCustom={isCust}
+                        onDelete={editMode ? () => isCust ? deleteCustomQuestion("fhx", q.field) : hideQuestion(q.field) : undefined} />;
+                    })}
+                    {effFhx.length === 0 && !editMode && (
+                      <p className="text-xs text-muted-foreground italic col-span-2">No family history questions configured.</p>
+                    )}
+                    {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("fhx", label)} />}
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── 6. Social ─────────────────────────────────────────────── */}
           <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6}
@@ -868,18 +1032,46 @@ export default function EncounterSimulatorPage() {
           )}
 
           {/* ── 7. Meds & Allergies ─────────────────────────────────── */}
-          <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7}
-            open={openSections.meds} onToggle={() => toggleSection("meds")} count={config.medsQuestions.length} />
-          {openSections.meds && (
-            config.medsQuestions.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {config.medsQuestions.map(q => (
-                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-                ))}
+          {(() => {
+            const effMeds = getEffective("meds", config.medsQuestions);
+            return (
+              <>
+                <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7}
+                  open={openSections.meds} onToggle={() => toggleSection("meds")} count={effMeds.length} />
+                {openSections.meds && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {effMeds.map(q => {
+                      const isCust = qConfig.custom.meds.some(c => c.field === q.field);
+                      return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
+                        editMode={editMode} isCustom={isCust}
+                        onDelete={editMode ? () => isCust ? deleteCustomQuestion("meds", q.field) : hideQuestion(q.field) : undefined} />;
+                    })}
+                    {effMeds.length === 0 && !editMode && (
+                      <p className="text-xs text-muted-foreground italic col-span-2">No medications/allergies questions configured.</p>
+                    )}
+                    {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("meds", label)} />}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* ── Edit mode footer ──────────────────────────────────────── */}
+          {editMode && (
+            <div className="mt-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 flex items-center justify-between gap-3">
+              <div className="text-xs text-amber-800 dark:text-amber-300">
+                <span className="font-semibold">Edit mode active</span> — hover any question and click <span className="font-mono bg-red-100 dark:bg-red-900 px-1 rounded text-red-600 dark:text-red-300">✕</span> to remove it. Use "+ Add" to add new questions. Changes are saved automatically per complaint.
               </div>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">No medications/allergies questions configured.</p>
-            )
+              <Button
+                data-testid="button-restore-defaults"
+                variant="outline"
+                size="sm"
+                onClick={restoreDefaults}
+                className="h-7 text-xs shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+              >
+                Restore Defaults
+              </Button>
+            </div>
           )}
 
           {/* ── Run button at bottom ──────────────────────────────────── */}
