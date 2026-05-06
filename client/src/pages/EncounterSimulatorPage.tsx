@@ -100,6 +100,19 @@ function adaptApiConfig(data: any): any {
   };
 }
 
+// ── Age category helper ───────────────────────────────────────────────────────
+function getAgeCategory(age: number | string | undefined): { label: string; color: string } | null {
+  if (age === undefined || age === "" || isNaN(Number(age))) return null;
+  const a = Number(age);
+  if (a < 0.08)  return { label: "Neonate (< 1 mo)",  color: "bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950 dark:text-violet-200" };
+  if (a < 2)     return { label: "Infant",              color: "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950 dark:text-purple-300" };
+  if (a < 13)    return { label: "Pediatric",           color: "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950 dark:text-blue-300" };
+  if (a < 18)    return { label: "Adolescent",          color: "bg-cyan-100 text-cyan-700 border-cyan-300 dark:bg-cyan-950 dark:text-cyan-300" };
+  if (a < 65)    return { label: "Adult",               color: "bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-300" };
+  if (a < 80)    return { label: "Geriatric",           color: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-950 dark:text-orange-300" };
+  return          { label: "Elderly / Frail",           color: "bg-red-100 text-red-700 border-red-300 dark:bg-red-950 dark:text-red-300" };
+}
+
 // ── Severity scale ────────────────────────────────────────────────────────────
 const SEVERITY_SCALE = [1,2,3,4,5,6,7,8,9,10];
 
@@ -839,6 +852,134 @@ export default function EncounterSimulatorPage() {
         {/* ── LEFT: Encounter Intake ──────────────────────────────────── */}
         <div className="w-[57%] shrink-0 overflow-y-auto p-5 space-y-1">
 
+          {/* ── PATIENT DEMOGRAPHICS — before everything ──────────── */}
+          {(() => {
+            const ageCat = getAgeCategory(inputs.age);
+            const isFemale = inputs.sex === "female" || inputs.sex === undefined;
+            const isPregnant = inputs.pregnancy_confirmed === "yes";
+            return (
+              <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50/70 dark:bg-emerald-950/30 dark:border-emerald-800 p-3 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <User className="h-4 w-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+                  <span className="text-xs font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">Patient Demographics</span>
+                  <span className="text-xs text-emerald-600 dark:text-emerald-500 italic">— affects every differential and dosing decision</span>
+                  {ageCat && (
+                    <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded border ${ageCat.color}`}>
+                      {ageCat.label}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-end gap-x-5 gap-y-2">
+                  {/* Sex */}
+                  <div>
+                    <label className="text-xs text-emerald-700 dark:text-emerald-400 font-medium block mb-1">Biological Sex</label>
+                    <div className="flex gap-1">
+                      {(["Male","Female","Other"] as const).map(s => (
+                        <button key={s}
+                          data-testid={`sex-${s.toLowerCase()}`}
+                          onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
+                          className={`text-sm px-3 py-1.5 rounded border font-semibold transition-all ${inputs.sex === s.toLowerCase()
+                            ? s === "Male"   ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-100"
+                            : s === "Female" ? "bg-rose-100 border-rose-500 text-rose-800 dark:bg-rose-900 dark:text-rose-100"
+                            : "bg-slate-100 border-slate-500 text-slate-800 dark:bg-slate-800 dark:text-slate-100"
+                            : "bg-white dark:bg-background border-border text-muted-foreground hover:border-emerald-400"}`}
+                        >{s}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Age */}
+                  <div>
+                    <label className="text-xs text-emerald-700 dark:text-emerald-400 font-medium block mb-1">Age <span className="font-normal text-muted-foreground">(use 0.08 for 1-month-old)</span></label>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        data-testid="vital-age"
+                        type="number" min={0} max={120} step={0.1}
+                        value={inputs.age ?? ""}
+                        placeholder="e.g. 45"
+                        className="h-9 text-sm w-24 bg-white dark:bg-background font-semibold"
+                        onChange={e => setInputs(prev => ({ ...prev, age: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                      />
+                      <span className="text-xs text-muted-foreground">yr</span>
+                    </div>
+                  </div>
+
+                  {/* Pregnancy — female or unknown sex */}
+                  {isFemale && (
+                    <div>
+                      <label className="text-xs text-emerald-700 dark:text-emerald-400 font-medium block mb-1">Pregnancy</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          data-testid="toggle-pregnant"
+                          onClick={() => setInputs(p => ({ ...p, pregnancy_confirmed: p.pregnancy_confirmed === "yes" ? undefined : "yes", gestational_weeks: p.pregnancy_confirmed === "yes" ? undefined : p.gestational_weeks }))}
+                          className={`text-sm px-3 py-1.5 rounded border font-medium transition-all ${isPregnant ? "bg-rose-100 border-rose-500 text-rose-800 dark:bg-rose-900 dark:text-rose-100" : "bg-white dark:bg-background border-border text-muted-foreground hover:border-rose-400"}`}
+                        >{isPregnant ? "✓ Pregnant" : "Pregnant?"}</button>
+                        {isPregnant && (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              data-testid="input-gestational-weeks"
+                              type="number" min={1} max={42} step={1}
+                              value={inputs.gestational_weeks ?? ""}
+                              placeholder="wks"
+                              className="h-8 text-sm w-16 bg-white dark:bg-background border-rose-300 dark:border-rose-700"
+                              onChange={e => setInputs(prev => ({ ...prev, gestational_weeks: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                            />
+                            <span className="text-xs text-muted-foreground">wks gestation</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Lactating — female or unknown */}
+                  {isFemale && (
+                    <div>
+                      <label className="text-xs text-emerald-700 dark:text-emerald-400 font-medium block mb-1">Lactating</label>
+                      <button
+                        data-testid="toggle-lactating"
+                        onClick={() => setInputs(p => ({ ...p, lactating: p.lactating === "yes" ? undefined : "yes" }))}
+                        className={`text-sm px-3 py-1.5 rounded border font-medium transition-all ${inputs.lactating === "yes" ? "bg-rose-100 border-rose-500 text-rose-800 dark:bg-rose-900 dark:text-rose-100" : "bg-white dark:bg-background border-border text-muted-foreground hover:border-rose-400"}`}
+                      >{inputs.lactating === "yes" ? "✓ Lactating / BF" : "Lactating?"}</button>
+                    </div>
+                  )}
+
+                  {/* Smoker */}
+                  <div>
+                    <label className="text-xs text-emerald-700 dark:text-emerald-400 font-medium block mb-1">Smoking</label>
+                    <button
+                      data-testid="toggle-smoker"
+                      onClick={() => setInputs(p => ({ ...p, smoker: p.smoker === "yes" ? undefined : "yes" }))}
+                      className={`text-sm px-3 py-1.5 rounded border font-medium transition-all ${inputs.smoker === "yes" ? "bg-amber-100 border-amber-500 text-amber-800 dark:bg-amber-900 dark:text-amber-100" : "bg-white dark:bg-background border-border text-muted-foreground hover:border-amber-400"}`}
+                    >{inputs.smoker === "yes" ? "✓ Smoker" : "Smoker?"}</button>
+                  </div>
+                </div>
+
+                {/* Clinical context alerts */}
+                {(ageCat?.label.includes("Neonate") || ageCat?.label.includes("Infant") || ageCat?.label.includes("Elderly")) && (
+                  <div className="mt-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {ageCat?.label.includes("Neonate") ? "Neonate — all dosing, differentials, and vitals are age-specific. Neonatal sepsis workup may apply."
+                        : ageCat?.label.includes("Infant") ? "Infant — fever in infants < 3 months is a serious red flag. Pediatric dosing required."
+                        : "Elderly / Frail — higher fall risk, polypharmacy interactions, atypical presentations, and frailty-adjusted dosing."}
+                    </span>
+                  </div>
+                )}
+                {isPregnant && inputs.gestational_weeks && (
+                  <div className="mt-2 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {Number(inputs.gestational_weeks) < 13 ? `${inputs.gestational_weeks} wks — 1st trimester. Ectopic risk. Many medications contraindicated.`
+                        : Number(inputs.gestational_weeks) < 28 ? `${inputs.gestational_weeks} wks — 2nd trimester. Screen for pre-eclampsia, GDM.`
+                        : `${inputs.gestational_weeks} wks — 3rd trimester. Pre-term labor risk. Supine positioning, PE risk elevated.`}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Instruction hint */}
           <p className="text-xs text-muted-foreground italic mb-1 flex items-center gap-1">
             <Circle className="h-2.5 w-2.5" />
@@ -1006,30 +1147,6 @@ export default function EncounterSimulatorPage() {
             );
           })()}
 
-          {/* ── 6. Social ─────────────────────────────────────────────── */}
-          <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6}
-            open={openSections.social} onToggle={() => toggleSection("social")} />
-          {openSections.social && (
-            <div className="flex flex-wrap items-end gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Sex</label>
-                <div className="flex gap-1">
-                  {["Male","Female","Other"].map(s => (
-                    <button key={s} data-testid={`sex-${s.toLowerCase()}`}
-                      onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
-                      className={`text-xs px-2 py-1 rounded border font-medium ${inputs.sex === s.toLowerCase() ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                    >{s}</button>
-                  ))}
-                </div>
-              </div>
-              <VitalInput label="Age" field="age" unit="yr" min={0} max={120} placeholder="45" inputs={inputs} setInputs={setInputs} />
-              <YNToggle label="Smoker (current or former)" field="smoker" inputs={inputs} setInputs={setInputs} compact />
-              {(inputs.sex === "female" || inputs.sex === undefined) && (
-                <YNToggle label="Pregnant" field="pregnancy_confirmed" inputs={inputs} setInputs={setInputs} compact />
-              )}
-              <YNToggle label="Age >65 / Elderly" field="elderly" inputs={inputs} setInputs={setInputs} compact />
-            </div>
-          )}
 
           {/* ── 7. Meds & Allergies ─────────────────────────────────── */}
           {(() => {
