@@ -523,13 +523,20 @@ export default function EncounterSimulatorPage() {
   const [editMode, setEditMode]           = useState(false);
   const [qConfig, setQConfig]             = useState<QConfig>(() => loadQConfig(initialComplaint));
 
-  // ── Section open/close state (ROS, PMH, FHx, Meds all start open) ─────────
+  // ── Section open/close state ───────────────────────────────────────────────
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    hpi: true, ros: true, pmh: true, fhx: true, social: true, meds: true,
+    hpi: true, prior_episode: false, ros: true, pmh: true, fhx: true, meds: true,
   });
   const toggleSection = useCallback((key: string) => {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
+
+  // Auto-expand Prior Episode section whenever had_before is answered "yes"
+  useEffect(() => {
+    if (inputs.had_before === "yes") {
+      setOpenSections(prev => prev.prior_episode ? prev : { ...prev, prior_episode: true });
+    }
+  }, [inputs.had_before]);
 
   // ── Fetch complaint list from KB ──────────────────────────────────────────
   const { data: apiComplaintList, isFetching: isComplaintListFetching } = useQuery<any[]>({
@@ -1073,12 +1080,130 @@ export default function EncounterSimulatorPage() {
             );
           })()}
 
-          {/* ── 3. ROS ───────────────────────────────────────────────── */}
+          {/* ── 3. PRIOR EPISODE HISTORY ─────────────────────────── */}
+          {(() => {
+            const hasBefore = inputs.had_before === "yes";
+            return (
+              <>
+                <SectionHeader
+                  icon={<RefreshCw className="h-4 w-4" />}
+                  label="Prior Episode History"
+                  step={3}
+                  open={openSections.prior_episode}
+                  onToggle={() => toggleSection("prior_episode")}
+                />
+                {/* Trigger toggle — always visible even when collapsed */}
+                <div className="flex items-center gap-3 -mt-1 mb-1 ml-1">
+                  <YNToggle
+                    label="Patient has had this same symptom/problem before"
+                    field="had_before"
+                    inputs={inputs}
+                    setInputs={setInputs}
+                    editMode={false}
+                    isCustom={false}
+                  />
+                </div>
+                {openSections.prior_episode && (
+                  <div className="space-y-3 pl-1">
+                    {!hasBefore && (
+                      <p className="text-xs text-muted-foreground italic">
+                        Mark "Yes" above to unlock prior-episode details.
+                      </p>
+                    )}
+                    {hasBefore && (
+                      <>
+                        {/* ── Core yes/no questions ── */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <YNToggle label="Seen a doctor or visited ER for this before" field="prior_seen_doctor" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Tests or procedures done for this in the past" field="prior_tests_done" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Follow-up was scheduled or recommended" field="prior_follow_up" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Medication was prescribed for this before" field="prior_meds_prescribed" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="This episode feels different from prior episodes" field="prior_different_now" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        </div>
+
+                        {/* ── Conditional: medication name ── */}
+                        {inputs.prior_meds_prescribed === "yes" && (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">What medication was prescribed?</label>
+                            <input
+                              data-testid="input-prior-med-name"
+                              type="text"
+                              placeholder="e.g. Amoxicillin, Albuterol…"
+                              value={(inputs.prior_med_name as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, prior_med_name: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+                        )}
+
+                        {/* ── Free-text: prior diagnosis ── */}
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1">Prior diagnosis given (if known)</label>
+                          <input
+                            data-testid="input-prior-diagnosis"
+                            type="text"
+                            placeholder="e.g. GERD, Anxiety, UTI…"
+                            value={(inputs.prior_diagnosis as string) ?? ""}
+                            onChange={e => setInputs(p => ({ ...p, prior_diagnosis: e.target.value || undefined }))}
+                            className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                          />
+                        </div>
+
+                        {/* ── Numeric + duration ── */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">Number of prior episodes</label>
+                            <input
+                              data-testid="input-prior-episode-count"
+                              type="number"
+                              min={1}
+                              placeholder="e.g. 3"
+                              value={(inputs.prior_episode_count as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, prior_episode_count: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">How long has this been a recurring problem?</label>
+                            <input
+                              data-testid="input-prior-problem-duration"
+                              type="text"
+                              placeholder="e.g. 3 months, 2 years…"
+                              value={(inputs.prior_problem_duration as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, prior_problem_duration: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+                        </div>
+
+                        {/* ── Difference description (conditional) ── */}
+                        {inputs.prior_different_now === "yes" && (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">How is this episode different?</label>
+                            <textarea
+                              data-testid="input-prior-difference-desc"
+                              placeholder="Describe what's changed compared to prior episodes…"
+                              rows={2}
+                              value={(inputs.prior_difference_desc as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, prior_difference_desc: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                            />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* ── 4. ROS ───────────────────────────────────────────────── */}
           {(() => {
             const effRos = getEffective("ros", config.rosQuestions);
             return (
               <>
-                <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3}
+                <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={4}
                   open={openSections.ros} onToggle={() => toggleSection("ros")} count={effRos.length} />
                 {openSections.ros && (
                   <div className="grid grid-cols-2 gap-2">
@@ -1103,7 +1228,7 @@ export default function EncounterSimulatorPage() {
             const effPmh = getEffective("pmh", config.pmhQuestions);
             return (
               <>
-                <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4}
+                <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={5}
                   open={openSections.pmh} onToggle={() => toggleSection("pmh")} count={effPmh.length} />
                 {openSections.pmh && (
                   <div className="grid grid-cols-2 gap-2">
@@ -1128,7 +1253,7 @@ export default function EncounterSimulatorPage() {
             const effFhx = getEffective("fhx", config.fhxQuestions);
             return (
               <>
-                <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5}
+                <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={6}
                   open={openSections.fhx} onToggle={() => toggleSection("fhx")} count={effFhx.length} />
                 {openSections.fhx && (
                   <div className="grid grid-cols-2 gap-2">
@@ -1155,6 +1280,7 @@ export default function EncounterSimulatorPage() {
             return (
               <>
                 <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7}
+
                   open={openSections.meds} onToggle={() => toggleSection("meds")} count={effMeds.length} />
                 {openSections.meds && (
                   <div className="grid grid-cols-2 gap-2">
