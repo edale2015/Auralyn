@@ -1115,11 +1115,35 @@ export default function EncounterSimulatorPage() {
                         {/* ── Core yes/no questions ── */}
                         <div className="grid grid-cols-2 gap-2">
                           <YNToggle label="Seen a doctor or visited ER for this before" field="prior_seen_doctor" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Visited the ER specifically for this problem" field="prior_er_visit" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Hospitalized for this problem before" field="prior_hospitalized" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
                           <YNToggle label="Tests or procedures done for this in the past" field="prior_tests_done" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
                           <YNToggle label="Follow-up was scheduled or recommended" field="prior_follow_up" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
                           <YNToggle label="Medication was prescribed for this before" field="prior_meds_prescribed" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
                           <YNToggle label="This episode feels different from prior episodes" field="prior_different_now" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
                         </div>
+
+                        {/* ── ER visit: discharge summary ── */}
+                        {inputs.prior_er_visit === "yes" && (
+                          <div className="grid grid-cols-2 gap-2 pl-1 border-l-2 border-blue-200 dark:border-blue-800">
+                            <YNToggle label="ER discharge summary available" field="prior_er_discharge_available" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          </div>
+                        )}
+
+                        {/* ── Hospitalization: last date ── */}
+                        {inputs.prior_hospitalized === "yes" && (
+                          <div className="pl-1 border-l-2 border-purple-200 dark:border-purple-800">
+                            <label className="text-xs text-muted-foreground block mb-1">When was the last hospitalization for this?</label>
+                            <input
+                              data-testid="input-prior-last-hospitalization"
+                              type="text"
+                              placeholder="e.g. March 2024, ~6 months ago…"
+                              value={(inputs.prior_last_hospitalization as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, prior_last_hospitalization: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+                        )}
 
                         {/* ── Conditional: medication name ── */}
                         {inputs.prior_meds_prescribed === "yes" && (

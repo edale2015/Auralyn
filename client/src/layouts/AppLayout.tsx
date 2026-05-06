@@ -115,7 +115,7 @@ export default function AppLayout({ children }: Props) {
       <aside className="w-56 shrink-0 border-r bg-white dark:bg-gray-900 dark:border-gray-800 flex flex-col">
         <div className="p-4 border-b dark:border-gray-800">
           <span className="text-base font-semibold tracking-tight text-gray-800 dark:text-gray-100">
-            Auralyn / ENT
+            Auralyn
           </span>
         </div>
 
