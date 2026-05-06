@@ -157,15 +157,31 @@ function VitalInput({ label, field, unit, min, max, placeholder, inputs, setInpu
   );
 }
 
-// ── Section header ────────────────────────────────────────────────────────────
-function SectionHeader({ icon, label, step }: { icon: React.ReactNode; label: string; step: number }) {
+// ── Collapsible section header ────────────────────────────────────────────────
+function SectionHeader({ icon, label, step, open, onToggle, count }: {
+  icon: React.ReactNode; label: string; step: number;
+  open?: boolean; onToggle?: () => void; count?: number;
+}) {
   return (
-    <div className="flex items-center gap-2 mt-5 mb-2">
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`flex items-center gap-2 mt-5 mb-2 w-full text-left ${onToggle ? "hover:opacity-80 cursor-pointer" : "cursor-default"}`}
+      data-testid={`section-header-${step}`}
+    >
       <div className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs font-bold shrink-0">{step}</div>
       <div className="text-muted-foreground">{icon}</div>
       <h3 className="text-sm font-semibold uppercase tracking-wide">{label}</h3>
+      {count !== undefined && (
+        <span className="text-xs text-muted-foreground font-normal">({count} questions)</span>
+      )}
       <div className="flex-1 h-px bg-border" />
-    </div>
+      {onToggle && (
+        open
+          ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      )}
+    </button>
   );
 }
 
@@ -400,6 +416,8 @@ export default function EncounterSimulatorPage() {
 
   const [complaint, setComplaint]         = useState(initialComplaint);
   const [patientName, setPatientName]     = useState("Mr. Jones");
+  const [chiefComplaintText, setChiefComplaintText] = useState(""); // patient's own words
+  const [duration, setDuration]           = useState("");           // how long (free text)
   const [inputs, setInputs]               = useState<Inputs>({});
   const [result, setResult]               = useState<any | null>(null);
   const [expanded, setExpanded]           = useState<Set<number>>(new Set([1, 2, 7]));
@@ -409,6 +427,14 @@ export default function EncounterSimulatorPage() {
   const [complaintSearch, setComplaintSearch] = useState("");
   // Auto-enable full mode if the deep-linked complaint isn't in the static 15
   const [fullMode, setFullMode]           = useState(!STATIC_IDS.has(initialComplaint) && initialComplaint !== "chest_pain");
+
+  // ── Section open/close state (ROS, PMH, FHx, Meds all start open) ─────────
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    hpi: true, ros: true, pmh: true, fhx: true, social: true, meds: true,
+  });
+  const toggleSection = useCallback((key: string) => {
+    setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
 
   // ── Fetch complaint list from KB ──────────────────────────────────────────
   const { data: apiComplaintList, isFetching: isComplaintListFetching } = useQuery<any[]>({
@@ -530,6 +556,8 @@ export default function EncounterSimulatorPage() {
     setInputs({}); setResult(null); setSelectedRule(null);
     setRunCount(0); setShowTrace(false);
     setExpanded(new Set([1, 2, 7]));
+    setChiefComplaintText(""); setDuration("");
+    setOpenSections({ hpi: true, ros: true, pmh: true, fhx: true, social: true, meds: true });
   }
 
   const toggleExpand = useCallback((step: number) => {
@@ -546,6 +574,8 @@ export default function EncounterSimulatorPage() {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const answeredCount = Object.values(inputs).filter(v => v !== undefined && v !== null && v !== "").length;
+
   return (
     <div className="flex flex-col min-h-screen bg-background">
 
@@ -554,30 +584,19 @@ export default function EncounterSimulatorPage() {
         <Stethoscope className="h-5 w-5 text-blue-600 shrink-0" />
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <div>
-            <h1 className="text-base font-bold leading-tight" data-testid="heading-encounter-simulator">
-              Clinical Encounter
-            </h1>
-            <p className="text-xs text-muted-foreground hidden sm:block">
-              Complete intake → differentials update live → run pipeline for full trace
-            </p>
+            <h1 className="text-base font-bold leading-tight" data-testid="heading-encounter-simulator">Clinical Encounter</h1>
+            <p className="text-xs text-muted-foreground hidden sm:block">Answer questions → differentials update live → run pipeline for full trace</p>
           </div>
           <div className="flex items-center gap-2 ml-4">
-            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); setComplaintSearch(""); }}>
-              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-56">
-                <SelectValue />
-              </SelectTrigger>
+            {/* Complaint selector */}
+            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); setComplaintSearch(""); setChiefComplaintText(""); setDuration(""); }}>
+              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-56"><SelectValue /></SelectTrigger>
               <SelectContent className="max-h-[420px]">
-                {/* Search box inside dropdown */}
                 <div className="sticky top-0 bg-popover px-2 py-1.5 border-b z-10">
-                  <Input
-                    placeholder="Search complaints…"
-                    value={complaintSearch}
+                  <Input placeholder="Search complaints…" value={complaintSearch}
                     onChange={e => setComplaintSearch(e.target.value)}
-                    onKeyDown={e => e.stopPropagation()}
-                    onClick={e => e.stopPropagation()}
-                    className="h-7 text-xs"
-                    data-testid="input-complaint-search"
-                  />
+                    onKeyDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+                    className="h-7 text-xs" data-testid="input-complaint-search" />
                   <div className="text-xs text-muted-foreground mt-1 px-0.5 flex items-center gap-1.5">
                     {isComplaintListFetching
                       ? <><Loader2 className="h-3 w-3 animate-spin" />Loading…</>
@@ -591,100 +610,99 @@ export default function EncounterSimulatorPage() {
                 {groupedComplaints.map(group => (
                   <div key={group.system}>
                     <div className="px-2 py-1 text-xs font-bold text-muted-foreground uppercase tracking-wide bg-muted/40 sticky top-[68px]">
-                      {group.system}
-                      <span className="ml-1 font-normal text-muted-foreground/60">({group.items.length})</span>
+                      {group.system}<span className="ml-1 font-normal text-muted-foreground/60">({group.items.length})</span>
                     </div>
                     {group.items.map((c: any) => (
                       <SelectItem key={c.id} value={c.id} className="text-xs pl-4">
                         <span className="font-medium">{c.label}</span>
                         {c.isStatic && <span className="ml-1.5 text-green-600 text-xs">★</span>}
-                        {!c.isStatic && c.dxCount > 0 && (
-                          <span className="ml-1.5 text-muted-foreground text-xs">{c.dxCount}dx</span>
-                        )}
-                        {!c.isStatic && c.dxCount === 0 && c.ruleCount > 0 && (
-                          <span className="ml-1.5 text-blue-400 text-xs">{c.ruleCount}r</span>
-                        )}
+                        {!c.isStatic && c.dxCount > 0 && <span className="ml-1.5 text-muted-foreground text-xs">{c.dxCount}dx</span>}
+                        {!c.isStatic && c.dxCount === 0 && c.ruleCount > 0 && <span className="ml-1.5 text-blue-400 text-xs">{c.ruleCount}r</span>}
                       </SelectItem>
                     ))}
                   </div>
                 ))}
               </SelectContent>
             </Select>
-            <Input
-              data-testid="input-patient-name"
-              value={patientName}
-              onChange={e => setPatientName(e.target.value)}
-              placeholder="Patient name"
-              className="h-8 text-xs w-28"
-            />
-            {/* ── Expand to Full KB button ────────────────────────────── */}
+            <Input data-testid="input-patient-name" value={patientName} onChange={e => setPatientName(e.target.value)}
+              placeholder="Patient name" className="h-8 text-xs w-28" />
             {!fullMode ? (
-              <Button
-                data-testid="button-expand-full-kb"
-                variant="outline"
-                size="sm"
+              <Button data-testid="button-expand-full-kb" variant="outline" size="sm"
                 className="h-8 text-xs gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950 shrink-0"
-                onClick={() => {
-                  setFullMode(true);
-                  toast({
-                    title: "Loading Full KB…",
-                    description: "Fetching all 1,000+ complaints across 30 systems.",
-                  });
-                }}
-              >
-                <Database className="h-3.5 w-3.5" />
-                Load Full KB
+                onClick={() => { setFullMode(true); toast({ title: "Loading Full KB…", description: "Fetching all 1,000+ complaints across 30 systems." }); }}>
+                <Database className="h-3.5 w-3.5" />Load Full KB
               </Button>
             ) : (
-              <div
-                data-testid="badge-full-kb-active"
-                className="flex items-center gap-1 h-8 px-2.5 rounded border border-blue-400 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-xs font-medium shrink-0"
-              >
+              <div data-testid="badge-full-kb-active"
+                className="flex items-center gap-1 h-8 px-2.5 rounded border border-blue-400 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-xs font-medium shrink-0">
                 <Database className="h-3 w-3" />
-                {isComplaintListFetching
-                  ? <><Loader2 className="h-3 w-3 animate-spin" />Loading…</>
-                  : <>{apiComplaintList?.length ?? "…"} complaints · 30 systems</>
-                }
+                {isComplaintListFetching ? <><Loader2 className="h-3 w-3 animate-spin" />Loading…</> : <>{apiComplaintList?.length ?? "…"} complaints · 30 systems</>}
               </div>
             )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {runCount > 0 && <span className="text-xs text-muted-foreground">Run #{runCount}</span>}
+          {answeredCount > 0 && <span className="text-xs text-muted-foreground">{answeredCount} answered</span>}
+          {runCount > 0 && <span className="text-xs text-muted-foreground">· Run #{runCount}</span>}
           <Button data-testid="button-reset-encounter" variant="outline" size="sm" onClick={handleReset} className="h-8 text-xs">
             <RotateCcw className="h-3 w-3 mr-1" />Reset
           </Button>
-          <Button
-            data-testid="button-run-encounter"
-            size="sm" onClick={() => dryRun.mutate()} disabled={dryRun.isPending}
-            className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white"
-          >
+          <Button data-testid="button-run-encounter" size="sm" onClick={() => dryRun.mutate()} disabled={dryRun.isPending}
+            className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white">
             {dryRun.isPending
               ? <><Loader2 className="animate-spin h-3 w-3 mr-1" />Running…</>
-              : <><Play className="h-3 w-3 mr-1" />{result ? "Re-run Pipeline" : "Run 13-Step Pipeline"}</>
-            }
+              : <><Play className="h-3 w-3 mr-1" />{result ? "Re-run Pipeline" : "Run 13-Step Pipeline"}</>}
           </Button>
         </div>
       </div>
 
-      {/* ── Greeting banner ─────────────────────────────────────────────── */}
-      <div className="px-5 py-2 bg-blue-50/60 dark:bg-blue-950/30 border-b text-sm text-blue-800 dark:text-blue-300 font-medium flex items-center gap-2">
-        <span>"Hi {patientName}, I'm Dr. Chen. What brought you in today?"</span>
-        <span className="font-normal text-blue-700 dark:text-blue-400">
-          — {config.complaintLabel}? Walk me through it…
-        </span>
-        {!isStaticComplaint && (
-          <span className="ml-auto text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1">
-            {isDynamicLoading
-              ? <><Loader2 className="h-3 w-3 animate-spin" /> Loading KB config…</>
-              : <><BookOpen className="h-3 w-3" /> KB-assembled config</>}
-          </span>
-        )}
-        {isStaticComplaint && (
-          <span className="ml-auto text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-            <CheckCircle2 className="h-3 w-3" /> Verified hand-crafted config ★
-          </span>
-        )}
+      {/* ── CHIEF COMPLAINT CARD — prominently above vitals ─────────────── */}
+      <div className="px-5 pt-4 pb-2 bg-blue-50/70 dark:bg-blue-950/30 border-b">
+        <div className="flex items-start gap-4">
+          <div className="flex-1">
+            {/* Bold complaint label in plain language */}
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Chief Complaint</span>
+              {!isStaticComplaint && isDynamicLoading
+                ? <span className="text-xs text-blue-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Loading KB config…</span>
+                : isStaticComplaint
+                  ? <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />Verified config ★</span>
+                  : <span className="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1"><BookOpen className="h-3 w-3" />KB-assembled</span>}
+            </div>
+            <div className="text-2xl font-bold text-foreground mb-2" data-testid="text-chief-complaint-label">
+              {config.complaintLabel}
+            </div>
+            <div className="flex items-end gap-3 flex-wrap">
+              {/* Patient's own words */}
+              <div className="flex-1 min-w-[240px]">
+                <label className="text-xs text-muted-foreground block mb-1">In {patientName}'s own words</label>
+                <Input
+                  data-testid="input-chief-complaint-text"
+                  value={chiefComplaintText}
+                  onChange={e => setChiefComplaintText(e.target.value)}
+                  placeholder={`"I have ${config.complaintLabel?.toLowerCase()}, it started this morning…"`}
+                  className="h-8 text-sm bg-white dark:bg-background"
+                />
+              </div>
+              {/* Duration */}
+              <div className="w-40">
+                <label className="text-xs text-muted-foreground block mb-1">Duration / onset</label>
+                <Input
+                  data-testid="input-duration"
+                  value={duration}
+                  onChange={e => setDuration(e.target.value)}
+                  placeholder="e.g. 2 hours, 3 days…"
+                  className="h-8 text-sm bg-white dark:bg-background"
+                />
+              </div>
+            </div>
+          </div>
+          {/* KB source badge */}
+          <div className="text-right text-xs text-muted-foreground mt-1 shrink-0">
+            <div className="font-mono text-muted-foreground/60">{complaint}</div>
+            {isStaticComplaint && <div className="text-green-600 dark:text-green-400 font-medium">Live criteria scoring</div>}
+          </div>
+        </div>
       </div>
 
       {/* ── Two-column main layout ──────────────────────────────────────── */}
@@ -693,132 +711,181 @@ export default function EncounterSimulatorPage() {
         {/* ── LEFT: Encounter Intake ──────────────────────────────────── */}
         <div className="w-[57%] shrink-0 overflow-y-auto p-5 space-y-1">
 
+          {/* Instruction hint */}
+          <p className="text-xs text-muted-foreground italic mb-1 flex items-center gap-1">
+            <Circle className="h-2.5 w-2.5" />
+            Click any button to answer: <span className="text-green-600 font-semibold">✓ yes</span> · <span className="text-red-500 font-semibold">✗ no</span> · <span className="text-muted-foreground">? unanswered</span>.
+            Differentials update live on the right as you answer.
+          </p>
+
           {/* ── 1. VITALS ────────────────────────────────────────────── */}
           <SectionHeader icon={<Activity className="h-4 w-4" />} label="Vitals" step={1} />
           <div className="grid grid-cols-5 gap-3">
-            <VitalInput label="O₂ Sat"    field="O2_sat"      unit="%" min={95} max={100} placeholder="98"    inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Heart Rate" field="heart_rate"  unit="bpm" min={60} max={100} placeholder="78"  inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Systolic BP"field="systolic_bp" unit="mmHg" min={90} max={140} placeholder="120" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Temp"       field="temp_f"      unit="°F" min={97} max={99.5} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Resp Rate"  field="resp_rate"   unit="/min" min={12} max={20} placeholder="16"   inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="O₂ Sat"     field="O2_sat"      unit="%" min={95} max={100} placeholder="98"    inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Heart Rate"  field="heart_rate"  unit="bpm" min={60} max={100} placeholder="78"  inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Systolic BP" field="systolic_bp" unit="mmHg" min={90} max={140} placeholder="120" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Temp"        field="temp_f"      unit="°F" min={97} max={99.5} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Resp Rate"   field="resp_rate"   unit="/min" min={12} max={20} placeholder="16"   inputs={inputs} setInputs={setInputs} />
           </div>
 
           {/* ── 2. HPI ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2} />
+          <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2}
+            open={openSections.hpi} onToggle={() => toggleSection("hpi")} count={config.hpiQuestions.length} />
+          {openSections.hpi && (
+            <>
+              {/* Onset timing chips */}
+              {config.onsetOptions && config.onsetOptions.length > 0 && (
+                <div className="mb-2">
+                  <label className="text-xs text-muted-foreground mb-1 block">Onset timing — how did it start?</label>
+                  <div className="flex gap-1 flex-wrap">
+                    {config.onsetOptions.map(o => (
+                      <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
+                        onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
+                        className={`text-xs px-2.5 py-1.5 rounded border font-medium transition-all ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                      >{inputs.onset_timing === o ? "✓ " : ""}{o}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-          {/* Onset timing chips */}
-          {config.onsetOptions && (
-            <div className="mb-2">
-              <label className="text-xs text-muted-foreground mb-1 block">Onset timing</label>
-              <div className="flex gap-1 flex-wrap">
-                {config.onsetOptions.map(o => (
-                  <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
-                    onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
-                    className={`text-xs px-2 py-1 rounded border ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                  >{o}</button>
-                ))}
-              </div>
-            </div>
+              {/* Severity scale */}
+              {config.hasSeverityScale && (
+                <div className="mb-2">
+                  <label className="text-xs text-muted-foreground mb-1 block">Pain / symptom severity — 1 (mild) to 10 (worst ever)</label>
+                  <div className="flex gap-0.5">
+                    {SEVERITY_SCALE.map(n => (
+                      <button key={n} data-testid={`severity-${n}`}
+                        onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
+                        className={`text-xs w-7 h-7 rounded border font-mono font-bold ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                      >{n}</button>
+                    ))}
+                    {inputs.severity && (
+                      <span className={`ml-2 text-xs font-semibold self-center ${Number(inputs.severity) >= 7 ? "text-red-600" : Number(inputs.severity) >= 4 ? "text-orange-500" : "text-blue-600"}`}>
+                        {Number(inputs.severity) >= 7 ? "Severe" : Number(inputs.severity) >= 4 ? "Moderate" : "Mild"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Character picker */}
+              {config.characters && config.characters.length > 0 && (
+                <div className="mb-2">
+                  <label className="text-xs text-muted-foreground mb-1 block">Character / quality — select all that apply</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {config.characters.map(ch => (
+                      <button key={ch.field} data-testid={`char-${ch.field}`}
+                        onClick={() => toggleChar(ch)}
+                        className={`text-sm px-3 py-1.5 rounded border transition-all font-medium ${inputs[ch.field] === "yes" ? "bg-amber-100 border-amber-500 text-amber-900 dark:bg-amber-900 dark:text-amber-100" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                      >{inputs[ch.field] === "yes" ? "✓ " : ""}{ch.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* HPI yes/no questions */}
+              {config.hpiQuestions.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  {config.hpiQuestions.map(q => (
+                    <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+                  ))}
+                </div>
+              )}
+              {config.hpiQuestions.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">No HPI questions configured for this complaint.</p>
+              )}
+            </>
           )}
-
-          {/* Severity scale */}
-          {config.hasSeverityScale && (
-            <div className="mb-2">
-              <label className="text-xs text-muted-foreground mb-1 block">Severity 1–10</label>
-              <div className="flex gap-0.5">
-                {SEVERITY_SCALE.map(n => (
-                  <button key={n} data-testid={`severity-${n}`}
-                    onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
-                    className={`text-xs w-6 h-6 rounded border font-mono ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                  >{n}</button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Character picker */}
-          {config.characters && config.characters.length > 0 && (
-            <div className="mb-2">
-              <label className="text-xs text-muted-foreground mb-1 block">Character — select all that apply</label>
-              <div className="flex flex-wrap gap-1.5">
-                {config.characters.map(ch => (
-                  <button key={ch.field} data-testid={`char-${ch.field}`}
-                    onClick={() => toggleChar(ch)}
-                    className={`text-sm px-3 py-1.5 rounded border transition-all ${inputs[ch.field] === "yes" ? "bg-amber-100 border-amber-500 text-amber-900 dark:bg-amber-900 dark:text-amber-100" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                  >{inputs[ch.field] === "yes" ? "✓ " : ""}{ch.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* HPI yes/no questions */}
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            {config.hpiQuestions.map(q => (
-              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-            ))}
-          </div>
 
           {/* ── 3. ROS ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3} />
-          <div className="grid grid-cols-2 gap-2">
-            {config.rosQuestions.map(q => (
-              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-            ))}
-          </div>
-
-          {/* ── 4. PMH ───────────────────────────────────────────────── */}
-          <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4} />
-          <div className="grid grid-cols-2 gap-2">
-            {config.pmhQuestions.map(q => (
-              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-            ))}
-          </div>
-
-          {/* ── 5. Family Hx ─────────────────────────────────────────── */}
-          <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5} />
-          <div className="grid grid-cols-2 gap-2">
-            {config.fhxQuestions.map(q => (
-              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-            ))}
-          </div>
-
-          {/* ── 6. Social ─────────────────────────────────────────────── */}
-          <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6} />
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Sex</label>
-              <div className="flex gap-1">
-                {["Male","Female","Other"].map(s => (
-                  <button key={s} data-testid={`sex-${s.toLowerCase()}`}
-                    onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
-                    className={`text-xs px-2 py-1 rounded border ${inputs.sex === s.toLowerCase() ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                  >{s}</button>
+          <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3}
+            open={openSections.ros} onToggle={() => toggleSection("ros")} count={config.rosQuestions.length} />
+          {openSections.ros && (
+            config.rosQuestions.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {config.rosQuestions.map(q => (
+                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
                 ))}
               </div>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">No ROS questions configured for this complaint.</p>
+            )
+          )}
+
+          {/* ── 4. PMH ───────────────────────────────────────────────── */}
+          <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4}
+            open={openSections.pmh} onToggle={() => toggleSection("pmh")} count={config.pmhQuestions.length} />
+          {openSections.pmh && (
+            config.pmhQuestions.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {config.pmhQuestions.map(q => (
+                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">No PMH questions configured.</p>
+            )
+          )}
+
+          {/* ── 5. Family Hx ─────────────────────────────────────────── */}
+          <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5}
+            open={openSections.fhx} onToggle={() => toggleSection("fhx")} count={config.fhxQuestions.length} />
+          {openSections.fhx && (
+            config.fhxQuestions.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {config.fhxQuestions.map(q => (
+                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">No family history questions configured.</p>
+            )
+          )}
+
+          {/* ── 6. Social ─────────────────────────────────────────────── */}
+          <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6}
+            open={openSections.social} onToggle={() => toggleSection("social")} />
+          {openSections.social && (
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Sex</label>
+                <div className="flex gap-1">
+                  {["Male","Female","Other"].map(s => (
+                    <button key={s} data-testid={`sex-${s.toLowerCase()}`}
+                      onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
+                      className={`text-xs px-2 py-1 rounded border font-medium ${inputs.sex === s.toLowerCase() ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                    >{s}</button>
+                  ))}
+                </div>
+              </div>
+              <VitalInput label="Age" field="age" unit="yr" min={0} max={120} placeholder="45" inputs={inputs} setInputs={setInputs} />
+              <YNToggle label="Smoker (current or former)" field="smoker" inputs={inputs} setInputs={setInputs} compact />
+              {(inputs.sex === "female" || inputs.sex === undefined) && (
+                <YNToggle label="Pregnant" field="pregnancy_confirmed" inputs={inputs} setInputs={setInputs} compact />
+              )}
+              <YNToggle label="Age >65 / Elderly" field="elderly" inputs={inputs} setInputs={setInputs} compact />
             </div>
-            <VitalInput label="Age" field="age" unit="yr" min={0} max={120} placeholder="45" inputs={inputs} setInputs={setInputs} />
-            <YNToggle label="Smoker (current or former)" field="smoker" inputs={inputs} setInputs={setInputs} compact />
-            {(inputs.sex === "female" || inputs.sex === undefined) && (
-              <YNToggle label="Pregnant" field="pregnancy_confirmed" inputs={inputs} setInputs={setInputs} compact />
-            )}
-            <YNToggle label="Age >65 / Elderly" field="elderly" inputs={inputs} setInputs={setInputs} compact />
-          </div>
+          )}
 
           {/* ── 7. Meds & Allergies ─────────────────────────────────── */}
-          <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7} />
-          <div className="grid grid-cols-2 gap-2">
-            {config.medsQuestions.map(q => (
-              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-            ))}
-          </div>
+          <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7}
+            open={openSections.meds} onToggle={() => toggleSection("meds")} count={config.medsQuestions.length} />
+          {openSections.meds && (
+            config.medsQuestions.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {config.medsQuestions.map(q => (
+                  <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">No medications/allergies questions configured.</p>
+            )
+          )}
 
           {/* ── Run button at bottom ──────────────────────────────────── */}
           <div className="pt-4">
-            <Button
-              data-testid="button-run-encounter-bottom"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={() => dryRun.mutate()} disabled={dryRun.isPending}
-            >
+            <Button data-testid="button-run-encounter-bottom"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white" onClick={() => dryRun.mutate()} disabled={dryRun.isPending}>
               {dryRun.isPending
                 ? <><Loader2 className="animate-spin h-4 w-4 mr-2" />Executing 13-step clinical pipeline…</>
                 : <><Zap className="h-4 w-4 mr-2" />{result ? "Re-run 13-Step Pipeline" : "Execute 13-Step Pipeline"}</>}
@@ -829,11 +896,29 @@ export default function EncounterSimulatorPage() {
         {/* ── RIGHT: Live Clinical Assessment ─────────────────────────── */}
         <div className="flex-1 overflow-y-auto p-4 bg-muted/10 space-y-4 min-w-0">
 
-          {/* Critical Alerts */}
+          {/* Disposition — always shown at top */}
+          <div>
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+              <ArrowRight className="h-3.5 w-3.5" />Disposition
+              <span className="font-normal">(updates as you answer)</span>
+            </div>
+            <div data-testid="disposition-card" className={`rounded-lg px-4 py-3 ${disposition.color} space-y-0.5`}>
+              <div className="font-bold text-base">{disposition.level}</div>
+              <div className="text-xs opacity-90">{disposition.reason || "Answer questions on the left to see a disposition recommendation."}</div>
+            </div>
+            {result && (
+              <div className={`rounded-lg mt-2 px-4 py-3 ${result.hardStop ? "bg-red-600 text-white" : "bg-green-700 text-white"}`}>
+                <div className="font-bold text-sm">Pipeline result: {result.finalDisposition}</div>
+                <div className="text-xs opacity-90">{result.totalRulesFired} rules fired · {result.steps?.length ?? 13} steps completed</div>
+              </div>
+            )}
+          </div>
+
+          {/* Critical Red Flags */}
           {anyHardFlag && (
             <div className="rounded-lg border-2 border-red-500 bg-red-50 dark:bg-red-950/60 p-3 space-y-1 animate-pulse">
               <div className="flex items-center gap-2 font-bold text-red-700 dark:text-red-300">
-                <AlertTriangle className="h-4 w-4" />CRITICAL RED FLAGS
+                <AlertTriangle className="h-4 w-4" />CRITICAL RED FLAGS TRIGGERED
               </div>
               {activeRedFlags.map(rf => (
                 <div key={rf.id} className="text-sm text-red-700 dark:text-red-300">⚠ {rf.label}</div>
@@ -841,59 +926,53 @@ export default function EncounterSimulatorPage() {
             </div>
           )}
 
-          {/* Workup Cascade */}
-          <div>
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
-              <FlaskConical className="h-3.5 w-3.5" />Workup Indicated
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {config.workup.map(w => {
-                const active = w.check(inputs);
-                return (
-                  <div key={w.id} className={`rounded-lg border p-2.5 flex items-start gap-2 ${active ? "border-blue-400 bg-blue-50/60 dark:bg-blue-950/40" : "border-border opacity-40"}`}>
-                    <div className={active ? "text-blue-600" : "text-muted-foreground"}>
-                      {WORKUP_ICONS[w.iconId] ?? <Activity className="h-4 w-4" />}
-                    </div>
-                    <div>
-                      <div className={`text-sm font-semibold ${active ? "" : "text-muted-foreground"}`}>{w.label}</div>
-                      <div className="text-xs text-muted-foreground">{w.indication}</div>
-                    </div>
-                    {w.always && <Badge className="ml-auto bg-blue-600 text-white text-xs shrink-0">Always</Badge>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Differential Assessment */}
           <div>
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5">
-              <Stethoscope className="h-3.5 w-3.5" />Differential Assessment
-              <span className="font-normal">(criteria update as you answer)</span>
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-1.5">
+              <Stethoscope className="h-3.5 w-3.5" />Differential Diagnoses
             </div>
-            <div className="space-y-2">
-              {config.differentials.map(dx => (
-                <DifferentialCard key={dx.id} dx={dx} inputs={inputs} />
-              ))}
-            </div>
-          </div>
-
-          {/* Disposition Estimate */}
-          <div>
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
-              <ArrowRight className="h-3.5 w-3.5" />Disposition Estimate
-            </div>
-            <div className={`rounded-lg px-4 py-3 ${disposition.color} space-y-0.5`}>
-              <div className="font-bold text-base">{disposition.level}</div>
-              <div className="text-xs opacity-90">{disposition.reason}</div>
-            </div>
-            {result && (
-              <div className={`rounded-lg mt-2 px-4 py-3 ${result.hardStop ? "bg-red-600 text-white" : "bg-green-700 text-white"}`}>
-                <div className="font-bold text-sm">Pipeline: {result.finalDisposition}</div>
-                <div className="text-xs opacity-90">{result.totalRulesFired} rules fired · {result.steps?.length ?? 13} steps</div>
+            <p className="text-xs text-muted-foreground mb-2">
+              Each diagnosis shows a <span className="font-semibold">likelihood %</span> based on how many of its clinical criteria match your answers.
+              A higher % means more criteria are met. <span className="text-red-500 font-semibold">Cannot-miss</span> diagnoses are always shown.
+            </p>
+            {config.differentials.length > 0 ? (
+              <div className="space-y-2">
+                {config.differentials.map(dx => (
+                  <DifferentialCard key={dx.id} dx={dx} inputs={inputs} />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+                No differentials configured for this complaint. Run the pipeline for AI-generated assessment.
               </div>
             )}
           </div>
+
+          {/* Workup Cascade */}
+          {config.workup.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
+                <FlaskConical className="h-3.5 w-3.5" />Workup Indicated
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {config.workup.map(w => {
+                  const active = w.check(inputs);
+                  return (
+                    <div key={w.id} className={`rounded-lg border p-2.5 flex items-start gap-2 transition-all ${active ? "border-blue-400 bg-blue-50/60 dark:bg-blue-950/40" : "border-border opacity-40"}`}>
+                      <div className={active ? "text-blue-600" : "text-muted-foreground"}>
+                        {WORKUP_ICONS[w.iconId] ?? <Activity className="h-4 w-4" />}
+                      </div>
+                      <div>
+                        <div className={`text-sm font-semibold ${active ? "" : "text-muted-foreground"}`}>{w.label}</div>
+                        <div className="text-xs text-muted-foreground">{w.indication}</div>
+                      </div>
+                      {w.always && <Badge className="ml-auto bg-blue-600 text-white text-xs shrink-0">Always</Badge>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Rule Editor Panel */}
           {selectedRule && (
@@ -901,11 +980,8 @@ export default function EncounterSimulatorPage() {
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
                 <Pencil className="h-3 w-3" />Rule Editor
               </div>
-              <RuleEditor
-                rule={selectedRule}
-                onClose={() => setSelectedRule(null)}
-                onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/master-rules"] }); }}
-              />
+              <RuleEditor rule={selectedRule} onClose={() => setSelectedRule(null)}
+                onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/master-rules"] }); }} />
               <div className="border-t mt-3 pt-3">
                 <Button size="sm" variant="outline" className="w-full h-7 text-xs"
                   onClick={() => { setSelectedRule(null); dryRun.mutate(); }} disabled={dryRun.isPending}>
@@ -920,16 +996,13 @@ export default function EncounterSimulatorPage() {
       {/* ── Full-width: 13-Step Pipeline Trace ─────────────────────────── */}
       {(result || dryRun.isPending) && (
         <div className="border-t bg-background">
-          <button
-            className="flex items-center gap-2 px-5 py-2.5 w-full text-left hover:bg-muted/30 transition-colors"
-            onClick={() => setShowTrace(t => !t)}
-          >
+          <button className="flex items-center gap-2 px-5 py-2.5 w-full text-left hover:bg-muted/30 transition-colors"
+            onClick={() => setShowTrace(t => !t)}>
             <ListTree className="h-4 w-4 text-blue-600" />
             <span className="text-sm font-semibold">13-Step Pipeline Trace</span>
             {result && <Badge variant="outline" className="text-xs">{result.totalRulesFired} rules fired</Badge>}
             {showTrace ? <ChevronUp className="h-4 w-4 ml-auto text-muted-foreground" /> : <ChevronDown className="h-4 w-4 ml-auto text-muted-foreground" />}
           </button>
-
           {showTrace && (
             <div className="px-5 pb-5 space-y-2 max-h-[50vh] overflow-y-auto">
               {dryRun.isPending && (
