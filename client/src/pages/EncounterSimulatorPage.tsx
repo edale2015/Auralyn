@@ -24,7 +24,7 @@ import {
   Activity, Thermometer, Wind, Droplets, User, RefreshCw,
   ShieldAlert, ArrowRight, FlaskConical, Pill, ClipboardList,
   ListTree, BookOpen, RotateCcw, Users, MessageSquare, FileText,
-  Circle, CircleCheck, CircleX, Minus,
+  Circle, CircleCheck, CircleX, Minus, Database,
 } from "lucide-react";
 import {
   ENCOUNTER_CONFIGS,
@@ -371,11 +371,15 @@ function StepRow({ step, expanded, onToggle, onSelectRule }: { step: any; expand
   );
 }
 
-// ── System ordering for grouped dropdown ─────────────────────────────────────
+// ── System ordering for grouped dropdown (30 systems) ────────────────────────
 const SYSTEM_ORDER = [
-  "Cardiovascular", "Pulmonology", "GI", "ENT", "GU/Urology", "Neurology",
-  "MSK/Ortho", "Dermatology", "Endocrine", "Infectious Disease",
-  "Environmental", "Toxicology", "Psychiatry", "General", "Other",
+  "Cardiovascular", "Pulmonology", "GI", "ENT", "OB/Gyn", "GU/Urology",
+  "Neurology", "MSK/Ortho", "Dermatology", "Endocrine/Metabolic",
+  "Allergy/Immunology", "Ophthalmology", "Infectious Disease",
+  "Environmental", "Occupational/Industrial", "Toxicology",
+  "Psychiatry", "Trauma/Emergency", "Wound/Burns", "Pediatrics",
+  "Hematology", "Vascular", "Weight/Nutrition", "General",
+  "Other",
 ];
 
 // Static complaint IDs (hand-crafted with live criteria scoring)
@@ -397,13 +401,15 @@ export default function EncounterSimulatorPage() {
   const [runCount, setRunCount]           = useState(0);
   const [showTrace, setShowTrace]         = useState(false);
   const [complaintSearch, setComplaintSearch] = useState("");
+  const [fullMode, setFullMode]           = useState(false);
 
-  // ── Fetch full complaint list from KB ─────────────────────────────────────
-  const { data: apiComplaintList } = useQuery<any[]>({
-    queryKey: ["/api/encounter-configs"],
+  // ── Fetch complaint list from KB ──────────────────────────────────────────
+  const { data: apiComplaintList, isFetching: isComplaintListFetching } = useQuery<any[]>({
+    queryKey: ["/api/encounter-configs", fullMode ? "full" : "standard"],
     queryFn: async () => {
       const token = localStorage.getItem("app_auth_token");
-      const res = await fetch("/api/encounter-configs", {
+      const url = fullMode ? "/api/encounter-configs?full=true" : "/api/encounter-configs";
+      const res = await fetch(url, {
         credentials: "include",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -565,22 +571,31 @@ export default function EncounterSimulatorPage() {
                     className="h-7 text-xs"
                     data-testid="input-complaint-search"
                   />
-                  <div className="text-xs text-muted-foreground mt-1 px-0.5">
-                    {filteredComplaints.length} complaint{filteredComplaints.length !== 1 ? "s" : ""}
-                    {complaintSearch ? ` matching "${complaintSearch}"` : ""}
+                  <div className="text-xs text-muted-foreground mt-1 px-0.5 flex items-center gap-1.5">
+                    {isComplaintListFetching
+                      ? <><Loader2 className="h-3 w-3 animate-spin" />Loading…</>
+                      : <>{filteredComplaints.length} complaint{filteredComplaints.length !== 1 ? "s" : ""}
+                          {complaintSearch ? ` matching "${complaintSearch}"` : ""}
+                          {fullMode && <span className="text-blue-500 font-semibold ml-1">· Full KB</span>}
+                        </>
+                    }
                   </div>
                 </div>
                 {groupedComplaints.map(group => (
                   <div key={group.system}>
                     <div className="px-2 py-1 text-xs font-bold text-muted-foreground uppercase tracking-wide bg-muted/40 sticky top-[68px]">
                       {group.system}
+                      <span className="ml-1 font-normal text-muted-foreground/60">({group.items.length})</span>
                     </div>
                     {group.items.map((c: any) => (
                       <SelectItem key={c.id} value={c.id} className="text-xs pl-4">
                         <span className="font-medium">{c.label}</span>
                         {c.isStatic && <span className="ml-1.5 text-green-600 text-xs">★</span>}
-                        {!c.isStatic && c.dxCount && (
+                        {!c.isStatic && c.dxCount > 0 && (
                           <span className="ml-1.5 text-muted-foreground text-xs">{c.dxCount}dx</span>
+                        )}
+                        {!c.isStatic && c.dxCount === 0 && c.ruleCount > 0 && (
+                          <span className="ml-1.5 text-blue-400 text-xs">{c.ruleCount}r</span>
                         )}
                       </SelectItem>
                     ))}
@@ -595,6 +610,36 @@ export default function EncounterSimulatorPage() {
               placeholder="Patient name"
               className="h-8 text-xs w-28"
             />
+            {/* ── Expand to Full KB button ────────────────────────────── */}
+            {!fullMode ? (
+              <Button
+                data-testid="button-expand-full-kb"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950 shrink-0"
+                onClick={() => {
+                  setFullMode(true);
+                  toast({
+                    title: "Loading Full KB…",
+                    description: "Fetching all 1,000+ complaints across 30 systems.",
+                  });
+                }}
+              >
+                <Database className="h-3.5 w-3.5" />
+                Load Full KB
+              </Button>
+            ) : (
+              <div
+                data-testid="badge-full-kb-active"
+                className="flex items-center gap-1 h-8 px-2.5 rounded border border-blue-400 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-xs font-medium shrink-0"
+              >
+                <Database className="h-3 w-3" />
+                {isComplaintListFetching
+                  ? <><Loader2 className="h-3 w-3 animate-spin" />Loading…</>
+                  : <>{apiComplaintList?.length ?? "…"} complaints · 30 systems</>
+                }
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
