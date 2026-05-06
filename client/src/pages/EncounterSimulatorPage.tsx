@@ -989,12 +989,13 @@ export default function EncounterSimulatorPage() {
 
           {/* ── 1. VITALS ────────────────────────────────────────────── */}
           <SectionHeader icon={<Activity className="h-4 w-4" />} label="Vitals" step={1} />
-          <div className="grid grid-cols-5 gap-3">
-            <VitalInput label="O₂ Sat"     field="O2_sat"      unit="%" min={95} max={100} placeholder="98"    inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Heart Rate"  field="heart_rate"  unit="bpm" min={60} max={100} placeholder="78"  inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Systolic BP" field="systolic_bp" unit="mmHg" min={90} max={140} placeholder="120" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Temp"        field="temp_f"      unit="°F" min={97} max={99.5} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Resp Rate"   field="resp_rate"   unit="/min" min={12} max={20} placeholder="16"   inputs={inputs} setInputs={setInputs} />
+          <div className="grid grid-cols-6 gap-3">
+            <VitalInput label="O₂ Sat"      field="O2_sat"        unit="%" min={95} max={100} placeholder="98"    inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Heart Rate"   field="heart_rate"    unit="bpm" min={60} max={100} placeholder="78"  inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Systolic BP"  field="systolic_bp"   unit="mmHg" min={70} max={200} placeholder="120" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Diastolic BP" field="diastolic_bp"  unit="mmHg" min={40} max={130} placeholder="80"  inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Temp"         field="temp_f"        unit="°F" min={95} max={106} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Resp Rate"    field="resp_rate"     unit="/min" min={8} max={40} placeholder="16"   inputs={inputs} setInputs={setInputs} />
           </div>
 
           {/* ── 2. HPI ───────────────────────────────────────────────── */}
