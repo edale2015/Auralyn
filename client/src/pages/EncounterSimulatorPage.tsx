@@ -9,7 +9,7 @@
  * All KB complaints are available automatically via the API.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -392,7 +392,13 @@ export default function EncounterSimulatorPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const [complaint, setComplaint]         = useState("chest_pain");
+  // Read ?c= query param for deep-link from Complaints Review page
+  const initialComplaint = useMemo(() => {
+    const p = new URLSearchParams(window.location.search).get("c");
+    return p ? decodeURIComponent(p) : "chest_pain";
+  }, []);
+
+  const [complaint, setComplaint]         = useState(initialComplaint);
   const [patientName, setPatientName]     = useState("Mr. Jones");
   const [inputs, setInputs]               = useState<Inputs>({});
   const [result, setResult]               = useState<any | null>(null);
@@ -401,7 +407,8 @@ export default function EncounterSimulatorPage() {
   const [runCount, setRunCount]           = useState(0);
   const [showTrace, setShowTrace]         = useState(false);
   const [complaintSearch, setComplaintSearch] = useState("");
-  const [fullMode, setFullMode]           = useState(false);
+  // Auto-enable full mode if the deep-linked complaint isn't in the static 15
+  const [fullMode, setFullMode]           = useState(!STATIC_IDS.has(initialComplaint) && initialComplaint !== "chest_pain");
 
   // ── Fetch complaint list from KB ──────────────────────────────────────────
   const { data: apiComplaintList, isFetching: isComplaintListFetching } = useQuery<any[]>({

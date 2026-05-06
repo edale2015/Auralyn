@@ -6,7 +6,7 @@ import {
   Smartphone, LayoutGrid, Radio, MonitorDot, FlaskConical,
   FileCheck, CreditCard, Globe2, Phone, GitBranch, ShieldCheck,
   Hospital, LayoutDashboard, Brain, Database, BarChart3,
-  Landmark, Package, Radar, GraduationCap, ClipboardCheck, Map,
+  Landmark, Package, Radar, GraduationCap, ClipboardCheck, Map, List,
 } from "lucide-react";
 
 // ── Nav structure: grouped sections ──────────────────────────────────────────
@@ -18,6 +18,7 @@ const NAV_SECTIONS: NavSection[] = [
     heading: "Clinical",
     items: [
       { path: "/encounter",              label: "Clinical Encounter",     icon: Stethoscope  },
+      { path: "/complaints-review",      label: "Complaints Review",      icon: List         },
       { path: "/rule-map",               label: "Master Rule Map",        icon: Map          },
       { path: ROUTES.CLINICAL,           label: "Clinical Review",        icon: ClipboardCheck },
       { path: ROUTES.INTAKE,             label: "Intake",                 icon: ClipboardList },
