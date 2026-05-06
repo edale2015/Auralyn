@@ -1,17 +1,16 @@
 /**
  * EncounterSimulatorPage.tsx
  *
- * Fully config-driven clinical encounter page.
- * All complaint-specific data lives in client/src/data/encounterConfigs.ts.
- * Edit questions, differentials, workup, red flags, and disposition there.
+ * Config-driven clinical encounter page.
+ * The 15 complaints in encounterConfigs.ts are fully hand-crafted (live criteria scoring).
+ * All other complaints load dynamically from /api/encounter-configs/:id (KB-assembled).
  *
- * Adding a new complaint = add a config block in encounterConfigs.ts,
- * register it in ENCOUNTER_CONFIGS, add it to ENCOUNTER_COMPLAINTS.
- * No changes needed here.
+ * To add a new hand-crafted complaint: add a config block in encounterConfigs.ts.
+ * All KB complaints are available automatically via the API.
  */
 
 import { useState, useCallback, useMemo } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -53,6 +52,53 @@ const WORKUP_ICONS: Record<string, React.ReactNode> = {
   pill:        <Pill         className="h-4 w-4" />,
   thermometer: <Thermometer  className="h-4 w-4" />,
 };
+
+// ── Adapter: convert API JSON response → runtime EncounterConfig ──────────────
+function adaptApiConfig(data: any): any {
+  return {
+    complaintId: data.complaint_id,
+    complaintLabel: data.complaintLabel,
+    hpiQuestions: data.hpiQuestions ?? [],
+    rosQuestions: data.rosQuestions ?? [],
+    pmhQuestions: data.pmhQuestions ?? [],
+    fhxQuestions: data.fhxQuestions ?? [],
+    medsQuestions: data.medsQuestions ?? [],
+    characters: data.characters ?? [],
+    onsetOptions: data.onsetOptions ?? [],
+    hasSeverityScale: true,
+    differentials: (data.differentials ?? []).map((dx: any) => ({
+      id: dx.id,
+      name: dx.label,
+      icd: dx.icdCode ?? "",
+      cannotMiss: !!dx.cannotMiss,
+      // Criteria are text-only strings from the KB — mark with _text prefix so
+      // DifferentialCard renders them as static lines without input checking.
+      criteria: (dx.criteria ?? []).map((text: string, i: number) => ({
+        field: `_text_${dx.id}_${i}`,
+        label: text,
+      })),
+      keyQuestions: dx.keyQuestions ?? [],
+    })),
+    workup: (data.workup ?? []).map((w: any) => ({
+      id: w.id,
+      label: w.label,
+      indication: w.indication,
+      iconId: w.iconId ?? "flask",
+      always: false,
+      check: () => true,
+    })),
+    redFlags: (data.redFlags ?? []).map((rf: any) => ({
+      id: rf.id,
+      label: rf.label,
+      check: () => false,
+    })),
+    computeDisposition: () => ({
+      level: "Complete Full Assessment",
+      reason: "Run the 13-step pipeline to get the full disposition recommendation.",
+      color: "bg-slate-100 border-slate-300 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300",
+    }),
+  };
+}
 
 // ── Severity scale ────────────────────────────────────────────────────────────
 const SEVERITY_SCALE = [1,2,3,4,5,6,7,8,9,10];
@@ -133,20 +179,30 @@ function CritIcon({ val, invert }: { val: "yes" | "no" | undefined; invert?: boo
 }
 
 // ── Differential card ─────────────────────────────────────────────────────────
-function DifferentialCard({ dx, inputs }: { dx: DifferentialConfig; inputs: Inputs }) {
-  const scored = dx.criteria.map(c => {
+function DifferentialCard({ dx, inputs }: { dx: any; inputs: Inputs }) {
+  // Criteria whose field starts with "_text_" are text-only (dynamic/KB configs).
+  // They don't check inputs — they just display static clinical text.
+  const isTextOnly = (field: string) => field.startsWith("_text_");
+
+  const scored = dx.criteria.map((c: any) => {
+    if (isTextOnly(c.field)) return { ...c, met: false, unknown: true, textOnly: true };
     const raw = inputs[c.field] as "yes" | "no" | undefined;
     const met = c.invert ? raw === "no" : raw === "yes";
     const unknown = raw === undefined;
-    return { ...c, met, unknown };
+    return { ...c, met, unknown, textOnly: false };
   });
-  const metCount = scored.filter(c => c.met).length;
-  const pct = Math.round((metCount / scored.length) * 100);
+
+  // Only count live (non-text-only) criteria for the percentage
+  const liveCriteria = scored.filter((c: any) => !c.textOnly);
+  const metCount = liveCriteria.filter((c: any) => c.met).length;
+  const pct = liveCriteria.length > 0 ? Math.round((metCount / liveCriteria.length) * 100) : 0;
+  const allTextOnly = liveCriteria.length === 0;
 
   const urgency =
-    dx.cannotMiss && pct >= 50 ? "border-red-400 bg-red-50/60 dark:bg-red-950/40"
-    : dx.cannotMiss && pct > 0  ? "border-orange-300 bg-orange-50/50 dark:bg-orange-950/30"
-    : pct >= 75 ? "border-blue-400 bg-blue-50/40 dark:bg-blue-950/30"
+    dx.cannotMiss && !allTextOnly && pct >= 50 ? "border-red-400 bg-red-50/60 dark:bg-red-950/40"
+    : dx.cannotMiss && !allTextOnly && pct > 0  ? "border-orange-300 bg-orange-50/50 dark:bg-orange-950/30"
+    : !allTextOnly && pct >= 75 ? "border-blue-400 bg-blue-50/40 dark:bg-blue-950/30"
+    : dx.cannotMiss ? "border-orange-200 bg-orange-50/20 dark:bg-orange-950/10"
     : "border-border bg-card";
 
   return (
@@ -159,22 +215,33 @@ function DifferentialCard({ dx, inputs }: { dx: DifferentialConfig; inputs: Inpu
           </div>
           <div className="text-xs text-muted-foreground font-mono">{dx.icd}</div>
         </div>
-        <div className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${
-          pct >= 75 ? "bg-red-600 text-white"
-          : pct >= 50 ? "bg-orange-500 text-white"
-          : pct >= 25 ? "bg-amber-400 text-black"
-          : "bg-muted text-muted-foreground"
-        }`}>{pct}%</div>
+        {!allTextOnly ? (
+          <div className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${
+            pct >= 75 ? "bg-red-600 text-white"
+            : pct >= 50 ? "bg-orange-500 text-white"
+            : pct >= 25 ? "bg-amber-400 text-black"
+            : "bg-muted text-muted-foreground"
+          }`}>{pct}%</div>
+        ) : (
+          dx.cannotMiss && <Badge className="text-xs bg-red-100 text-red-700 border-red-300 dark:bg-red-950 dark:text-red-300 py-0">Cannot Miss</Badge>
+        )}
       </div>
       <div className="space-y-0.5">
-        {scored.map(c => (
-          <div key={c.field} className="flex items-center gap-1.5 text-xs">
-            <CritIcon val={inputs[c.field] as any} invert={c.invert} />
-            <span className={c.met ? "text-foreground" : "text-muted-foreground"}>{c.label}</span>
-          </div>
-        ))}
+        {scored.map((c: any) =>
+          c.textOnly ? (
+            <div key={c.field} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <ArrowRight className="h-3 w-3 mt-0.5 shrink-0 text-muted-foreground/50" />
+              <span>{c.label}</span>
+            </div>
+          ) : (
+            <div key={c.field} className="flex items-center gap-1.5 text-xs">
+              <CritIcon val={inputs[c.field] as any} invert={c.invert} />
+              <span className={c.met ? "text-foreground" : "text-muted-foreground"}>{c.label}</span>
+            </div>
+          )
+        )}
       </div>
-      {metCount > 0 && (
+      {!allTextOnly && metCount > 0 && (
         <div className="w-full bg-muted rounded-full h-1.5 mt-1">
           <div className={`h-1.5 rounded-full transition-all ${pct >= 50 ? "bg-red-500" : "bg-amber-400"}`} style={{ width: `${pct}%` }} />
         </div>
@@ -304,6 +371,16 @@ function StepRow({ step, expanded, onToggle, onSelectRule }: { step: any; expand
   );
 }
 
+// ── System ordering for grouped dropdown ─────────────────────────────────────
+const SYSTEM_ORDER = [
+  "Cardiovascular", "Pulmonology", "GI", "ENT", "GU/Urology", "Neurology",
+  "MSK/Ortho", "Dermatology", "Endocrine", "Infectious Disease",
+  "Environmental", "Toxicology", "Psychiatry", "General", "Other",
+];
+
+// Static complaint IDs (hand-crafted with live criteria scoring)
+const STATIC_IDS = new Set(ENCOUNTER_COMPLAINTS.map((c: any) => c.id));
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════════════════════════
@@ -311,17 +388,93 @@ export default function EncounterSimulatorPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const [complaint, setComplaint]       = useState("chest_pain");
-  const [patientName, setPatientName]   = useState("Mr. Jones");
-  const [inputs, setInputs]             = useState<Inputs>({});
-  const [result, setResult]             = useState<any | null>(null);
-  const [expanded, setExpanded]         = useState<Set<number>>(new Set([1, 2, 7]));
-  const [selectedRule, setSelectedRule] = useState<any | null>(null);
-  const [runCount, setRunCount]         = useState(0);
-  const [showTrace, setShowTrace]       = useState(false);
+  const [complaint, setComplaint]         = useState("chest_pain");
+  const [patientName, setPatientName]     = useState("Mr. Jones");
+  const [inputs, setInputs]               = useState<Inputs>({});
+  const [result, setResult]               = useState<any | null>(null);
+  const [expanded, setExpanded]           = useState<Set<number>>(new Set([1, 2, 7]));
+  const [selectedRule, setSelectedRule]   = useState<any | null>(null);
+  const [runCount, setRunCount]           = useState(0);
+  const [showTrace, setShowTrace]         = useState(false);
+  const [complaintSearch, setComplaintSearch] = useState("");
 
-  // ── Config lookup — this drives the entire page ───────────────────────────
-  const config = ENCOUNTER_CONFIGS[complaint] ?? ENCOUNTER_CONFIGS["chest_pain"];
+  // ── Fetch full complaint list from KB ─────────────────────────────────────
+  const { data: apiComplaintList } = useQuery<any[]>({
+    queryKey: ["/api/encounter-configs"],
+    queryFn: async () => {
+      const token = localStorage.getItem("app_auth_token");
+      const res = await fetch("/api/encounter-configs", {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // ── Merged complaint list: static 15 first, then all API complaints ───────
+  const allComplaints = useMemo(() => {
+    const staticList = ENCOUNTER_COMPLAINTS.map((c: any) => ({ ...c, isStatic: true }));
+    if (!apiComplaintList) return staticList;
+    const extras = apiComplaintList
+      .filter(c => !STATIC_IDS.has(c.id))
+      .map(c => ({ ...c, isStatic: false }));
+    return [...staticList, ...extras];
+  }, [apiComplaintList]);
+
+  // ── Filtered + grouped complaint list ─────────────────────────────────────
+  const filteredComplaints = useMemo(() => {
+    const q = complaintSearch.toLowerCase();
+    return q
+      ? allComplaints.filter(c =>
+          c.label.toLowerCase().includes(q) ||
+          c.id.toLowerCase().includes(q) ||
+          (c.system ?? "").toLowerCase().includes(q)
+        )
+      : allComplaints;
+  }, [allComplaints, complaintSearch]);
+
+  const groupedComplaints = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    for (const c of filteredComplaints) {
+      const sys = c.system ?? "Other";
+      if (!groups[sys]) groups[sys] = [];
+      groups[sys].push(c);
+    }
+    return SYSTEM_ORDER.filter(s => groups[s]?.length).map(s => ({ system: s, items: groups[s] }));
+  }, [filteredComplaints]);
+
+  // ── Dynamic config fetch (for complaints not in the static 15) ────────────
+  const isStaticComplaint = STATIC_IDS.has(complaint);
+  const { data: dynamicConfigData, isLoading: isDynamicLoading } = useQuery<any>({
+    queryKey: ["/api/encounter-configs", complaint],
+    queryFn: async () => {
+      const token = localStorage.getItem("app_auth_token");
+      const res = await fetch(`/api/encounter-configs/${encodeURIComponent(complaint)}`, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !isStaticComplaint,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // ── Config lookup — static takes priority; API config used for everything else
+  const config = useMemo(() => {
+    if (isStaticComplaint) return ENCOUNTER_CONFIGS[complaint] ?? ENCOUNTER_CONFIGS["chest_pain"];
+    if (dynamicConfigData) return adaptApiConfig(dynamicConfigData);
+    // Loading placeholder
+    return {
+      complaintLabel: complaint.replace(/_/g, " "),
+      hpiQuestions: [], rosQuestions: [], pmhQuestions: [], fhxQuestions: [],
+      medsQuestions: [], characters: [], onsetOptions: [], hasSeverityScale: true,
+      differentials: [], workup: [], redFlags: [],
+      computeDisposition: () => ({ level: "Loading…", reason: "", color: "bg-muted text-muted-foreground" }),
+    };
+  }, [complaint, isStaticComplaint, dynamicConfigData]);
 
   // ── Live computed values (no API call) ────────────────────────────────────
   const activeRedFlags = useMemo(
@@ -396,16 +549,42 @@ export default function EncounterSimulatorPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 ml-4">
-            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); }}>
-              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-52">
+            <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); setComplaintSearch(""); }}>
+              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-56">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
-                {ENCOUNTER_COMPLAINTS.map(c => (
-                  <SelectItem key={c.id} value={c.id} className="text-xs">
-                    <span className="font-medium">{c.label}</span>
-                    <span className="ml-2 text-muted-foreground text-xs">{c.system}</span>
-                  </SelectItem>
+              <SelectContent className="max-h-[420px]">
+                {/* Search box inside dropdown */}
+                <div className="sticky top-0 bg-popover px-2 py-1.5 border-b z-10">
+                  <Input
+                    placeholder="Search complaints…"
+                    value={complaintSearch}
+                    onChange={e => setComplaintSearch(e.target.value)}
+                    onKeyDown={e => e.stopPropagation()}
+                    onClick={e => e.stopPropagation()}
+                    className="h-7 text-xs"
+                    data-testid="input-complaint-search"
+                  />
+                  <div className="text-xs text-muted-foreground mt-1 px-0.5">
+                    {filteredComplaints.length} complaint{filteredComplaints.length !== 1 ? "s" : ""}
+                    {complaintSearch ? ` matching "${complaintSearch}"` : ""}
+                  </div>
+                </div>
+                {groupedComplaints.map(group => (
+                  <div key={group.system}>
+                    <div className="px-2 py-1 text-xs font-bold text-muted-foreground uppercase tracking-wide bg-muted/40 sticky top-[68px]">
+                      {group.system}
+                    </div>
+                    {group.items.map((c: any) => (
+                      <SelectItem key={c.id} value={c.id} className="text-xs pl-4">
+                        <span className="font-medium">{c.label}</span>
+                        {c.isStatic && <span className="ml-1.5 text-green-600 text-xs">★</span>}
+                        {!c.isStatic && c.dxCount && (
+                          <span className="ml-1.5 text-muted-foreground text-xs">{c.dxCount}dx</span>
+                        )}
+                      </SelectItem>
+                    ))}
+                  </div>
                 ))}
               </SelectContent>
             </Select>
@@ -437,11 +616,23 @@ export default function EncounterSimulatorPage() {
       </div>
 
       {/* ── Greeting banner ─────────────────────────────────────────────── */}
-      <div className="px-5 py-2 bg-blue-50/60 dark:bg-blue-950/30 border-b text-sm text-blue-800 dark:text-blue-300 font-medium">
-        "Hi {patientName}, I'm Dr. Chen. What brought you in today?"
-        <span className="ml-2 font-normal text-blue-700 dark:text-blue-400">
+      <div className="px-5 py-2 bg-blue-50/60 dark:bg-blue-950/30 border-b text-sm text-blue-800 dark:text-blue-300 font-medium flex items-center gap-2">
+        <span>"Hi {patientName}, I'm Dr. Chen. What brought you in today?"</span>
+        <span className="font-normal text-blue-700 dark:text-blue-400">
           — {config.complaintLabel}? Walk me through it…
         </span>
+        {!isStaticComplaint && (
+          <span className="ml-auto text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1">
+            {isDynamicLoading
+              ? <><Loader2 className="h-3 w-3 animate-spin" /> Loading KB config…</>
+              : <><BookOpen className="h-3 w-3" /> KB-assembled config</>}
+          </span>
+        )}
+        {isStaticComplaint && (
+          <span className="ml-auto text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+            <CheckCircle2 className="h-3 w-3" /> Verified hand-crafted config ★
+          </span>
+        )}
       </div>
 
       {/* ── Two-column main layout ──────────────────────────────────────── */}
