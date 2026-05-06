@@ -525,7 +525,7 @@ export default function EncounterSimulatorPage() {
 
   // ── Section open/close state ───────────────────────────────────────────────
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    hpi: true, prior_episode: false, ros: true, pmh: true, fhx: true, meds: true,
+    hpi: true, prior_episode: false, asthma_assessment: false, ros: true, pmh: true, fhx: true, meds: true,
   });
   const toggleSection = useCallback((key: string) => {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
@@ -537,6 +537,13 @@ export default function EncounterSimulatorPage() {
       setOpenSections(prev => prev.prior_episode ? prev : { ...prev, prior_episode: true });
     }
   }, [inputs.had_before]);
+
+  // Auto-expand Asthma Assessment when asthma history is confirmed
+  useEffect(() => {
+    if (inputs.asthma_history === "yes" || inputs.pmh_asthma === "yes") {
+      setOpenSections(prev => prev.asthma_assessment ? prev : { ...prev, asthma_assessment: true });
+    }
+  }, [inputs.asthma_history, inputs.pmh_asthma]);
 
   // ── Fetch complaint list from KB ──────────────────────────────────────────
   const { data: apiComplaintList, isFetching: isComplaintListFetching } = useQuery<any[]>({
@@ -624,6 +631,55 @@ export default function EncounterSimulatorPage() {
   );
   const anyHardFlag = activeRedFlags.length > 0;
   const disposition = useMemo(() => config.computeDisposition(inputs), [inputs, config]);
+
+  // ── Asthma / GINA staging ──────────────────────────────────────────────────
+  const ASTHMA_COMPLAINT_SET = new Set(['chest_pain', 'cough', 'pulm_shortness_of_breath']);
+  const hasAsthmaHistory = inputs.asthma_history === "yes" || inputs.pmh_asthma === "yes";
+  const showAsthmaSection = hasAsthmaHistory || ASTHMA_COMPLAINT_SET.has(complaint);
+  const patientAge = parseInt(inputs.age as string) || 0;
+  const isPediatric = patientAge > 0 && patientAge < 18;
+  const isCOPDSuspicion = hasAsthmaHistory && inputs.asthma_new_onset === "yes" && patientAge >= 60;
+
+  const ginaStage = useMemo(() => {
+    if (!hasAsthmaHistory) return null;
+    const everIntubated = inputs.asthma_ever_intubated === "yes";
+    const erVisits      = parseInt(inputs.asthma_er_visits_month as string) || 0;
+    const rescuePW      = parseInt(inputs.asthma_rescue_freq_week as string) || 0;
+    const nighttime     = inputs.asthma_nighttime === "yes";
+    const daily         = inputs.asthma_daily_symptoms === "yes";
+    if (everIntubated || erVisits >= 2) return {
+      step: 5, label: "Step 5 — Severe / High-Risk Asthma",
+      color: "bg-red-100 border-red-400 text-red-900 dark:bg-red-950/60 dark:text-red-200",
+      meds: ["High-dose ICS/LABA (e.g. fluticasone/salmeterol high-dose)", "Consider add-on tiotropium", "Biologics: omalizumab, dupilumab, or mepolizumab", "Urgent pulmonology referral"],
+      note: "Prior intubation or ≥2 ER visits/month = high-risk — refer urgently",
+    };
+    if (erVisits === 1 || (daily && nighttime) || (rescuePW > 2 && nighttime)) return {
+      step: 4, label: "Step 4 — Severe Persistent Asthma",
+      color: "bg-orange-100 border-orange-400 text-orange-900 dark:bg-orange-950/60 dark:text-orange-200",
+      meds: ["Medium-high dose ICS/LABA (e.g. budesonide/formoterol 160/4.5 mcg)", "Consider add-on tiotropium", "Pulmonology referral recommended"],
+      note: "Continuous or near-daily symptoms with frequent nighttime waking",
+    };
+    if (daily || rescuePW > 2 || nighttime) return {
+      step: 3, label: "Step 3 — Moderate Persistent Asthma",
+      color: "bg-yellow-100 border-yellow-400 text-yellow-900 dark:bg-yellow-950/60 dark:text-yellow-200",
+      meds: ["Low-medium dose ICS/LABA (e.g. budesonide/formoterol 80/4.5 mcg)", "Or medium-dose ICS alone (budesonide 400 mcg/day)", "Add montelukast (Singulair) if allergic component present"],
+      note: "Daily symptoms or nighttime waking — step up from current therapy",
+    };
+    if (rescuePW >= 2) return {
+      step: 2, label: "Step 2 — Mild Persistent Asthma",
+      color: "bg-blue-100 border-blue-400 text-blue-900 dark:bg-blue-950/60 dark:text-blue-200",
+      meds: ["Low-dose ICS daily (e.g. fluticasone 88 mcg/day or budesonide 200 mcg/day)", "SABA PRN rescue (albuterol)", "Consider montelukast if allergic triggers present"],
+      note: "Symptoms >2 days/week but not daily — initiate daily ICS controller",
+    };
+    return {
+      step: 1, label: "Step 1 — Mild Intermittent / Well-Controlled",
+      color: "bg-green-100 border-green-400 text-green-900 dark:bg-green-950/60 dark:text-green-200",
+      meds: ["SABA PRN only (albuterol 2 puffs q4–6h PRN)", "No daily controller medication needed at this step"],
+      note: "Symptoms ≤2 days/week, no nighttime waking — monitor and reassess",
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasAsthmaHistory, inputs.asthma_ever_intubated, inputs.asthma_er_visits_month,
+      inputs.asthma_rescue_freq_week, inputs.asthma_nighttime, inputs.asthma_daily_symptoms]);
 
   // ── 13-step pipeline dry-run ──────────────────────────────────────────────
   const dryRun = useMutation({
@@ -1074,11 +1130,144 @@ export default function EncounterSimulatorPage() {
                     {effHpi.length === 0 && !editMode && (
                       <p className="text-xs text-muted-foreground italic">No HPI questions configured for this complaint.</p>
                     )}
+
+                    {/* ── Universal: self-treatment ── */}
+                    <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground block mb-1 font-medium">What has the patient been treating this symptom with?</label>
+                        <input
+                          data-testid="input-self-treatment"
+                          type="text"
+                          placeholder="e.g. Tylenol, rest, ice, nothing tried…"
+                          value={(inputs.self_treatment as string) ?? ""}
+                          onChange={e => setInputs(p => ({ ...p, self_treatment: e.target.value || undefined }))}
+                          className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                      </div>
+                      <YNToggle label="Has the self-treatment helped?" field="self_treatment_helped" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                    </div>
                   </>
                 )}
               </>
             );
           })()}
+
+          {/* ── ASTHMA / AIRWAY ASSESSMENT (conditional) ─────────────── */}
+          {showAsthmaSection && (
+            <div className="rounded-lg border border-sky-200 bg-sky-50/40 dark:bg-sky-950/20 dark:border-sky-800 overflow-hidden">
+              <button
+                data-testid="button-toggle-asthma-section"
+                onClick={() => toggleSection("asthma_assessment")}
+                className="w-full flex items-center justify-between px-3 py-2.5 text-sm font-semibold text-sky-800 dark:text-sky-300 hover:bg-sky-100/60 dark:hover:bg-sky-900/30 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Wind className="h-4 w-4" />
+                  Asthma / Airway Assessment
+                  {!hasAsthmaHistory && <span className="text-xs font-normal text-sky-500 dark:text-sky-400">(confirm asthma below to unlock all questions)</span>}
+                </div>
+                {openSections.asthma_assessment ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+
+              {openSections.asthma_assessment && (
+                <div className="px-3 pb-3 space-y-3">
+
+                  {/* ── Trigger toggle ── */}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <YNToggle label="Patient has a confirmed asthma diagnosis" field="asthma_history" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                    {hasAsthmaHistory && (
+                      <YNToggle label="This is new-onset (no prior asthma diagnosis)" field="asthma_new_onset" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                    )}
+                  </div>
+
+                  {/* ── COPD warning for elderly new-onset ── */}
+                  {isCOPDSuspicion && (
+                    <div className="rounded border border-amber-400 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-300 font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      New-onset "asthma" in patient ≥60 — consider COPD. Spirometry required for definitive diagnosis.
+                    </div>
+                  )}
+
+                  {hasAsthmaHistory && (
+                    <>
+                      {/* ── Inhalers & devices ── */}
+                      <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Inhalers & Devices</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <YNToggle label="Has a rescue inhaler (SABA e.g. albuterol)" field="asthma_rescue_inhaler" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Also has a steroid (ICS) inhaler" field="asthma_steroid_inhaler" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Has a long-acting bronchodilator (LABA)" field="asthma_laba" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Using a spacer with inhaler" field="asthma_using_spacer" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Has a home nebulizer" field="asthma_nebulizer" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        </div>
+                      </div>
+
+                      {/* ── Frequency & severity ── */}
+                      <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Frequency & Severity</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">Rescue inhaler uses per week</label>
+                            <input data-testid="input-asthma-rescue-freq" type="number" min={0} placeholder="e.g. 3"
+                              value={(inputs.asthma_rescue_freq_week as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, asthma_rescue_freq_week: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">ER / urgent care visits for asthma (past month)</label>
+                            <input data-testid="input-asthma-er-visits" type="number" min={0} placeholder="e.g. 1"
+                              value={(inputs.asthma_er_visits_month as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, asthma_er_visits_month: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-2">
+                          <YNToggle label="Daily symptoms (not just on exertion)" field="asthma_daily_symptoms" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Nighttime symptoms waking from sleep" field="asthma_nighttime" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Ever intubated / on ventilator for asthma" field="asthma_ever_intubated" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Current or ex-smoker" field="asthma_smoker" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        </div>
+                      </div>
+
+                      {/* ── Management & specialists ── */}
+                      <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Management & Specialists</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <YNToggle label="Follows with a pulmonologist" field="asthma_pulmonologist" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Follows with an allergist" field="asthma_allergist" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Taking allergy medication (antihistamines / nasal spray)" field="asthma_allergy_meds" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                          <YNToggle label="Taking montelukast (Singulair)" field="asthma_singulair" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        </div>
+                      </div>
+
+                      {/* ── Triggers ── */}
+                      <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Triggers</div>
+                        <YNToggle label="Patient knows their triggers" field="asthma_trigger_known" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        {inputs.asthma_trigger_known === "yes" && (
+                          <div className="mt-2">
+                            <label className="text-xs text-muted-foreground block mb-1">Describe known triggers</label>
+                            <input data-testid="input-asthma-triggers" type="text"
+                              placeholder="e.g. exercise, cold air, dust, pollen, pets, smoke…"
+                              value={(inputs.asthma_trigger_desc as string) ?? ""}
+                              onChange={e => setInputs(p => ({ ...p, asthma_trigger_desc: e.target.value || undefined }))}
+                              className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Pediatric school form ── */}
+                      {isPediatric && (
+                        <div className="rounded border border-indigo-200 bg-indigo-50 dark:bg-indigo-950/30 dark:border-indigo-800 px-3 py-2 space-y-2">
+                          <div className="text-xs font-semibold text-indigo-800 dark:text-indigo-300">Pediatric Considerations</div>
+                          <YNToggle label="Needs school medication administration form for inhaler" field="asthma_school_form_needed" inputs={inputs} setInputs={setInputs} editMode={false} isCustom={false} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── 3. PRIOR EPISODE HISTORY ─────────────────────────── */}
           {(() => {
@@ -1383,6 +1572,28 @@ export default function EncounterSimulatorPage() {
               {activeRedFlags.map(rf => (
                 <div key={rf.id} className="text-sm text-red-700 dark:text-red-300">⚠ {rf.label}</div>
               ))}
+            </div>
+          )}
+
+          {/* GINA Asthma Staging Card */}
+          {ginaStage && (
+            <div className={`rounded-lg border-2 p-3 space-y-2 ${ginaStage.color}`}>
+              <div className="font-bold text-sm flex items-center gap-2">
+                <Wind className="h-4 w-4" />
+                GINA Asthma Stage: {ginaStage.label}
+              </div>
+              <p className="text-xs opacity-80">{ginaStage.note}</p>
+              <div>
+                <div className="text-xs font-semibold mb-1">Recommended treatment:</div>
+                <ul className="text-xs space-y-0.5 list-disc list-inside">
+                  {ginaStage.meds.map(m => <li key={m}>{m}</li>)}
+                </ul>
+              </div>
+              {isCOPDSuspicion && (
+                <div className="text-xs font-semibold border-t border-current/20 pt-2 mt-1">
+                  ⚠ New-onset in patient ≥60 — COPD must be excluded before treating as asthma (spirometry required)
+                </div>
+              )}
             </div>
           )}
 
