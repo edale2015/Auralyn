@@ -1,10 +1,13 @@
 /**
  * EncounterSimulatorPage.tsx
  *
- * Clinical encounter that flows like a real patient interview.
- * All questions are gathered in one place (in clinical order), then
- * applied to each differential live on the right panel.
- * Four workup components (EKG, CXR, Troponin, Nebulizer) feed disposition.
+ * Fully config-driven clinical encounter page.
+ * All complaint-specific data lives in client/src/data/encounterConfigs.ts.
+ * Edit questions, differentials, workup, red flags, and disposition there.
+ *
+ * Adding a new complaint = add a config block in encounterConfigs.ts,
+ * register it in ENCOUNTER_CONFIGS, add it to ENCOUNTER_COMPLAINTS.
+ * No changes needed here.
  */
 
 import { useState, useCallback, useMemo } from "react";
@@ -24,258 +27,44 @@ import {
   ListTree, BookOpen, RotateCcw, Users, MessageSquare, FileText,
   Circle, CircleCheck, CircleX, Minus,
 } from "lucide-react";
+import {
+  ENCOUNTER_CONFIGS,
+  ENCOUNTER_COMPLAINTS,
+  type DifferentialConfig,
+  type Inp as Inputs,
+} from "@/data/encounterConfigs";
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-type YNVal = "yes" | "no" | undefined;
-type Inputs = Record<string, any>;
+// ── Icon map for workup items (iconId → JSX) ─────────────────────────────────
+const WORKUP_ICONS: Record<string, React.ReactNode> = {
+  activity:    <Activity    className="h-4 w-4" />,
+  wind:        <Wind        className="h-4 w-4" />,
+  heart:       <Heart       className="h-4 w-4" />,
+  droplets:    <Droplets    className="h-4 w-4" />,
+  flask:       <FlaskConical className="h-4 w-4" />,
+  microscope:  <FlaskConical className="h-4 w-4" />,
+  stethoscope: <Stethoscope  className="h-4 w-4" />,
+  zap:         <Zap          className="h-4 w-4" />,
+  shield:      <ShieldAlert  className="h-4 w-4" />,
+  pill:        <Pill         className="h-4 w-4" />,
+  thermometer: <Thermometer  className="h-4 w-4" />,
+};
 
-// ── Chest Pain Clinical Configuration ─────────────────────────────────────────
-// Questions organized in exactly the order a real encounter flows.
-// Each section maps to the clinical interview stage.
-
-const CP_HPI_QUESTIONS = [
-  { field: "Q_CP_EXERTIONAL",    label: "Came on with exertion or physical activity" },
-  { field: "worst_at_onset",     label: "Worst at onset (sudden maximum — thunderclap)" },
-  { field: "Q_CP_RADIATES",      label: "Radiates to arm, jaw, neck, or between shoulder blades" },
-  { field: "Q_CP_PLEURITIC",     label: "Changes with breathing (worse with deep breath)" },
-  { field: "Q_CP_WORSE_FLAT",    label: "Worse lying flat, better leaning forward" },
-  { field: "Q_CP_ANTACID_RELIEF",label: "Improves with antacids" },
-  { field: "had_before",         label: "Had this same pain before" },
-];
-
-const CP_ROS_QUESTIONS = [
-  { field: "Q_CP_SOB",           label: "Shortness of breath" },
-  { field: "Q_CP_DIAPHORESIS",   label: "Diaphoresis (sweating / clammy)" },
-  { field: "nausea",             label: "Nausea or vomiting" },
-  { field: "Q_CP_PALPITATIONS",  label: "Palpitations (heart racing)" },
-  { field: "Q_CP_SYNCOPE",       label: "Syncope or near-syncope (fainting)" },
-  { field: "Q_CP_CALF_SWELL",    label: "Leg pain or calf swelling" },
-  { field: "Q_CP_FEVER",         label: "Fever" },
-  { field: "Q_CP_COUGH",         label: "Cough" },
-  { field: "Q_CP_NEURO",         label: "New neurological symptoms (vision changes, limb weakness)" },
-  { field: "Q_CP_HTN_SYMPTOMS",  label: "Severe headache or vision changes" },
-  { field: "Q_CP_TINGLING",      label: "Tingling in hands or around mouth" },
-];
-
-const CP_PMH_QUESTIONS = [
-  { field: "cardiac_history",        label: "Heart disease or prior MI" },
-  { field: "copd",                   label: "COPD" },
-  { field: "asthma",                 label: "Asthma" },
-  { field: "hypertension",           label: "Hypertension" },
-  { field: "diabetes",               label: "Diabetes" },
-  { field: "Q_CP_IMMOBILITY",        label: "Recent surgery or prolonged immobility / travel" },
-  { field: "Q_CP_RECENT_VIRAL",      label: "Recent cold or viral illness (past 1–2 weeks)" },
-  { field: "seen_cardiologist",      label: "Seen a cardiologist" },
-  { field: "prior_cath",             label: "Prior cardiac catheterization, stent, or procedure" },
-  { field: "prior_cardiac_testing",  label: "Prior cardiac or pulmonary testing (stress test, echo, PFTs)" },
-];
-
-const CP_FHX_QUESTIONS = [
-  { field: "family_early_mi",    label: "Parent with early heart attack (dad <55 · mom <65)" },
-  { field: "family_stroke",      label: "Parent with early stroke" },
-];
-
-const CP_MEDS_TOGGLES = [
-  { field: "on_aspirin",         label: "On aspirin" },
-  { field: "on_betablocker",     label: "On beta-blocker" },
-  { field: "on_nitrates",        label: "On nitrates" },
-  { field: "anticoagulated",     label: "On anticoagulants (warfarin / NOAC)" },
-  { field: "immunocompromised",  label: "Immunocompromised" },
-  { field: "nkda",               label: "NKDA (no known drug allergies)" },
-  { field: "allergy_pcn",        label: "Allergy: Penicillin" },
-  { field: "allergy_sulfa",      label: "Allergy: Sulfa" },
-];
-
-// Character picker options → sets both a display field AND pipe-relevant fields
-const CP_CHARACTERS = [
-  { label: "Pressure / Squeezing", field: "char_pressure" },
-  { label: "Sharp / Stabbing",     field: "char_sharp" },
-  { label: "Burning",              field: "char_burning",  also: "Q_CP_BURNING" },
-  { label: "Aching / Dull",        field: "char_aching" },
-  { label: "Tearing / Ripping",    field: "char_tearing",  also: "Q_CP_TEARING" },
-];
-
-// Pain scale 0-10
+// ── Severity scale ────────────────────────────────────────────────────────────
 const SEVERITY_SCALE = [1,2,3,4,5,6,7,8,9,10];
 
-// ── Differentials with their diagnostic criteria ───────────────────────────────
-const CP_DIFFERENTIALS = [
-  {
-    id: "stemi_acs",
-    name: "STEMI / ACS",
-    icd: "I21",
-    cannotMiss: true,
-    criteria: [
-      { label: "Exertional onset",           field: "Q_CP_EXERTIONAL" },
-      { label: "Radiation (arm/jaw/neck/back)",field: "Q_CP_RADIATES" },
-      { label: "Diaphoresis",                field: "Q_CP_DIAPHORESIS" },
-      { label: "Pressure character",         field: "char_pressure" },
-      { label: "Cardiac history",            field: "cardiac_history" },
-    ],
-  },
-  {
-    id: "pe",
-    name: "Pulmonary Embolism",
-    icd: "I26",
-    cannotMiss: true,
-    criteria: [
-      { label: "Pleuritic pain",             field: "Q_CP_PLEURITIC" },
-      { label: "Shortness of breath",        field: "Q_CP_SOB" },
-      { label: "Leg pain / calf swelling",   field: "Q_CP_CALF_SWELL" },
-      { label: "Immobility / recent travel", field: "Q_CP_IMMOBILITY" },
-    ],
-  },
-  {
-    id: "dissection",
-    name: "Aortic Dissection",
-    icd: "I71",
-    cannotMiss: true,
-    criteria: [
-      { label: "Tearing / ripping quality",  field: "char_tearing" },
-      { label: "Radiation to back",          field: "Q_CP_RADIATES" },
-      { label: "Worst at onset",             field: "worst_at_onset" },
-      { label: "Neurological symptoms",      field: "Q_CP_NEURO" },
-    ],
-  },
-  {
-    id: "pericarditis",
-    name: "Pericarditis",
-    icd: "I30",
-    cannotMiss: false,
-    criteria: [
-      { label: "Worse lying flat",           field: "Q_CP_WORSE_FLAT" },
-      { label: "Recent viral illness",       field: "Q_CP_RECENT_VIRAL" },
-      { label: "Fever",                      field: "Q_CP_FEVER" },
-      { label: "Pleuritic / sharp pain",     field: "Q_CP_PLEURITIC" },
-    ],
-  },
-  {
-    id: "gerd",
-    name: "GERD / Esophageal",
-    icd: "K21",
-    cannotMiss: false,
-    criteria: [
-      { label: "Burning character",          field: "char_burning" },
-      { label: "Antacid relief",             field: "Q_CP_ANTACID_RELIEF" },
-      { label: "No radiation",               field: "Q_CP_RADIATES",  invert: true },
-      { label: "Not exertional",             field: "Q_CP_EXERTIONAL", invert: true },
-    ],
-  },
-  {
-    id: "msk",
-    name: "MSK / Costochondritis",
-    icd: "M94.0",
-    cannotMiss: false,
-    criteria: [
-      { label: "Reproducible on palpation",  field: "Q_CP_REPRODUCIBLE" },
-      { label: "No radiation",               field: "Q_CP_RADIATES",  invert: true },
-      { label: "No SOB",                     field: "Q_CP_SOB",       invert: true },
-      { label: "Sharp / localized",          field: "char_sharp" },
-    ],
-  },
-  {
-    id: "anxiety",
-    name: "Anxiety / Panic",
-    icd: "F41.0",
-    cannotMiss: false,
-    criteria: [
-      { label: "Stress / anxiety trigger",   field: "Q_CP_STRESS_TRIGGER" },
-      { label: "Tingling / paresthesias",    field: "Q_CP_TINGLING" },
-      { label: "Palpitations",               field: "Q_CP_PALPITATIONS" },
-      { label: "Not exertional",             field: "Q_CP_EXERTIONAL", invert: true },
-    ],
-  },
-];
-
-// ── Workup cascade ─────────────────────────────────────────────────────────────
-const CP_WORKUP = [
-  {
-    id: "ekg",
-    label: "EKG / 12-Lead",
-    icon: <Activity className="h-4 w-4" />,
-    always: true,
-    indication: "Standard for all chest pain",
-    check: () => true,
-  },
-  {
-    id: "cxr",
-    label: "Chest X-Ray",
-    icon: <Wind className="h-4 w-4" />,
-    always: true,
-    indication: "Standard for all chest pain",
-    check: () => true,
-  },
-  {
-    id: "troponin",
-    label: "Troponin",
-    icon: <Heart className="h-4 w-4" />,
-    always: false,
-    indication: "ACS pattern, cardiac Hx, or age >40",
-    check: (inp: Inputs) =>
-      inp.Q_CP_EXERTIONAL === "yes" || inp.Q_CP_RADIATES === "yes" ||
-      inp.Q_CP_DIAPHORESIS === "yes" || inp.cardiac_history === "yes" ||
-      (inp.age && Number(inp.age) >= 40),
-  },
-  {
-    id: "nebulizer",
-    label: "Nebulizer Tx",
-    icon: <Droplets className="h-4 w-4" />,
-    always: false,
-    indication: "COPD or asthma in history",
-    check: (inp: Inputs) => inp.copd === "yes" || inp.asthma === "yes",
-  },
-];
-
-// ── Disposition logic ──────────────────────────────────────────────────────────
-function computeDisposition(inp: Inputs): { level: string; color: string; reason: string } {
-  // Hard red flags → ER
-  if (
-    (inp.Q_CP_EXERTIONAL === "yes" && (inp.Q_CP_RADIATES === "yes" || inp.Q_CP_DIAPHORESIS === "yes")) ||
-    inp.Q_CP_SYNCOPE === "yes" ||
-    (inp.Q_CP_TEARING === "yes" || inp.char_tearing === "yes") ||
-    inp.Q_CP_HTN_SYMPTOMS === "yes"
-  ) return { level: "ER / ED — Immediately", color: "bg-red-600 text-white", reason: "Critical red flag triggered" };
-
-  if (
-    (inp.Q_CP_PLEURITIC === "yes" && inp.Q_CP_SOB === "yes" && (inp.Q_CP_CALF_SWELL === "yes" || inp.Q_CP_IMMOBILITY === "yes"))
-  ) return { level: "ER / ED — PE protocol", color: "bg-red-600 text-white", reason: "PE risk pattern" };
-
-  if (inp.Q_CP_SOB === "yes" && inp.cardiac_history === "yes")
-    return { level: "ER / ED — Urgent", color: "bg-orange-600 text-white", reason: "SOB + cardiac history" };
-
-  if (inp.Q_CP_WORSE_FLAT === "yes" && inp.Q_CP_RECENT_VIRAL === "yes")
-    return { level: "Urgent Care", color: "bg-amber-500 text-white", reason: "Pericarditis pattern" };
-
-  if (inp.Q_CP_FEVER === "yes" && inp.Q_CP_COUGH === "yes")
-    return { level: "Urgent Care", color: "bg-amber-500 text-white", reason: "Infectious etiology" };
-
-  if (inp.Q_CP_BURNING === "yes" && inp.Q_CP_ANTACID_RELIEF === "yes")
-    return { level: "PCP Follow-up", color: "bg-blue-600 text-white", reason: "GERD pattern" };
-
-  if (inp.Q_CP_REPRODUCIBLE === "yes" && inp.Q_CP_SOB !== "yes" && inp.Q_CP_RADIATES !== "yes")
-    return { level: "Self-Care / PCP", color: "bg-green-600 text-white", reason: "MSK / reproducible pain" };
-
-  if (inp.Q_CP_STRESS_TRIGGER === "yes" && inp.Q_CP_TINGLING === "yes")
-    return { level: "PCP / Behavioral Health", color: "bg-blue-600 text-white", reason: "Anxiety / panic pattern" };
-
-  return { level: "PCP Follow-up", color: "bg-blue-500 text-white", reason: "Low-risk features" };
-}
-
-// ── Small shared components ────────────────────────────────────────────────────
-
-/** Three-state yes / no / unknown toggle */
+// ── Three-state yes / no / unknown toggle ─────────────────────────────────────
 function YNToggle({ label, field, inputs, setInputs, compact = false }: {
   label: string; field: string;
   inputs: Inputs;
   setInputs: (fn: (p: Inputs) => Inputs) => void;
   compact?: boolean;
 }) {
-  const val: YNVal = inputs[field];
+  const val = inputs[field] as "yes" | "no" | undefined;
   const cycle = () =>
     setInputs(prev => ({
       ...prev,
@@ -297,7 +86,7 @@ function YNToggle({ label, field, inputs, setInputs, compact = false }: {
   );
 }
 
-/** Vital sign numeric input with normal range highlight */
+// ── Vital sign numeric input ───────────────────────────────────────────────────
 function VitalInput({ label, field, unit, min, max, placeholder, inputs, setInputs }: {
   label: string; field: string; unit: string; min: number; max: number; placeholder: string;
   inputs: Inputs; setInputs: (fn: (p: Inputs) => Inputs) => void;
@@ -322,7 +111,7 @@ function VitalInput({ label, field, unit, min, max, placeholder, inputs, setInpu
   );
 }
 
-/** Section header used throughout the intake */
+// ── Section header ────────────────────────────────────────────────────────────
 function SectionHeader({ icon, label, step }: { icon: React.ReactNode; label: string; step: number }) {
   return (
     <div className="flex items-center gap-2 mt-5 mb-2">
@@ -334,8 +123,8 @@ function SectionHeader({ icon, label, step }: { icon: React.ReactNode; label: st
   );
 }
 
-// ── Criteria icon in differential card ────────────────────────────────────────
-function CritIcon({ val, invert }: { val: YNVal; invert?: boolean }) {
+// ── Criteria icon ─────────────────────────────────────────────────────────────
+function CritIcon({ val, invert }: { val: "yes" | "no" | undefined; invert?: boolean }) {
   const met = invert ? val === "no" : val === "yes";
   const unknown = val === undefined;
   if (unknown) return <Minus className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />;
@@ -344,16 +133,15 @@ function CritIcon({ val, invert }: { val: YNVal; invert?: boolean }) {
 }
 
 // ── Differential card ─────────────────────────────────────────────────────────
-function DifferentialCard({ dx, inputs }: { dx: typeof CP_DIFFERENTIALS[0]; inputs: Inputs }) {
+function DifferentialCard({ dx, inputs }: { dx: DifferentialConfig; inputs: Inputs }) {
   const scored = dx.criteria.map(c => {
-    const raw: YNVal = inputs[c.field];
+    const raw = inputs[c.field] as "yes" | "no" | undefined;
     const met = c.invert ? raw === "no" : raw === "yes";
     const unknown = raw === undefined;
     return { ...c, met, unknown };
   });
   const metCount = scored.filter(c => c.met).length;
-  const knownCount = scored.filter(c => !c.unknown).length;
-  const pct = knownCount === 0 ? 0 : Math.round((metCount / scored.length) * 100);
+  const pct = Math.round((metCount / scored.length) * 100);
 
   const urgency =
     dx.cannotMiss && pct >= 50 ? "border-red-400 bg-red-50/60 dark:bg-red-950/40"
@@ -381,7 +169,7 @@ function DifferentialCard({ dx, inputs }: { dx: typeof CP_DIFFERENTIALS[0]; inpu
       <div className="space-y-0.5">
         {scored.map(c => (
           <div key={c.field} className="flex items-center gap-1.5 text-xs">
-            <CritIcon val={inputs[c.field]} invert={c.invert} />
+            <CritIcon val={inputs[c.field] as any} invert={c.invert} />
             <span className={c.met ? "text-foreground" : "text-muted-foreground"}>{c.label}</span>
           </div>
         ))}
@@ -395,7 +183,7 @@ function DifferentialCard({ dx, inputs }: { dx: typeof CP_DIFFERENTIALS[0]; inpu
   );
 }
 
-// ── Inline Rule Editor (preserved from original) ──────────────────────────────
+// ── Inline Rule Editor ────────────────────────────────────────────────────────
 function RuleEditor({ rule, onClose, onSaved }: { rule: any; onClose: () => void; onSaved: () => void }) {
   const { toast } = useToast();
   const [form, setForm] = useState({
@@ -467,7 +255,7 @@ function RuleEditor({ rule, onClose, onSaved }: { rule: any; onClose: () => void
   );
 }
 
-// ── Pipeline step row (preserved) ─────────────────────────────────────────────
+// ── Pipeline step row ─────────────────────────────────────────────────────────
 const STEP_COLORS: Record<number, string> = {
   1: "border-l-slate-400", 2: "border-l-blue-500", 3: "border-l-amber-500",
   4: "border-l-cyan-500",  5: "border-l-teal-500", 6: "border-l-green-500",
@@ -516,28 +304,6 @@ function StepRow({ step, expanded, onToggle, onSelectRule }: { step: any; expand
   );
 }
 
-// ── COMPLAINTS list ────────────────────────────────────────────────────────────
-const COMPLAINTS = [
-  { id: "chest_pain",               label: "Chest Pain",            system: "Cardiology"  },
-  { id: "cardio_palpitations",      label: "Palpitations",          system: "Cardiology"  },
-  { id: "cardio_leg_swelling",      label: "Leg Swelling",          system: "Cardiology"  },
-  { id: "sore_throat",              label: "Sore Throat",           system: "ENT"         },
-  { id: "earache",                  label: "Ear Pain",              system: "ENT"         },
-  { id: "ent_sinus_pressure",       label: "Sinus Pressure",        system: "ENT"         },
-  { id: "cough",                    label: "Cough",                 system: "Pulmonology" },
-  { id: "pulm_shortness_of_breath", label: "Shortness of Breath",   system: "Pulmonology" },
-  { id: "abdominal_pain",           label: "Abdominal Pain",        system: "GI"          },
-  { id: "dizziness",                label: "Dizziness",             system: "Neurology"   },
-  { id: "neuro_headache",           label: "Headache",              system: "Neurology"   },
-  { id: "derm_rash",                label: "Rash",                  system: "Dermatology" },
-  { id: "gu_uti_symptoms",          label: "UTI Symptoms",          system: "GU"          },
-  { id: "msk_back_pain",            label: "Back Pain",             system: "MSK"         },
-  { id: "id_fever",                 label: "Fever",                 system: "Infectious"  },
-];
-
-const IS_CHEST_PAIN = (id: string) =>
-  id === "chest_pain" || id === "cardio_chest_pain";
-
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════════════════════════
@@ -554,28 +320,26 @@ export default function EncounterSimulatorPage() {
   const [runCount, setRunCount]         = useState(0);
   const [showTrace, setShowTrace]       = useState(false);
 
-  const isChestPain = IS_CHEST_PAIN(complaint);
+  // ── Config lookup — this drives the entire page ───────────────────────────
+  const config = ENCOUNTER_CONFIGS[complaint] ?? ENCOUNTER_CONFIGS["chest_pain"];
 
-  // Live computed values (no API call needed)
-  const redFlags = useMemo(() => ({
-    acs:        inputs.Q_CP_EXERTIONAL === "yes" && (inputs.Q_CP_RADIATES === "yes" || inputs.Q_CP_DIAPHORESIS === "yes"),
-    pe:         inputs.Q_CP_PLEURITIC === "yes" && inputs.Q_CP_SOB === "yes" && (inputs.Q_CP_CALF_SWELL === "yes" || inputs.Q_CP_IMMOBILITY === "yes"),
-    dissection: (inputs.Q_CP_TEARING === "yes" || inputs.char_tearing === "yes") && (inputs.Q_CP_NEURO === "yes" || inputs.Q_CP_RADIATES === "yes"),
-    syncope:    inputs.Q_CP_SYNCOPE === "yes",
-    htn_em:     inputs.Q_CP_HTN_SYMPTOMS === "yes",
-  }), [inputs]);
+  // ── Live computed values (no API call) ────────────────────────────────────
+  const activeRedFlags = useMemo(
+    () => config.redFlags.filter(rf => rf.check(inputs)),
+    [inputs, config]
+  );
+  const anyHardFlag = activeRedFlags.length > 0;
+  const disposition = useMemo(() => config.computeDisposition(inputs), [inputs, config]);
 
-  const anyHardFlag = Object.values(redFlags).some(Boolean);
-  const disposition = useMemo(() => computeDisposition(inputs), [inputs]);
-
+  // ── 13-step pipeline dry-run ──────────────────────────────────────────────
   const dryRun = useMutation({
     mutationFn: async () => {
       const clean: Inputs = {};
       for (const [k, v] of Object.entries(inputs))
         if (v !== undefined && v !== null && v !== "") clean[k] = v;
-      // Sync derived fields
-      if (inputs.char_tearing === "yes") clean.Q_CP_TEARING = "yes";
-      if (inputs.char_burning === "yes") clean.Q_CP_BURNING = "yes";
+      // Sync char.also fields generically
+      for (const ch of config.characters ?? [])
+        if (ch.also && inputs[ch.field] === "yes") clean[ch.also] = "yes";
       const res = await fetch("/api/master-rules/dry-run", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -606,7 +370,7 @@ export default function EncounterSimulatorPage() {
     setExpanded(prev => { const n = new Set(prev); n.has(step) ? n.delete(step) : n.add(step); return n; });
   }, []);
 
-  function toggleChar(ch: typeof CP_CHARACTERS[0]) {
+  function toggleChar(ch: { field: string; also?: string }) {
     setInputs(prev => {
       const on = prev[ch.field] === "yes";
       const next: Inputs = { ...prev, [ch.field]: on ? undefined : "yes" };
@@ -633,11 +397,11 @@ export default function EncounterSimulatorPage() {
           </div>
           <div className="flex items-center gap-2 ml-4">
             <Select value={complaint} onValueChange={v => { setComplaint(v); setInputs({}); setResult(null); setShowTrace(false); }}>
-              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-44">
+              <SelectTrigger data-testid="select-complaint" className="h-8 text-xs w-52">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {COMPLAINTS.map(c => (
+                {ENCOUNTER_COMPLAINTS.map(c => (
                   <SelectItem key={c.id} value={c.id} className="text-xs">
                     <span className="font-medium">{c.label}</span>
                     <span className="ml-2 text-muted-foreground text-xs">{c.system}</span>
@@ -675,7 +439,9 @@ export default function EncounterSimulatorPage() {
       {/* ── Greeting banner ─────────────────────────────────────────────── */}
       <div className="px-5 py-2 bg-blue-50/60 dark:bg-blue-950/30 border-b text-sm text-blue-800 dark:text-blue-300 font-medium">
         "Hi {patientName}, I'm Dr. Chen. What brought you in today?"
-        {isChestPain && <span className="ml-2 font-normal text-blue-700 dark:text-blue-400">— Chest pain? Walk me through it…</span>}
+        <span className="ml-2 font-normal text-blue-700 dark:text-blue-400">
+          — {config.complaintLabel}? Walk me through it…
+        </span>
       </div>
 
       {/* ── Two-column main layout ──────────────────────────────────────── */}
@@ -684,49 +450,55 @@ export default function EncounterSimulatorPage() {
         {/* ── LEFT: Encounter Intake ──────────────────────────────────── */}
         <div className="w-[57%] shrink-0 overflow-y-auto p-5 space-y-1">
 
-          {/* VITALS */}
+          {/* ── 1. VITALS ────────────────────────────────────────────── */}
           <SectionHeader icon={<Activity className="h-4 w-4" />} label="Vitals" step={1} />
           <div className="grid grid-cols-5 gap-3">
-            <VitalInput label="O₂ Sat" field="O2_sat" unit="%" min={95} max={100} placeholder="98" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Heart Rate" field="heart_rate" unit="bpm" min={60} max={100} placeholder="78" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Systolic BP" field="systolic_bp" unit="mmHg" min={90} max={140} placeholder="120" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Temp" field="temp_f" unit="°F" min={97} max={99.5} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
-            <VitalInput label="Resp Rate" field="resp_rate" unit="/min" min={12} max={20} placeholder="16" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="O₂ Sat"    field="O2_sat"      unit="%" min={95} max={100} placeholder="98"    inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Heart Rate" field="heart_rate"  unit="bpm" min={60} max={100} placeholder="78"  inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Systolic BP"field="systolic_bp" unit="mmHg" min={90} max={140} placeholder="120" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Temp"       field="temp_f"      unit="°F" min={97} max={99.5} placeholder="98.6" inputs={inputs} setInputs={setInputs} />
+            <VitalInput label="Resp Rate"  field="resp_rate"   unit="/min" min={12} max={20} placeholder="16"   inputs={inputs} setInputs={setInputs} />
           </div>
 
-          {isChestPain ? (<>
+          {/* ── 2. HPI ───────────────────────────────────────────────── */}
+          <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2} />
 
-            {/* HPI */}
-            <SectionHeader icon={<MessageSquare className="h-4 w-4" />} label="History of Present Illness" step={2} />
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Onset timing</label>
-                <div className="flex gap-1">
-                  {["Sudden (seconds)","Rapid (minutes)","Gradual (hours+)"].map(o => (
-                    <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
-                      onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
-                      className={`text-xs px-2 py-1 rounded border ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                    >{o.split(" ")[0]}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Severity 1–10</label>
-                <div className="flex gap-0.5">
-                  {SEVERITY_SCALE.map(n => (
-                    <button key={n} data-testid={`severity-${n}`}
-                      onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
-                      className={`text-xs w-6 h-6 rounded border font-mono ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                    >{n}</button>
-                  ))}
-                </div>
+          {/* Onset timing chips */}
+          {config.onsetOptions && (
+            <div className="mb-2">
+              <label className="text-xs text-muted-foreground mb-1 block">Onset timing</label>
+              <div className="flex gap-1 flex-wrap">
+                {config.onsetOptions.map(o => (
+                  <button key={o} data-testid={`onset-${o.split(" ")[0].toLowerCase()}`}
+                    onClick={() => setInputs(p => ({ ...p, onset_timing: p.onset_timing === o ? undefined : o }))}
+                    className={`text-xs px-2 py-1 rounded border ${inputs.onset_timing === o ? "bg-blue-100 border-blue-500 text-blue-800 dark:bg-blue-900 dark:text-blue-200" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                  >{o}</button>
+                ))}
               </div>
             </div>
+          )}
 
-            <div>
+          {/* Severity scale */}
+          {config.hasSeverityScale && (
+            <div className="mb-2">
+              <label className="text-xs text-muted-foreground mb-1 block">Severity 1–10</label>
+              <div className="flex gap-0.5">
+                {SEVERITY_SCALE.map(n => (
+                  <button key={n} data-testid={`severity-${n}`}
+                    onClick={() => setInputs(p => ({ ...p, severity: p.severity === n ? undefined : n }))}
+                    className={`text-xs w-6 h-6 rounded border font-mono ${inputs.severity === n ? n >= 7 ? "bg-red-600 border-red-700 text-white" : n >= 4 ? "bg-orange-500 border-orange-600 text-white" : "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                  >{n}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Character picker */}
+          {config.characters && config.characters.length > 0 && (
+            <div className="mb-2">
               <label className="text-xs text-muted-foreground mb-1 block">Character — select all that apply</label>
               <div className="flex flex-wrap gap-1.5">
-                {CP_CHARACTERS.map(ch => (
+                {config.characters.map(ch => (
                   <button key={ch.field} data-testid={`char-${ch.field}`}
                     onClick={() => toggleChar(ch)}
                     className={`text-sm px-3 py-1.5 rounded border transition-all ${inputs[ch.field] === "yes" ? "bg-amber-100 border-amber-500 text-amber-900 dark:bg-amber-900 dark:text-amber-100" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
@@ -734,89 +506,70 @@ export default function EncounterSimulatorPage() {
                 ))}
               </div>
             </div>
-
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              {CP_HPI_QUESTIONS.map(q => (
-                <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-              ))}
-            </div>
-
-            {/* ROS */}
-            <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3} />
-            <div className="grid grid-cols-2 gap-2">
-              {CP_ROS_QUESTIONS.map(q => (
-                <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-              ))}
-            </div>
-
-            {/* PMH */}
-            <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4} />
-            <div className="grid grid-cols-2 gap-2">
-              {CP_PMH_QUESTIONS.map(q => (
-                <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-              ))}
-            </div>
-
-            {/* Family Hx */}
-            <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5} />
-            <div className="grid grid-cols-2 gap-2">
-              {CP_FHX_QUESTIONS.map(q => (
-                <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-              ))}
-            </div>
-
-            {/* Social */}
-            <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6} />
-            <div className="flex flex-wrap items-end gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Sex</label>
-                <div className="flex gap-1">
-                  {["Male","Female","Other"].map(s => (
-                    <button key={s} data-testid={`sex-${s.toLowerCase()}`}
-                      onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
-                      className={`text-xs px-2 py-1 rounded border ${inputs.sex === s.toLowerCase() ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
-                    >{s}</button>
-                  ))}
-                </div>
-              </div>
-              <VitalInput label="Age" field="age" unit="yr" min={0} max={120} placeholder="45" inputs={inputs} setInputs={setInputs} />
-              <YNToggle label="Smoker (current or former)" field="smoker" inputs={inputs} setInputs={setInputs} compact />
-              {(inputs.sex === "female" || inputs.sex === undefined) && (
-                <YNToggle label="Pregnant" field="pregnancy_confirmed" inputs={inputs} setInputs={setInputs} compact />
-              )}
-              <YNToggle label="Age >65 / Elderly" field="elderly" inputs={inputs} setInputs={setInputs} compact />
-            </div>
-
-            {/* Meds & Allergies */}
-            <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7} />
-            <div className="grid grid-cols-2 gap-2">
-              {CP_MEDS_TOGGLES.map(q => (
-                <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
-              ))}
-            </div>
-
-          </>) : (
-            /* Generic fallback for non-chest-pain complaints */
-            <>
-              <SectionHeader icon={<BookOpen className="h-4 w-4" />} label="Patient Modifiers" step={2} />
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { field: "pregnancy_confirmed", label: "Pregnant" },
-                  { field: "diabetes",            label: "Diabetic" },
-                  { field: "elderly",             label: "Age > 65" },
-                  { field: "immunocompromised",   label: "Immunocompromised" },
-                  { field: "anticoagulated",      label: "Anticoagulated" },
-                  { field: "smoker",              label: "Smoker" },
-                  { field: "hypertension",        label: "Hypertension" },
-                  { field: "cardiac_history",     label: "Cardiac history" },
-                  { field: "fever",               label: "Fever" },
-                  { field: "diaphoresis",         label: "Diaphoresis" },
-                ].map(q => <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />)}
-              </div>
-            </>
           )}
 
-          {/* Run button at bottom of intake */}
+          {/* HPI yes/no questions */}
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            {config.hpiQuestions.map(q => (
+              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+            ))}
+          </div>
+
+          {/* ── 3. ROS ───────────────────────────────────────────────── */}
+          <SectionHeader icon={<Activity className="h-4 w-4" />} label="Review of Systems — Associated Symptoms" step={3} />
+          <div className="grid grid-cols-2 gap-2">
+            {config.rosQuestions.map(q => (
+              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+            ))}
+          </div>
+
+          {/* ── 4. PMH ───────────────────────────────────────────────── */}
+          <SectionHeader icon={<FileText className="h-4 w-4" />} label="Past Medical History" step={4} />
+          <div className="grid grid-cols-2 gap-2">
+            {config.pmhQuestions.map(q => (
+              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+            ))}
+          </div>
+
+          {/* ── 5. Family Hx ─────────────────────────────────────────── */}
+          <SectionHeader icon={<Users className="h-4 w-4" />} label="Family History" step={5} />
+          <div className="grid grid-cols-2 gap-2">
+            {config.fhxQuestions.map(q => (
+              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+            ))}
+          </div>
+
+          {/* ── 6. Social ─────────────────────────────────────────────── */}
+          <SectionHeader icon={<User className="h-4 w-4" />} label="Social History" step={6} />
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Sex</label>
+              <div className="flex gap-1">
+                {["Male","Female","Other"].map(s => (
+                  <button key={s} data-testid={`sex-${s.toLowerCase()}`}
+                    onClick={() => setInputs(p => ({ ...p, sex: p.sex === s.toLowerCase() ? undefined : s.toLowerCase() }))}
+                    className={`text-xs px-2 py-1 rounded border ${inputs.sex === s.toLowerCase() ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400"}`}
+                  >{s}</button>
+                ))}
+              </div>
+            </div>
+            <VitalInput label="Age" field="age" unit="yr" min={0} max={120} placeholder="45" inputs={inputs} setInputs={setInputs} />
+            <YNToggle label="Smoker (current or former)" field="smoker" inputs={inputs} setInputs={setInputs} compact />
+            {(inputs.sex === "female" || inputs.sex === undefined) && (
+              <YNToggle label="Pregnant" field="pregnancy_confirmed" inputs={inputs} setInputs={setInputs} compact />
+            )}
+            <YNToggle label="Age >65 / Elderly" field="elderly" inputs={inputs} setInputs={setInputs} compact />
+          </div>
+
+          {/* ── 7. Meds & Allergies ─────────────────────────────────── */}
+          <SectionHeader icon={<Pill className="h-4 w-4" />} label="Medications & Allergies" step={7} />
+          <div className="grid grid-cols-2 gap-2">
+            {config.medsQuestions.map(q => (
+              <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs} />
+            ))}
+          </div>
+
+          {/* ── Run button at bottom ──────────────────────────────────── */}
           <div className="pt-4">
             <Button
               data-testid="button-run-encounter-bottom"
@@ -839,11 +592,9 @@ export default function EncounterSimulatorPage() {
               <div className="flex items-center gap-2 font-bold text-red-700 dark:text-red-300">
                 <AlertTriangle className="h-4 w-4" />CRITICAL RED FLAGS
               </div>
-              {redFlags.acs        && <div className="text-sm text-red-700 dark:text-red-300">⚠ ACS pattern — exertional + radiation/diaphoresis</div>}
-              {redFlags.pe         && <div className="text-sm text-red-700 dark:text-red-300">⚠ PE triad — pleuritic + SOB + DVT/immobility</div>}
-              {redFlags.dissection && <div className="text-sm text-red-700 dark:text-red-300">⚠ Aortic dissection — tearing + radiation/neuro</div>}
-              {redFlags.syncope    && <div className="text-sm text-red-700 dark:text-red-300">⚠ Syncope with chest pain</div>}
-              {redFlags.htn_em     && <div className="text-sm text-red-700 dark:text-red-300">⚠ Hypertensive emergency pattern</div>}
+              {activeRedFlags.map(rf => (
+                <div key={rf.id} className="text-sm text-red-700 dark:text-red-300">⚠ {rf.label}</div>
+              ))}
             </div>
           )}
 
@@ -853,11 +604,13 @@ export default function EncounterSimulatorPage() {
               <FlaskConical className="h-3.5 w-3.5" />Workup Indicated
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {(isChestPain ? CP_WORKUP : []).map(w => {
+              {config.workup.map(w => {
                 const active = w.check(inputs);
                 return (
                   <div key={w.id} className={`rounded-lg border p-2.5 flex items-start gap-2 ${active ? "border-blue-400 bg-blue-50/60 dark:bg-blue-950/40" : "border-border opacity-40"}`}>
-                    <div className={active ? "text-blue-600" : "text-muted-foreground"}>{w.icon}</div>
+                    <div className={active ? "text-blue-600" : "text-muted-foreground"}>
+                      {WORKUP_ICONS[w.iconId] ?? <Activity className="h-4 w-4" />}
+                    </div>
                     <div>
                       <div className={`text-sm font-semibold ${active ? "" : "text-muted-foreground"}`}>{w.label}</div>
                       <div className="text-xs text-muted-foreground">{w.indication}</div>
@@ -870,19 +623,17 @@ export default function EncounterSimulatorPage() {
           </div>
 
           {/* Differential Assessment */}
-          {isChestPain && (
-            <div>
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                <Stethoscope className="h-3.5 w-3.5" />Differential Assessment
-                <span className="font-normal">(criteria update as you answer)</span>
-              </div>
-              <div className="space-y-2">
-                {CP_DIFFERENTIALS.map(dx => (
-                  <DifferentialCard key={dx.id} dx={dx} inputs={inputs} />
-                ))}
-              </div>
+          <div>
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <Stethoscope className="h-3.5 w-3.5" />Differential Assessment
+              <span className="font-normal">(criteria update as you answer)</span>
             </div>
-          )}
+            <div className="space-y-2">
+              {config.differentials.map(dx => (
+                <DifferentialCard key={dx.id} dx={dx} inputs={inputs} />
+              ))}
+            </div>
+          </div>
 
           {/* Disposition Estimate */}
           <div>
@@ -895,7 +646,7 @@ export default function EncounterSimulatorPage() {
             </div>
             {result && (
               <div className={`rounded-lg mt-2 px-4 py-3 ${result.hardStop ? "bg-red-600 text-white" : "bg-green-700 text-white"}`}>
-                <div className="font-bold text-sm">Pipeline result: {result.finalDisposition}</div>
+                <div className="font-bold text-sm">Pipeline: {result.finalDisposition}</div>
                 <div className="text-xs opacity-90">{result.totalRulesFired} rules fired · {result.steps?.length ?? 13} steps</div>
               </div>
             )}
@@ -907,7 +658,11 @@ export default function EncounterSimulatorPage() {
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
                 <Pencil className="h-3 w-3" />Rule Editor
               </div>
-              <RuleEditor rule={selectedRule} onClose={() => setSelectedRule(null)} onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/master-rules"] }); }} />
+              <RuleEditor
+                rule={selectedRule}
+                onClose={() => setSelectedRule(null)}
+                onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/master-rules"] }); }}
+              />
               <div className="border-t mt-3 pt-3">
                 <Button size="sm" variant="outline" className="w-full h-7 text-xs"
                   onClick={() => { setSelectedRule(null); dryRun.mutate(); }} disabled={dryRun.isPending}>
@@ -919,7 +674,7 @@ export default function EncounterSimulatorPage() {
         </div>
       </div>
 
-      {/* ── Full-width: 13-Step Pipeline Trace ──────────────────────────── */}
+      {/* ── Full-width: 13-Step Pipeline Trace ─────────────────────────── */}
       {(result || dryRun.isPending) && (
         <div className="border-t bg-background">
           <button

@@ -20,6 +20,18 @@ The backend uses Express 5, Node.js, and TypeScript, offering REST API endpoints
 #### System Design Choices
 Data management uses Firebase Firestore, SQLite, and PostgreSQL, with specific PHI retention policies. Authentication involves password-only and session-based HMAC for physicians, and token-based access for patients with JWT-based role authentication. Security includes bcrypt, JWT security, rate limiting, and a PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance features an agent registry, audit agent, incident commander, digital twin, and predictive engine. The system supports multi-region deployment with auto-scaling and a unified control API, incorporating a medical knowledge graph, DAG visualizer, and YAML pipeline engine for complex workflows. The Self-Healing Infrastructure Monitor ensures system stability by monitoring and remediating critical services.
 
+### Clinical Encounter Simulator
+- **Config file**: `client/src/data/encounterConfigs.ts` — single source of truth for all 15 complaints
+  - Exports: `ENCOUNTER_CONFIGS: Record<string, EncounterConfig>`, `ENCOUNTER_COMPLAINTS` array, full TypeScript types
+  - Complaints: chest_pain, cardio_palpitations, cardio_leg_swelling, sore_throat, earache, ent_sinus_pressure, cough, pulm_shortness_of_breath, abdominal_pain, dizziness, neuro_headache, derm_rash, gu_uti_symptoms, msk_back_pain, id_fever
+  - Each config: `hpiQuestions`, `rosQuestions`, `pmhQuestions`, `fhxQuestions`, `medsQuestions`, `characters`, `onsetOptions`, `hasSeverityScale`, `differentials` (with criteria + cannotMiss), `workup` (iconId strings), `redFlags`, `computeDisposition`
+  - **To add a complaint**: add config block → register in `ENCOUNTER_CONFIGS` → add to `ENCOUNTER_COMPLAINTS`. No page changes needed.
+- **Page**: `client/src/pages/EncounterSimulatorPage.tsx` — fully config-driven, zero hardcoded complaint data
+  - `const config = ENCOUNTER_CONFIGS[complaint]` drives all sections (HPI, ROS, PMH, FHx, Meds, differentials, workup, red flags, disposition)
+  - `WORKUP_ICONS` map converts `iconId` strings → Lucide React nodes
+  - Social history section (sex/age/smoker/pregnant) is always shown; all other sections are config-driven
+  - Character `.also` fields synced automatically before dry-run
+
 ### Master Rule Map System
 - **kb_master_rules table**: 30-column PostgreSQL table (27 spec + diagnostic_criteria, key_questions, icd10); **8,413 active rules** across **1,025 complaints**
 - **Rule types**: red_flag, diagnosis, cluster_scoring, medication, disposition, modifier, question, workup, plan
