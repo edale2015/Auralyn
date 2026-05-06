@@ -20,17 +20,24 @@ The backend uses Express 5, Node.js, and TypeScript, offering REST API endpoints
 #### System Design Choices
 Data management uses Firebase Firestore, SQLite, and PostgreSQL, with specific PHI retention policies. Authentication involves password-only and session-based HMAC for physicians, and token-based access for patients with JWT-based role authentication. Security includes bcrypt, JWT security, rate limiting, and a PHI Sanitizer. A Global SRE + Resilience Layer provides geo-aware routing, SLA monitoring, automatic debugging, and chaos engineering. Autonomous Governance features an agent registry, audit agent, incident commander, digital twin, and predictive engine. The system supports multi-region deployment with auto-scaling and a unified control API, incorporating a medical knowledge graph, DAG visualizer, and YAML pipeline engine for complex workflows. The Self-Healing Infrastructure Monitor ensures system stability by monitoring and remediating critical services.
 
-### Master Rule Map System (Win 23)
-- **kb_master_rules table**: 27-column PostgreSQL table with 263 rules seeded from existing KB tables (red_flag, diagnosis, treatment, disposition rule tables)
+### Master Rule Map System
+- **kb_master_rules table**: 30-column PostgreSQL table (27 spec + diagnostic_criteria, key_questions, icd10); **8,413 active rules** across **1,025 complaints**
 - **Rule types**: red_flag, diagnosis, cluster_scoring, medication, disposition, modifier, question, workup, plan
-- **13-step pipeline engine**: `server/clinical/ruleExecutionEngine.ts` — `executePipeline(complaint_id, inputs)` returns step-by-step trace
-- **API routes**: `server/routes/masterRules.routes.ts` at `/api/master-rules/*` (list, stats, single, pipeline, dry-run, export-to-sheets, create, update)
-  - **Route order note**: `/pipeline/:complaint_id` must appear BEFORE `/:rule_id` to prevent route capture
+- **Rule counts**: 486 red_flags · 2,579 diagnoses · 1,495 medications · 658 dispositions · 2,051 questions · 1,067 workups · 43 modifiers · 34 scoring
+- **13-step pipeline engine**: `server/clinical/ruleExecutionEngine.ts` — `executePipeline(complaint_id, inputs)` returns step-by-step trace with hard-stop on CRITICAL red flags
+- **API routes**: `server/routes/masterRules.routes.ts` at `/api/master-rules/*` — list, stats, complaints, pipeline/:id, /:id, dry-run, sync-from-source, export-to-sheets, POST, PATCH
+  - **Route order**: `/flowchart/:id`, `/complaints`, `/pipeline/:id` all registered BEFORE `/:rule_id`
 - **Sheet export**: `server/scripts/exportMasterRulesToSheets.ts` — 27-column exact format to MASTER_RULE_MAP Google Sheet tab
-- **Frontend dashboard** (`client/src/pages/MasterRuleMapPage.tsx`): 6 tabs — Rule Catalog, Pipeline Simulator, Coverage Overview, Drill-down, Gaps, Tools & RLHF
-  - Rule Catalog: stats grid, filter bar (type/safety/complaint), paginated table, 27-field detail panel
-  - Pipeline Simulator: 13-step pipeline view per complaint, dry-run JSON input, execution trace with expandable steps
-- **Auth note**: Custom fetch calls in frontend use `localStorage.getItem("app_auth_token")` for `Authorization: Bearer` headers (the default queryFn does not include this header)
+- **Frontend dashboard** (`client/src/pages/MasterRuleMapPage.tsx`) at `/rule-map`: 10 tabs
+  - **Rule Catalog**: stats grid, filter bar (type/safety/complaint), paginated table, inline 27-field detail expand, Export Sheet button
+  - **Pipeline Simulator**: 13-step pipeline view, dry-run JSON input, execution trace with fired rules highlighted
+  - **Coverage Overview, System Coverage, Drill-down, Gaps**: coverage analytics per complaint and system
+  - **Pipeline Flowchart, Clinical Decision Tree**: AI-generated visual flows (GPT-4o, cached)
+  - **Golden Cases**: test runner for known-answer validation cases
+  - **Tools & RLHF**: sync-from-source, sheet export, RLHF weight processing, validator
+- **Clinical KB Editor** (`client/src/pages/ClinicalKBEditorPage.tsx`) at `/kb-editor`: per-complaint rule editor with Dx Criteria tab showing diagnostic_criteria + key_questions for each diagnosis; pinned green button in sidebar
+- **Auth note**: Custom fetch calls use `localStorage.getItem("app_auth_token")` for `Authorization: Bearer` (default queryFn omits this header)
+- **5 example seed rules**: RULE_0001 (hypoxia), RULE_0101 (pneumonia fever), RULE_0201 (CAP threshold), RULE_0301 (pneumonia ER), RULE_0401 (CAP antibiotics)
 
 ### External Dependencies
 *   **AI Integration**: OpenAI API (GPT-4o-mini, GPT-4o, GPT-4-turbo, LangChain, LangGraph)

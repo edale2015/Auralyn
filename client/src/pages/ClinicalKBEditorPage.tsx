@@ -42,6 +42,7 @@ interface Rule {
   icd10: string | null;
   diagnostic_criteria: string | null;
   key_questions: string[] | null;
+  _key_questions_text?: string;
   logic_description: string | null;
   logic_type: string;
   source_tab: string | null;
@@ -56,16 +57,16 @@ interface Rule {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const RULE_TYPES = [
-  { value: "all",             label: "All Rules",        icon: BookOpen,      color: "bg-slate-100 text-slate-700" },
-  { value: "dx_criteria",    label: "Dx Criteria",      icon: CheckSquare,   color: "bg-indigo-100 text-indigo-700" },
-  { value: "diagnosis",      label: "Differentials",    icon: Stethoscope,   color: "bg-blue-100 text-blue-700" },
-  { value: "workup",         label: "Workups",          icon: FlaskConical,  color: "bg-purple-100 text-purple-700" },
-  { value: "medication",     label: "Medications",      icon: Pill,          color: "bg-green-100 text-green-700" },
-  { value: "disposition",    label: "Dispositions",     icon: ClipboardList, color: "bg-orange-100 text-orange-700" },
-  { value: "question",       label: "Questions",        icon: HelpCircle,    color: "bg-cyan-100 text-cyan-700" },
-  { value: "modifier",       label: "Modifiers",        icon: Sliders,       color: "bg-pink-100 text-pink-700" },
-  { value: "red_flag",       label: "Red Flags",        icon: AlertTriangle, color: "bg-red-100 text-red-700" },
-  { value: "cluster_scoring",label: "Scoring",          icon: RefreshCw,     color: "bg-yellow-100 text-yellow-700" },
+  { value: "all",              label: "All Rules",    icon: BookOpen,      color: "bg-slate-100 text-slate-700" },
+  { value: "dx_criteria",     label: "Dx Criteria",  icon: CheckSquare,   color: "bg-indigo-100 text-indigo-700" },
+  { value: "diagnosis",       label: "Differentials",icon: Stethoscope,   color: "bg-blue-100 text-blue-700" },
+  { value: "workup",          label: "Workups",      icon: FlaskConical,  color: "bg-purple-100 text-purple-700" },
+  { value: "medication",      label: "Medications",  icon: Pill,          color: "bg-green-100 text-green-700" },
+  { value: "disposition",     label: "Dispositions", icon: ClipboardList, color: "bg-orange-100 text-orange-700" },
+  { value: "question",        label: "Questions",    icon: HelpCircle,    color: "bg-cyan-100 text-cyan-700" },
+  { value: "modifier",        label: "Modifiers",    icon: Sliders,       color: "bg-pink-100 text-pink-700" },
+  { value: "red_flag",        label: "Red Flags",    icon: AlertTriangle, color: "bg-red-100 text-red-700" },
+  { value: "cluster_scoring", label: "Scoring",      icon: RefreshCw,     color: "bg-yellow-100 text-yellow-700" },
 ];
 
 const SAFETY_COLORS: Record<string, string> = {
@@ -75,6 +76,13 @@ const SAFETY_COLORS: Record<string, string> = {
   LOW:      "bg-green-500 text-white",
 };
 
+const SAFETY_BORDER: Record<string, string> = {
+  CRITICAL: "border-red-300 dark:border-red-800",
+  HIGH:     "border-orange-300 dark:border-orange-800",
+  MODERATE: "border-yellow-200 dark:border-yellow-900",
+  LOW:      "border-green-200 dark:border-green-900",
+};
+
 const SYSTEM_ORDER = [
   "Cardiology","Pulmonology","Gastroenterology","ENT","Neurology",
   "Musculoskeletal","Dermatology","Endocrinology","UroGyn","Gynecology",
@@ -82,10 +90,17 @@ const SYSTEM_ORDER = [
   "Toxicology","Trauma","Allergy","Sexual Health","Dental","Environmental","General","Other",
 ];
 
+function ruleToEditState(rule: Rule): Partial<Rule> {
+  return {
+    ...rule,
+    _key_questions_text: (rule.key_questions ?? []).join("\n"),
+  };
+}
+
 const EMPTY_RULE: Partial<Rule> = {
   rule_name: "", rule_type: "diagnosis", complaint_id: "",
   safety_level: "MODERATE", priority: 5, logic_type: "boolean",
-  diagnostic_criteria: "", key_questions: [], icd10: "",
+  diagnostic_criteria: "", _key_questions_text: "", icd10: "",
   logic_description: "", workup_impact: "", medication_impact: "",
   disposition_impact: "", notes: "",
 };
@@ -103,79 +118,93 @@ async function authFetch(url: string, opts: RequestInit = {}) {
   return res.json();
 }
 
-// ─── Dx Criteria Card ─────────────────────────────────────────────────────────
+// ─── Dx Criteria Card — expanded by default, criteria visible immediately ────
 
 function DxCriteriaCard({ rule, onEdit }: { rule: Rule; onEdit: (r: Rule) => void }) {
-  const [open, setOpen] = useState(false);
+  const hasCriteria  = !!rule.diagnostic_criteria?.trim();
+  const hasQuestions = (rule.key_questions?.length ?? 0) > 0;
+  const borderClass  = SAFETY_BORDER[rule.safety_level] ?? "border-gray-200";
+
   return (
-    <div className="border rounded-lg overflow-hidden mb-3">
-      <div
-        className="flex items-center gap-3 px-4 py-3 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => setOpen(!open)}
-        data-testid={`dx-card-${rule.rule_id}`}
-      >
-        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${SAFETY_COLORS[rule.safety_level] ?? "bg-gray-100"}`}>
+    <div className={`border rounded-lg overflow-hidden mb-4 ${borderClass}`} data-testid={`dx-card-${rule.rule_id}`}>
+      {/* ── Always-visible header ── */}
+      <div className="flex items-start gap-3 px-4 py-3 bg-muted/20">
+        <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 mt-0.5 ${SAFETY_COLORS[rule.safety_level] ?? "bg-gray-100"}`}>
           {rule.safety_level}
         </span>
-        <div className="flex-1">
-          <span className="font-semibold text-sm">{rule.rule_name}</span>
-          {rule.icd10 && <span className="ml-2 text-xs text-muted-foreground font-mono">ICD-10: {rule.icd10}</span>}
-        </div>
-        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); onEdit(rule); }}>
-          <Pencil className="h-3 w-3" />
-        </Button>
-        {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-      </div>
-
-      {open && (
-        <div className="px-4 py-3 space-y-4 bg-white dark:bg-background">
-          {rule.diagnostic_criteria ? (
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Diagnostic Criteria</p>
-              <pre className="text-xs whitespace-pre-wrap leading-relaxed font-sans border-l-4 border-blue-400 pl-3 py-1 bg-blue-50 dark:bg-blue-950/20 rounded-r">
-                {rule.diagnostic_criteria}
-              </pre>
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground italic border-l-4 border-yellow-400 pl-3 py-1 bg-yellow-50 dark:bg-yellow-950/20 rounded-r">
-              No diagnostic criteria entered yet. Click the pencil icon to add criteria for this diagnosis.
-            </div>
-          )}
-
-          {rule.key_questions && rule.key_questions.length > 0 && (
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Key Questions to Ask</p>
-              <ol className="space-y-1.5">
-                {rule.key_questions.map((q, i) => (
-                  <li key={i} className="flex gap-2 text-xs">
-                    <span className="font-bold text-blue-600 shrink-0">{i + 1}.</span>
-                    <span>{q}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-3 pt-1">
-            {rule.workup_impact && (
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 mb-1">Workup Orders</p>
-                <p className="text-xs text-muted-foreground leading-relaxed">{rule.workup_impact}</p>
-              </div>
-            )}
-            {rule.disposition_impact && (
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-600 mb-1">Disposition</p>
-                <p className="text-xs text-muted-foreground leading-relaxed">{rule.disposition_impact}</p>
-              </div>
-            )}
-            {rule.notes && (
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Clinical Pearls</p>
-                <p className="text-xs text-muted-foreground leading-relaxed">{rule.notes}</p>
-              </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-sm">{rule.rule_name}</span>
+            {rule.icd10 && (
+              <span className="text-[10px] font-mono text-muted-foreground border rounded px-1 py-0.5">{rule.icd10}</span>
             )}
           </div>
+          {/* ── Criteria preview — always visible ── */}
+          {hasCriteria ? (
+            <pre className="mt-2 text-xs whitespace-pre-wrap leading-relaxed font-sans text-foreground/90 border-l-4 border-blue-400 pl-3 py-1 bg-blue-50 dark:bg-blue-950/20 rounded-r">
+              {rule.diagnostic_criteria}
+            </pre>
+          ) : (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400 italic border-l-4 border-amber-400 pl-3 py-1 bg-amber-50 dark:bg-amber-950/20 rounded-r">
+              No diagnostic criteria entered — click Edit to add the clinical criteria for this diagnosis.
+            </p>
+          )}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs shrink-0"
+          onClick={() => onEdit(rule)}
+          data-testid={`btn-edit-dx-${rule.rule_id}`}
+        >
+          <Pencil className="h-3 w-3 mr-1" /> Edit
+        </Button>
+      </div>
+
+      {/* ── Key questions — always visible if present ── */}
+      {hasQuestions && (
+        <div className="px-4 py-3 border-t bg-white dark:bg-background">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-400 mb-2">
+            Key Questions to Ask ({rule.key_questions!.length})
+          </p>
+          <ol className="space-y-1.5">
+            {rule.key_questions!.map((q, i) => (
+              <li key={i} className="flex gap-2 text-xs">
+                <span className="font-bold text-cyan-600 shrink-0 w-4">{i + 1}.</span>
+                <span className="text-foreground/80">{q}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* ── Workup / Disposition / Notes — always visible if present ── */}
+      {(rule.workup_impact || rule.disposition_impact || rule.medication_impact || rule.notes) && (
+        <div className="px-4 py-3 border-t bg-muted/10 grid grid-cols-1 gap-2">
+          {rule.workup_impact && (
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-purple-600 mr-2">Workup:</span>
+              <span className="text-xs text-muted-foreground">{rule.workup_impact}</span>
+            </div>
+          )}
+          {rule.medication_impact && (
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-green-600 mr-2">Medications:</span>
+              <span className="text-xs text-muted-foreground">{rule.medication_impact}</span>
+            </div>
+          )}
+          {rule.disposition_impact && (
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-600 mr-2">Disposition:</span>
+              <span className="text-xs text-muted-foreground">{rule.disposition_impact}</span>
+            </div>
+          )}
+          {rule.notes && (
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mr-2">Pearls:</span>
+              <span className="text-xs text-muted-foreground">{rule.notes}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -190,14 +219,17 @@ export default function ClinicalKBEditorPage() {
 
   const [expandedSystems, setExpandedSystems]     = useState<Set<string>>(new Set(["Cardiology"]));
   const [selectedComplaint, setSelectedComplaint] = useState<string | null>(null);
-  const [selectedSystem, setSelectedSystem]       = useState<string>("Cardiology");
   const [activeTab, setActiveTab]                 = useState("dx_criteria");
   const [search, setSearch]                       = useState("");
   const [page, setPage]                           = useState(1);
   const [editRule, setEditRule]                   = useState<Partial<Rule> | null>(null);
   const [isNew, setIsNew]                         = useState(false);
   const [sidebarSearch, setSidebarSearch]         = useState("");
-  const [keyQText, setKeyQText]                   = useState("");
+
+  // ── helper: always use functional update to avoid stale closure overwrites ──
+  function setField<K extends keyof Rule>(key: K, value: Rule[K] | null) {
+    setEditRule((prev) => prev ? { ...prev, [key]: value } : prev);
+  }
 
   // ── Queries ──
 
@@ -232,13 +264,28 @@ export default function ClinicalKBEditorPage() {
   const totalRules    = rulesData?.total ?? 0;
   const totalPages    = Math.ceil(totalRules / 50);
 
+  // Sort: rules WITH criteria first, then those without
+  const sortedRules = useMemo(() => {
+    if (!isDxCriteriaTab) return rules;
+    return [...rules].sort((a, b) => {
+      const aHas = !!a.diagnostic_criteria?.trim() ? 0 : 1;
+      const bHas = !!b.diagnostic_criteria?.trim() ? 0 : 1;
+      if (aHas !== bHas) return aHas - bHas;
+      return (a.priority ?? 5) - (b.priority ?? 5);
+    });
+  }, [rules, isDxCriteriaTab]);
+
   // ── Mutations ──
 
   const saveRule = useMutation({
     mutationFn: async (r: Partial<Rule>) => {
       const payload = {
         ...r,
-        key_questions: keyQText.split("\n").map((s) => s.trim()).filter(Boolean),
+        key_questions: (r._key_questions_text ?? "")
+          .split("\n")
+          .map((s: string) => s.trim())
+          .filter(Boolean),
+        _key_questions_text: undefined,
       };
       if (isNew) return authFetch("/api/kb-editor/rules", { method: "POST", body: JSON.stringify(payload) });
       return authFetch(`/api/kb-editor/rules/${r.rule_id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -264,15 +311,13 @@ export default function ClinicalKBEditorPage() {
 
   function openEdit(rule: Rule) {
     setIsNew(false);
-    setEditRule({ ...rule });
-    setKeyQText((rule.key_questions ?? []).join("\n"));
+    setEditRule(ruleToEditState(rule));
   }
 
   function openNew() {
     setIsNew(true);
     const rt = activeTab === "all" || activeTab === "dx_criteria" ? "diagnosis" : activeTab;
     setEditRule({ ...EMPTY_RULE, complaint_id: selectedComplaint ?? "", rule_type: rt });
-    setKeyQText("");
   }
 
   function toggleSystem(sys: string) {
@@ -281,7 +326,6 @@ export default function ClinicalKBEditorPage() {
       if (next.has(sys)) next.delete(sys); else next.add(sys);
       return next;
     });
-    setSelectedSystem(sys);
   }
 
   function selectComplaint(id: string) {
@@ -294,11 +338,15 @@ export default function ClinicalKBEditorPage() {
   const selectedComplaintData = complaints.find((c) => c.complaint_id === selectedComplaint);
   const filteredSystems = SYSTEM_ORDER.filter((s) => bySystem[s]?.length > 0);
 
+  const withCriteria    = sortedRules.filter(r => !!r.diagnostic_criteria?.trim()).length;
+  const withoutCriteria = sortedRules.filter(r => !r.diagnostic_criteria?.trim()).length;
+
   // ── Render ──
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      {/* ── Left Sidebar: Systems + Complaints ── */}
+
+      {/* ── Left Sidebar ── */}
       <div className="w-72 border-r flex flex-col flex-shrink-0 bg-muted/30">
         <div className="p-3 border-b">
           <h2 className="font-semibold text-sm mb-2">Clinical KB Editor</h2>
@@ -369,7 +417,13 @@ export default function ClinicalKBEditorPage() {
             <div className="border-b px-4 py-3 flex items-center gap-3 flex-shrink-0">
               <div className="flex-1">
                 <h3 className="font-semibold capitalize">{selectedComplaint.replace(/_/g, " ")}</h3>
-                <p className="text-xs text-muted-foreground">{selectedComplaintData?.system} · {totalRules} rules</p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedComplaintData?.system} · {totalRules} rules
+                  {isDxCriteriaTab && (
+                    <> · <span className="text-green-600 font-medium">{withCriteria} with criteria</span>
+                    {withoutCriteria > 0 && <span className="text-amber-600"> · {withoutCriteria} need criteria</span>}</>
+                  )}
+                </p>
               </div>
               <Button data-testid="btn-add-rule" size="sm" onClick={openNew}>
                 <Plus className="h-3.5 w-3.5 mr-1" /> Add Rule
@@ -391,7 +445,7 @@ export default function ClinicalKBEditorPage() {
               ))}
             </div>
 
-            {/* Search bar */}
+            {/* Search */}
             <div className="px-4 py-2 border-b flex-shrink-0">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
@@ -409,25 +463,27 @@ export default function ClinicalKBEditorPage() {
             <ScrollArea className="flex-1">
               {loadingRules ? (
                 <div className="p-6 text-xs text-muted-foreground">Loading rules…</div>
-              ) : rules.length === 0 ? (
+              ) : sortedRules.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
-                  <p className="text-sm">No rules found for this complaint in this category.</p>
+                  <p className="text-sm">No rules found.</p>
                   <Button size="sm" variant="outline" className="mt-3" onClick={openNew}>
                     <Plus className="h-3.5 w-3.5 mr-1" /> Add First Rule
                   </Button>
                 </div>
               ) : isDxCriteriaTab ? (
-                /* ── Dx Criteria View ── */
-                <div className="p-4">
-                  <div className="mb-3 flex items-center gap-2">
+                /* ── Dx Criteria View — all expanded by default ── */
+                <div className="p-4 space-y-0">
+                  <div className="flex items-center gap-2 mb-4">
                     <CheckSquare className="h-4 w-4 text-indigo-600" />
                     <span className="text-sm font-semibold">Diagnostic Criteria — {selectedComplaint.replace(/_/g, " ")}</span>
-                    <Badge variant="outline" className="text-[10px]">{rules.length} diagnoses</Badge>
+                    <Badge variant="outline" className="text-[10px]">{sortedRules.length} diagnoses</Badge>
+                    {withoutCriteria > 0 && (
+                      <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-600">
+                        {withoutCriteria} need criteria
+                      </Badge>
+                    )}
                   </div>
-                  <p className="text-xs text-muted-foreground mb-4">
-                    Each card below shows the clinical criteria required to consider this diagnosis, plus the key questions to ask. Click any card to expand, or the pencil to edit.
-                  </p>
-                  {rules.map((rule) => (
+                  {sortedRules.map((rule) => (
                     <DxCriteriaCard key={rule.rule_id} rule={rule} onEdit={openEdit} />
                   ))}
                 </div>
@@ -447,21 +503,15 @@ export default function ClinicalKBEditorPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rules.map((rule, i) => {
+                      {sortedRules.map((rule, i) => {
                         const typeInfo = RULE_TYPES.find((t) => t.value === rule.rule_type);
-                        const keyContent = rule.diagnostic_criteria
-                          ? rule.diagnostic_criteria.slice(0, 120)
-                          : rule.logic_description
-                          ? rule.logic_description.slice(0, 120)
-                          : rule.workup_impact
-                          ? rule.workup_impact.slice(0, 120)
-                          : rule.medication_impact?.slice(0, 120) ?? "—";
+                        const keyContent =
+                          rule.diagnostic_criteria?.slice(0, 120) ??
+                          rule.logic_description?.slice(0, 120) ??
+                          rule.workup_impact?.slice(0, 120) ??
+                          rule.medication_impact?.slice(0, 120) ?? "—";
                         return (
-                          <tr
-                            key={rule.rule_id}
-                            data-testid={`row-rule-${rule.rule_id}`}
-                            className="border-b hover:bg-muted/40 transition-colors"
-                          >
+                          <tr key={rule.rule_id} data-testid={`row-rule-${rule.rule_id}`} className="border-b hover:bg-muted/40 transition-colors">
                             <td className="px-3 py-2 text-muted-foreground">{(page - 1) * 50 + i + 1}</td>
                             <td className="px-3 py-2 max-w-[200px]">
                               <div className="font-medium truncate" title={rule.rule_name}>{rule.rule_name}</div>
@@ -470,8 +520,7 @@ export default function ClinicalKBEditorPage() {
                             <td className="px-3 py-2">
                               {typeInfo && (
                                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${typeInfo.color}`}>
-                                  <typeInfo.icon className="h-2.5 w-2.5" />
-                                  {typeInfo.label}
+                                  <typeInfo.icon className="h-2.5 w-2.5" />{typeInfo.label}
                                 </span>
                               )}
                             </td>
@@ -481,7 +530,7 @@ export default function ClinicalKBEditorPage() {
                               </span>
                             </td>
                             <td className="px-3 py-2 max-w-[260px]">
-                              <div className="text-muted-foreground leading-relaxed line-clamp-2" title={keyContent}>{keyContent}</div>
+                              <div className="text-muted-foreground leading-relaxed line-clamp-2">{keyContent}</div>
                             </td>
                             <td className="px-3 py-2">
                               <span className="text-[10px] text-muted-foreground truncate block max-w-[90px]">
@@ -493,7 +542,7 @@ export default function ClinicalKBEditorPage() {
                                 <Button data-testid={`btn-edit-${rule.rule_id}`} size="icon" variant="ghost" className="h-6 w-6" onClick={() => openEdit(rule)}>
                                   <Pencil className="h-3 w-3" />
                                 </Button>
-                                <Button data-testid={`btn-delete-${rule.rule_id}`} size="icon" variant="ghost" className="h-6 w-6 text-destructive hover:text-destructive" onClick={() => { if (confirm(`Delete "${rule.rule_name}"?`)) deleteRule.mutate(rule.rule_id); }}>
+                                <Button data-testid={`btn-delete-${rule.rule_id}`} size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={() => { if (confirm(`Delete "${rule.rule_name}"?`)) deleteRule.mutate(rule.rule_id); }}>
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
                               </div>
@@ -503,7 +552,6 @@ export default function ClinicalKBEditorPage() {
                       })}
                     </tbody>
                   </table>
-
                   {totalPages > 1 && (
                     <div className="border-t px-4 py-2 flex items-center gap-2 text-xs">
                       <span className="text-muted-foreground">{totalRules} rules · Page {page}/{totalPages}</span>
@@ -524,29 +572,71 @@ export default function ClinicalKBEditorPage() {
       <Dialog open={!!editRule} onOpenChange={(o) => { if (!o) setEditRule(null); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{isNew ? "Add New Rule" : "Edit Rule"}</DialogTitle>
+            <DialogTitle>{isNew ? "Add New Rule" : `Edit: ${editRule?.rule_name ?? ""}`}</DialogTitle>
           </DialogHeader>
 
           {editRule && (
             <div className="grid gap-4 py-2">
+
+              {/* ── Diagnostic Criteria + Key Questions — TOP, always visible for diagnosis rules ── */}
+              {(editRule.rule_type === "diagnosis" || !editRule.rule_type) && (
+                <>
+                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-lg p-3 bg-indigo-50/50 dark:bg-indigo-950/10">
+                    <Label className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                      Diagnostic Criteria — When does this diagnosis apply?
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">
+                      Number each criterion. Be specific: measurements, timeframes, exam findings.
+                    </p>
+                    <Textarea
+                      data-testid="textarea-diagnostic-criteria"
+                      value={editRule.diagnostic_criteria ?? ""}
+                      onChange={(e) => setField("diagnostic_criteria", e.target.value || null)}
+                      placeholder={"1. Chest pain/pressure despite maximum medical therapy\n2. ST elevation ≥1mm in ≥2 contiguous leads (or new LBBB)\n3. Hemodynamically unstable OR signs of heart failure\n4. Recent MI within 12 hours"}
+                      className="mt-1 text-xs font-mono"
+                      rows={6}
+                    />
+                  </div>
+
+                  <div className="border border-cyan-200 dark:border-cyan-800 rounded-lg p-3 bg-cyan-50/50 dark:bg-cyan-950/10">
+                    <Label className="text-xs font-semibold text-cyan-700 dark:text-cyan-300">
+                      Key Questions to Ask (one per line — existing questions are preserved)
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">
+                      Each line = one question. Add new lines at the bottom to add more; do not erase existing lines unless removing a question.
+                    </p>
+                    <Textarea
+                      data-testid="textarea-key-questions"
+                      value={editRule._key_questions_text ?? ""}
+                      onChange={(e) => setField("_key_questions_text" as any, e.target.value)}
+                      placeholder={"Is chest pain ongoing despite nitrates?\nIs there ST elevation on EKG?\nIs the patient hemodynamically unstable?"}
+                      className="mt-1 text-xs"
+                      rows={6}
+                    />
+                    {editRule._key_questions_text && (
+                      <p className="text-[10px] text-cyan-600 mt-1">
+                        {editRule._key_questions_text.split("\n").filter(s => s.trim()).length} questions
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <Label className="text-xs">Rule Name *</Label>
                   <Input
                     data-testid="input-rule-name"
                     value={editRule.rule_name ?? ""}
-                    onChange={(e) => setEditRule({ ...editRule, rule_name: e.target.value })}
+                    onChange={(e) => setField("rule_name", e.target.value)}
                     placeholder="e.g. STEMI — Urgent Cardiac Cath"
                     className="mt-1"
                   />
                 </div>
-
                 <div>
                   <Label className="text-xs">Rule Type *</Label>
-                  <Select value={editRule.rule_type ?? "diagnosis"} onValueChange={(v) => setEditRule({ ...editRule, rule_type: v })}>
-                    <SelectTrigger data-testid="select-rule-type" className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={editRule.rule_type ?? "diagnosis"} onValueChange={(v) => setField("rule_type", v)}>
+                    <SelectTrigger data-testid="select-rule-type" className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {RULE_TYPES.filter(t => t.value !== "all" && t.value !== "dx_criteria").map((t) => (
                         <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
@@ -554,13 +644,10 @@ export default function ClinicalKBEditorPage() {
                     </SelectContent>
                   </Select>
                 </div>
-
                 <div>
                   <Label className="text-xs">Safety Level</Label>
-                  <Select value={editRule.safety_level ?? "MODERATE"} onValueChange={(v) => setEditRule({ ...editRule, safety_level: v })}>
-                    <SelectTrigger data-testid="select-safety-level" className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={editRule.safety_level ?? "MODERATE"} onValueChange={(v) => setField("safety_level", v)}>
+                    <SelectTrigger data-testid="select-safety-level" className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {["CRITICAL","HIGH","MODERATE","LOW"].map((l) => (
                         <SelectItem key={l} value={l}>{l}</SelectItem>
@@ -568,138 +655,42 @@ export default function ClinicalKBEditorPage() {
                     </SelectContent>
                   </Select>
                 </div>
-
                 <div>
                   <Label className="text-xs">Complaint ID *</Label>
-                  <Input
-                    data-testid="input-complaint-id"
-                    value={editRule.complaint_id ?? ""}
-                    onChange={(e) => setEditRule({ ...editRule, complaint_id: e.target.value })}
-                    placeholder="e.g. chest_pain"
-                    className="mt-1"
-                  />
+                  <Input data-testid="input-complaint-id" value={editRule.complaint_id ?? ""} onChange={(e) => setField("complaint_id", e.target.value)} placeholder="e.g. chest_pain" className="mt-1" />
                 </div>
-
                 <div>
                   <Label className="text-xs">ICD-10 Code</Label>
-                  <Input
-                    data-testid="input-icd10"
-                    value={editRule.icd10 ?? ""}
-                    onChange={(e) => setEditRule({ ...editRule, icd10: e.target.value || null })}
-                    placeholder="e.g. I21.9"
-                    className="mt-1 font-mono"
-                  />
+                  <Input data-testid="input-icd10" value={editRule.icd10 ?? ""} onChange={(e) => setField("icd10", e.target.value || null)} placeholder="e.g. I21.9" className="mt-1 font-mono" />
                 </div>
-
                 <div>
                   <Label className="text-xs">Priority (1=highest)</Label>
-                  <Input
-                    data-testid="input-priority"
-                    type="number" min={1} max={10}
-                    value={editRule.priority ?? 5}
-                    onChange={(e) => setEditRule({ ...editRule, priority: parseInt(e.target.value) || 5 })}
-                    className="mt-1"
-                  />
+                  <Input data-testid="input-priority" type="number" min={1} max={10} value={editRule.priority ?? 5} onChange={(e) => setField("priority", parseInt(e.target.value) || 5)} className="mt-1" />
                 </div>
-
                 <div>
-                  <Label className="text-xs">Diagnosis ID / Cluster</Label>
-                  <Input
-                    data-testid="input-diagnosis-id"
-                    value={editRule.diagnosis_id ?? ""}
-                    onChange={(e) => setEditRule({ ...editRule, diagnosis_id: e.target.value || null })}
-                    placeholder="e.g. STEMI"
-                    className="mt-1"
-                  />
+                  <Label className="text-xs">Diagnosis ID</Label>
+                  <Input data-testid="input-diagnosis-id" value={editRule.diagnosis_id ?? ""} onChange={(e) => setField("diagnosis_id", e.target.value || null)} placeholder="e.g. STEMI" className="mt-1" />
                 </div>
               </div>
 
-              {/* ── Diagnostic Criteria — TOP for diagnosis rules ── */}
-              {(editRule.rule_type === "diagnosis" || !editRule.rule_type) && (
-                <div className="border border-indigo-200 rounded-lg p-3 bg-indigo-50/50 dark:bg-indigo-950/10">
-                  <Label className="text-xs font-semibold text-indigo-700 dark:text-indigo-400">
-                    Diagnostic Criteria — When does this diagnosis apply?
-                  </Label>
-                  <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">
-                    List the specific clinical findings required (e.g. "ST elevation ≥1mm in ≥2 contiguous leads + ongoing chest pain despite nitrates")
-                  </p>
-                  <Textarea
-                    data-testid="textarea-diagnostic-criteria"
-                    value={editRule.diagnostic_criteria ?? ""}
-                    onChange={(e) => setEditRule({ ...editRule, diagnostic_criteria: e.target.value || null })}
-                    placeholder={"e.g.\n1. Chest pain despite maximum medical therapy\n2. ST elevation ≥1mm in ≥2 contiguous leads (or new LBBB)\n3. Hemodynamically unstable OR signs of heart failure\n4. Recent MI within 12 hours"}
-                    className="mt-1 text-xs font-mono"
-                    rows={5}
-                  />
-                </div>
-              )}
-
-              {/* ── Key Questions ── */}
-              {(editRule.rule_type === "diagnosis" || !editRule.rule_type) && (
-                <div className="border border-cyan-200 rounded-lg p-3 bg-cyan-50/50 dark:bg-cyan-950/10">
-                  <Label className="text-xs font-semibold text-cyan-700 dark:text-cyan-400">
-                    Key Questions to Ask (one per line)
-                  </Label>
-                  <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">
-                    The questions that must be answered to evaluate this diagnosis. Each line = one question.
-                  </p>
-                  <Textarea
-                    data-testid="textarea-key-questions"
-                    value={keyQText}
-                    onChange={(e) => setKeyQText(e.target.value)}
-                    placeholder={"Is chest pain ongoing despite nitrates?\nIs there ST elevation on EKG?\nIs the patient hemodynamically unstable?"}
-                    className="mt-1 text-xs"
-                    rows={5}
-                  />
-                </div>
-              )}
-
               <div>
                 <Label className="text-xs">Workup Orders (labs + imaging)</Label>
-                <Textarea
-                  data-testid="textarea-workup"
-                  value={editRule.workup_impact ?? ""}
-                  onChange={(e) => setEditRule({ ...editRule, workup_impact: e.target.value || null })}
-                  placeholder="e.g. STAT EKG | Troponin I/T | BMP | CXR | Echocardiogram"
-                  className="mt-1 text-xs"
-                  rows={3}
-                />
+                <Textarea data-testid="textarea-workup" value={editRule.workup_impact ?? ""} onChange={(e) => setField("workup_impact", e.target.value || null)} placeholder="e.g. STAT EKG | Troponin I/T | BMP | CXR | Echo" className="mt-1 text-xs" rows={3} />
               </div>
 
               <div>
                 <Label className="text-xs">Medication / Treatment Plan</Label>
-                <Textarea
-                  data-testid="textarea-medication"
-                  value={editRule.medication_impact ?? ""}
-                  onChange={(e) => setEditRule({ ...editRule, medication_impact: e.target.value || null })}
-                  placeholder="e.g. Aspirin 325mg STAT | Heparin IV | Clopidogrel 600mg"
-                  className="mt-1 text-xs"
-                  rows={3}
-                />
+                <Textarea data-testid="textarea-medication" value={editRule.medication_impact ?? ""} onChange={(e) => setField("medication_impact", e.target.value || null)} placeholder="e.g. Aspirin 325mg STAT | Heparin IV | Clopidogrel 600mg" className="mt-1 text-xs" rows={3} />
               </div>
 
               <div>
                 <Label className="text-xs">Disposition / ER Criteria</Label>
-                <Textarea
-                  data-testid="textarea-disposition"
-                  value={editRule.disposition_impact ?? ""}
-                  onChange={(e) => setEditRule({ ...editRule, disposition_impact: e.target.value || null })}
-                  placeholder="e.g. IMMEDIATE: Activate cath lab. Goal door-to-balloon <90 min."
-                  className="mt-1 text-xs"
-                  rows={2}
-                />
+                <Textarea data-testid="textarea-disposition" value={editRule.disposition_impact ?? ""} onChange={(e) => setField("disposition_impact", e.target.value || null)} placeholder="e.g. IMMEDIATE: Activate cath lab. Goal door-to-balloon <90 min." className="mt-1 text-xs" rows={2} />
               </div>
 
               <div>
                 <Label className="text-xs">Clinical Pearls / Notes</Label>
-                <Textarea
-                  data-testid="textarea-notes"
-                  value={editRule.notes ?? ""}
-                  onChange={(e) => setEditRule({ ...editRule, notes: e.target.value || null })}
-                  placeholder="Cannot-miss notes, scoring tools, pediatric variants, contraindications…"
-                  className="mt-1 text-xs"
-                  rows={2}
-                />
+                <Textarea data-testid="textarea-notes" value={editRule.notes ?? ""} onChange={(e) => setField("notes", e.target.value || null)} placeholder="Cannot-miss notes, scoring tools, contraindications…" className="mt-1 text-xs" rows={2} />
               </div>
             </div>
           )}
