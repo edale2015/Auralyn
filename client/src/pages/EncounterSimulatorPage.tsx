@@ -1119,7 +1119,7 @@ export default function EncounterSimulatorPage() {
                     )}
                     {/* HPI yes/no questions */}
                     <div className="grid grid-cols-2 gap-2 mt-1">
-                      {effHpi.map(q => {
+                      {effHpi.filter(q => !q.showIf || inputs[q.showIf.field] === q.showIf.value).map(q => {
                         const isCust = qConfig.custom.hpi.some(c => c.field === q.field);
                         return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                           editMode={editMode} isCustom={isCust}
