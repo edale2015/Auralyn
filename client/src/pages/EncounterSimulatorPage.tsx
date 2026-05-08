@@ -9,7 +9,7 @@
  * All KB complaints are available automatically via the API.
  */
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,7 @@ import {
   Activity, Thermometer, Wind, Droplets, User, RefreshCw,
   ShieldAlert, ArrowRight, FlaskConical, Pill, ClipboardList,
   ListTree, BookOpen, RotateCcw, Users, MessageSquare, FileText,
-  Circle, CircleCheck, CircleX, Minus, Database,
+  Circle, CircleCheck, CircleX, Minus, Database, Mic, MicOff,
 } from "lucide-react";
 import {
   ENCOUNTER_CONFIGS,
@@ -274,6 +274,138 @@ function SectionHeader({ icon, label, step, open, onToggle, count }: {
           : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       )}
     </button>
+  );
+}
+
+// ── Voice Dictation Bar ───────────────────────────────────────────────────────
+function VoiceDictationBar({ config, inputs, setInputs, toast }: {
+  config: any;
+  inputs: Inputs;
+  setInputs: React.Dispatch<React.SetStateAction<Inputs>>;
+  toast: (props: { title?: string; description?: string; variant?: "default" | "destructive" }) => void;
+}) {
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [isParsing, setIsParsing] = useState(false);
+  const [filledCount, setFilledCount] = useState<number | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const transcriptRef = useRef("");
+
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+  const parseAndFill = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+    setIsParsing(true);
+    try {
+      const allFields = [
+        ...(config.hpiQuestions ?? []),
+        ...(config.rosQuestions ?? []),
+        ...(config.pmhQuestions ?? []),
+        ...(config.fhxQuestions ?? []),
+        ...(config.medsQuestions ?? []),
+      ].map((q: any) => ({ field: q.field, label: q.label }));
+
+      const res = await fetch("/api/voice-parse-hpi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ transcript: text, complaintId: config.complaintId, fields: allFields }),
+      });
+      if (!res.ok) throw new Error("Parse failed");
+      const data = await res.json();
+      const fieldValues: Record<string, string> = data.fieldValues ?? {};
+      const count = Object.keys(fieldValues).length;
+      setInputs(prev => ({ ...prev, ...fieldValues }));
+      setFilledCount(count);
+      toast({
+        title: count > 0 ? `Filled ${count} field${count === 1 ? "" : "s"} from dictation` : "No fields matched",
+        description: count > 0 ? "Review and adjust any answers as needed." : "Try speaking with clinical terms.",
+        variant: count > 0 ? "default" : "destructive",
+      });
+    } catch {
+      toast({ title: "Voice parse failed", variant: "destructive" });
+    } finally {
+      setIsParsing(false);
+    }
+  }, [config, setInputs, toast]);
+
+  const startListening = useCallback(() => {
+    setTranscript("");
+    transcriptRef.current = "";
+    setFilledCount(null);
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognition.onresult = (e: any) => {
+      let full = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) full += e.results[i][0].transcript + " ";
+      }
+      const interim = e.results[e.results.length - 1]?.[0]?.transcript ?? "";
+      const display = full + (e.results[e.results.length - 1]?.isFinal ? "" : interim);
+      setTranscript(display);
+      transcriptRef.current = full || display;
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => {
+      setIsListening(false);
+      if (transcriptRef.current.trim()) parseAndFill(transcriptRef.current);
+    };
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [SR, parseAndFill]);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+  }, []);
+
+  if (!SR) return null;
+
+  return (
+    <div className="mb-3 rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={isListening ? stopListening : startListening}
+          disabled={isParsing}
+          data-testid="btn-voice-dictation"
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium transition-all disabled:opacity-50 ${
+            isListening
+              ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-300"
+              : "bg-background border-border text-muted-foreground hover:border-blue-400 hover:text-foreground"
+          }`}
+        >
+          {isListening
+            ? <><MicOff className="h-4 w-4" /> Stop dictating</>
+            : <><Mic className="h-4 w-4" /> Dictate HPI</>}
+        </button>
+
+        {isParsing && (
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Parsing transcript…
+          </span>
+        )}
+        {filledCount !== null && !isParsing && (
+          <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {filledCount > 0
+              ? `${filledCount} field${filledCount === 1 ? "" : "s"} filled — review below`
+              : "No fields matched — try again"}
+          </span>
+        )}
+        {isListening && (
+          <span className="ml-auto flex items-center gap-1 text-xs text-red-500 animate-pulse">
+            <span className="inline-block h-2 w-2 rounded-full bg-red-500" /> Recording
+          </span>
+        )}
+      </div>
+
+      {(isListening || transcript) && (
+        <div className="text-xs text-muted-foreground bg-background/80 rounded border border-border/50 px-3 py-2 min-h-[36px] leading-relaxed italic">
+          {transcript || "Listening… speak the patient history"}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1070,6 +1202,8 @@ export default function EncounterSimulatorPage() {
                   open={openSections.hpi} onToggle={() => toggleSection("hpi")} count={effHpi.length} />
                 {openSections.hpi && (
                   <>
+                    {/* Voice dictation bar */}
+                    <VoiceDictationBar config={config} inputs={inputs} setInputs={setInputs} toast={toast} />
                     {/* Onset timing chips */}
                     {config.onsetOptions && config.onsetOptions.length > 0 && (
                       <div className="mb-2">

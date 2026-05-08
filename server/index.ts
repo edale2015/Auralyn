@@ -401,6 +401,7 @@ import decisionTreeRoutes, { suggestFixRouter } from "./routes/decisionTreeRoute
 import masterRuleMapRoutes from "./routes/masterRuleMap.routes";
 import masterRulesRoutes from "./routes/masterRules.routes";
 import encounterConfigsRoutes from "./routes/encounterConfigs.routes";
+import voiceParseRoutes from "./routes/voiceParse.routes";
 import kbEditorRoutes from "./routes/kbEditor.routes";
 import rlhfRoutes from "./routes/rlhf.routes";
 import exportZipRoutes from "./routes/exportZip.routes";
@@ -934,6 +935,7 @@ app.use("/api/kb-governance", kbGovernanceRoutes);
 app.use("/api/rule-map", masterRuleMapRoutes);
 app.use("/api/master-rules", masterRulesRoutes);
 app.use("/api/encounter-configs", encounterConfigsRoutes);
+app.use("/api/voice-parse-hpi", voiceParseRoutes);
 app.use("/api/kb-editor", kbEditorRoutes);
 app.use("/api/rlhf", rlhfRoutes);
 app.use("/api/export", exportZipRoutes);
