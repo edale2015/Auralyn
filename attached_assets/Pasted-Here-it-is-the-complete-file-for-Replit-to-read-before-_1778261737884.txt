@@ -1,0 +1,40 @@
+Here it is — the complete file for Replit to read before touching anything.Presented filePresented fileThe key interfaces Replit needs to build around — pulled directly from that file:
+Input — what capturePatientAnswer expects:
+tscapturePatientAnswer(
+  patientSpeech:   string,        // raw transcript from Web Speech API
+  questionContext: QuestionContext // the active question on screen
+): CaptureResult
+QuestionContext shape:
+ts{
+  questionId:   string          // "Q_CP_QUALITY", "Q_UTI_DYSURIA", etc.
+  questionText: string          // display label
+  questionType: "chip_select"   // → matches against options[]
+               | "boolean_pair" // → yes/no
+               | "scale"        // → 1–10 numeric
+               | "text"         // → verbatim capture
+  options?: Array<{
+    value:    string            // internal key: "pressure_squeezing"
+    label:    string            // display: "Pressure / Squeezing"
+    synonyms: string[]          // what patients say: ["heavy", "tight", "elephant"]
+  }>
+  section:    number            // 1–7
+  isActive:   boolean           // true when physician is on this question
+}
+Output — what result looks like:
+ts{
+  questionId:   string
+  rawAnswer:    string          // what patient actually said
+  autoConfirm:  boolean         // true → green flash, no tap needed
+  displayHint?: string          // shown when autoConfirm is false
+  matched: Array<{
+    value:      string          // form field value to set
+    label:      string          // display label
+    confidence: "high"          // auto-confirm
+               | "medium"       // yellow highlight, one tap to confirm
+               | "low"          // show all options, physician selects
+    matchedOn:  string          // which synonym triggered the match
+  }>
+}
+The three UI states Replit builds:
+autoConfirmmatched.lengthUI actiontrue≥ 1Green flash on matched chip(s), soft chime, advance to next questionfalse≥ 1Yellow highlight on suggestion, show displayHint text, wait for tapfalse0Subtle red border on question group, displayHint = "Could not parse — please select"
+The one thing Replit must track — activeQuestionId — which question the physician is currently on. As they scroll or click into each section, this updates. The getContextsForComplaint(complaintId) function from complaintVoiceContexts.ts returns the full array for a given complaint, and Replit finds the active one by matching questionId.

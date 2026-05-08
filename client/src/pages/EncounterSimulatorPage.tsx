@@ -32,6 +32,8 @@ import {
   type DifferentialConfig,
   type Inp as Inputs,
 } from "@/data/encounterConfigs";
+import { capturePatientAnswer, type QuestionContext, type CaptureResult } from "@/lib/livePatientCapture";
+import { getContextsForComplaint } from "@/lib/complaintVoiceContexts";
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
@@ -139,7 +141,7 @@ function saveQConfig(id: string, cfg: QConfig) {
 }
 
 // ── Three-state yes / no / unknown toggle ─────────────────────────────────────
-function YNToggle({ label, field, inputs, setInputs, compact = false, editMode = false, isCustom = false, onDelete }: {
+function YNToggle({ label, field, inputs, setInputs, compact = false, editMode = false, isCustom = false, onDelete, flashState, hintText }: {
   label: string; field: string;
   inputs: Inputs;
   setInputs: (fn: (p: Inputs) => Inputs) => void;
@@ -147,6 +149,8 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
   editMode?: boolean;
   isCustom?: boolean;
   onDelete?: () => void;
+  flashState?: "green" | "yellow" | "red";
+  hintText?: string;
 }) {
   const val = inputs[field] as "yes" | "no" | undefined;
   const cycle = () =>
@@ -158,16 +162,28 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
     val === "yes" ? "bg-green-100 border-green-500 text-green-800 dark:bg-green-900 dark:text-green-200"
     : val === "no"  ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-950 dark:text-red-300"
     : "bg-muted/60 border-border text-muted-foreground hover:border-blue-400";
+  const flashCls =
+    flashState === "green"  ? "ring-2 ring-green-500 ring-offset-1 animate-pulse"
+    : flashState === "yellow" ? "ring-2 ring-yellow-400 ring-offset-1"
+    : flashState === "red"    ? "ring-2 ring-red-400 ring-offset-1"
+    : "";
   if (!editMode) {
     return (
-      <button
-        data-testid={`yn-${field}`}
-        onClick={cycle}
-        className={`text-left rounded border transition-all ${compact ? "text-xs px-2 py-1" : "text-sm px-3 py-1.5"} ${cls} w-full`}
-      >
-        <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
-        {label}
-      </button>
+      <div className="w-full">
+        <button
+          data-testid={`yn-${field}`}
+          onClick={cycle}
+          className={`text-left rounded border transition-all ${compact ? "text-xs px-2 py-1" : "text-sm px-3 py-1.5"} ${cls} ${flashCls} w-full`}
+        >
+          <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
+          {label}
+        </button>
+        {hintText && flashState === "yellow" && (
+          <div className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5 px-1 flex items-center gap-1">
+            <span>💡</span>{hintText}
+          </div>
+        )}
+      </div>
     );
   }
   return (
@@ -175,7 +191,7 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
       <button
         data-testid={`yn-${field}`}
         onClick={cycle}
-        className={`text-left rounded border transition-all text-sm px-3 py-1.5 flex-1 min-w-0 ${cls} ${isCustom ? "border-l-2 border-l-blue-400" : ""}`}
+        className={`text-left rounded border transition-all text-sm px-3 py-1.5 flex-1 min-w-0 ${cls} ${flashCls} ${isCustom ? "border-l-2 border-l-blue-400" : ""}`}
       >
         <span className="font-mono mr-1.5">{val === "yes" ? "✓" : val === "no" ? "✗" : "?"}</span>
         <span className="truncate">{label}</span>
@@ -190,6 +206,11 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
         >
           <X className="h-3 w-3" />
         </button>
+      )}
+      {hintText && flashState === "yellow" && (
+        <div className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5 px-1 flex items-center gap-1 col-span-2">
+          <span>💡</span>{hintText}
+        </div>
       )}
     </div>
   );
@@ -481,6 +502,239 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
   );
 }
 
+// ── Live Interview voice capture bar ─────────────────────────────────────────
+function playChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.28);
+  } catch {}
+}
+
+function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, onFlash, clearFlash, onHint, clearHint }: {
+  config: any;
+  complaint: string;
+  inputs: Inputs;
+  setInputs: React.Dispatch<React.SetStateAction<Inputs>>;
+  openSections: Record<string, boolean>;
+  onFlash: (field: string, state: "green" | "yellow" | "red") => void;
+  clearFlash: (field: string) => void;
+  onHint: (field: string, hint: string) => void;
+  clearHint: (field: string) => void;
+}) {
+  const [isActive, setIsActive]           = useState(false);
+  const [fieldsCaptured, setFieldsCaptured] = useState(0);
+  const [activeSectionNum, setActiveSectionNum] = useState(2);
+
+  const recognitionRef     = useRef<any>(null);
+  const inputsRef          = useRef(inputs);
+  const capturedRef        = useRef(0);
+  const complaintRef       = useRef(complaint);
+  const activeSectionRef   = useRef(2);
+  const prevOpenSectionsRef = useRef(openSections);
+
+  useEffect(() => { inputsRef.current = inputs; }, [inputs]);
+  useEffect(() => { complaintRef.current = complaint; }, [complaint]);
+  useEffect(() => { activeSectionRef.current = activeSectionNum; }, [activeSectionNum]);
+
+  // Track which section the physician most recently opened → becomes active section
+  useEffect(() => {
+    const prev = prevOpenSectionsRef.current;
+    const sectionMap: Record<string, number> = { hpi: 2, ros: 4, pmh: 5, fhx: 6, meds: 7 };
+    for (const [k, v] of Object.entries(openSections)) {
+      if (v && !prev[k]) {
+        const num = sectionMap[k];
+        if (num) setActiveSectionNum(num);
+      }
+    }
+    prevOpenSectionsRef.current = { ...openSections };
+  }, [openSections]);
+
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+  const applyResult = useCallback((result: CaptureResult, ctx: QuestionContext) => {
+    if (result.matched.length === 0) {
+      onFlash(ctx.questionId, "red");
+      setTimeout(() => clearFlash(ctx.questionId), 3000);
+      return;
+    }
+
+    const patch: Record<string, any> = {};
+    const flashFields: string[] = [];
+
+    for (const m of result.matched) {
+      switch (ctx.questionType) {
+        case "boolean_pair":
+          patch[ctx.questionId] = m.value;
+          flashFields.push(ctx.questionId);
+          break;
+        case "scale":
+          patch["severity"] = Number(m.value);
+          flashFields.push("severity");
+          break;
+        case "chip_select":
+          if (ctx.questionId === "onset_timing") {
+            patch["onset_timing"] = m.value;
+            flashFields.push("onset_timing");
+          } else {
+            // character chips — m.value is the field name e.g. "char_pressure"
+            patch[m.value] = "yes";
+            flashFields.push(m.value);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (result.autoConfirm) {
+      setInputs(prev => ({ ...prev, ...patch }));
+      playChime();
+      capturedRef.current += flashFields.length;
+      setFieldsCaptured(capturedRef.current);
+      for (const f of flashFields) {
+        onFlash(f, "green");
+        setTimeout(() => clearFlash(f), 1500);
+      }
+    } else {
+      // Yellow suggestion — don't auto-fill, highlight + show hint
+      for (const f of flashFields) {
+        onFlash(f, "yellow");
+        onHint(f, result.displayHint ?? `Patient said "${result.rawAnswer}" — tap to confirm`);
+        setTimeout(() => { clearFlash(f); clearHint(f); }, 12000);
+      }
+    }
+  }, [setInputs, onFlash, clearFlash, onHint, clearHint]);
+
+  const processUtterance = useCallback((speech: string) => {
+    const cid = complaintRef.current;
+    const sec = activeSectionRef.current;
+    const currentInputs = inputsRef.current;
+
+    const contexts = getContextsForComplaint(cid);
+    const sectionCtxs = contexts.filter(c => c.section === sec);
+    if (!sectionCtxs.length) return;
+
+    let bestResult: CaptureResult | null = null;
+    let bestCtx: QuestionContext | null = null;
+    const confidenceRank = { high: 3, medium: 2, low: 1 };
+
+    for (const ctx of sectionCtxs) {
+      // Skip already-answered boolean questions (look for unanswered ones first)
+      const alreadyAnswered = ctx.questionType === "boolean_pair" && currentInputs[ctx.questionId] !== undefined;
+      const r = capturePatientAnswer(speech, ctx);
+      if (r.matched.length === 0) continue;
+
+      const rank = confidenceRank[r.matched[0].confidence];
+      const bestRank = bestResult ? confidenceRank[bestResult.matched[0].confidence] : 0;
+
+      // Prefer unanswered + higher confidence
+      if (!bestResult || rank > bestRank || (rank === bestRank && !alreadyAnswered)) {
+        bestResult = r;
+        bestCtx = ctx;
+      }
+    }
+
+    if (bestResult && bestCtx) applyResult(bestResult, bestCtx);
+  }, [applyResult]);
+
+  const stopListening = useCallback(() => {
+    const r = recognitionRef.current;
+    recognitionRef.current = null;
+    try { r?.stop(); } catch {}
+    setIsActive(false);
+  }, []);
+
+  const startListening = useCallback(() => {
+    if (!SR) return;
+    capturedRef.current = 0;
+    setFieldsCaptured(0);
+    setActiveSectionNum(2);
+
+    const recognition = new SR();
+    recognition.continuous    = true;
+    recognition.interimResults = false;
+    recognition.lang          = "en-US";
+
+    recognition.onresult = (e: any) => {
+      const last = e.results[e.results.length - 1];
+      if (last.isFinal) processUtterance(last[0].transcript);
+    };
+    recognition.onerror = () => { setIsActive(false); recognitionRef.current = null; };
+    recognition.onend = () => {
+      // Auto-restart while still active (browser ends continuous sometimes)
+      if (recognitionRef.current === recognition) {
+        try { recognition.start(); } catch { setIsActive(false); recognitionRef.current = null; }
+      }
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsActive(true);
+  }, [SR, processUtterance]);
+
+  // Cleanup on unmount
+  useEffect(() => () => { try { recognitionRef.current?.stop(); } catch {} }, []);
+
+  if (!SR) return null;
+
+  const SECTION_LABELS: Record<number, string> = {
+    2: "HPI", 4: "ROS", 5: "PMH", 6: "FHx", 7: "Meds",
+  };
+
+  return (
+    <>
+      {/* Teal Live Interview button */}
+      <button
+        data-testid="btn-live-interview"
+        onClick={isActive ? stopListening : startListening}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium transition-all ${
+          isActive
+            ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-300"
+            : "bg-teal-50 border-teal-500 text-teal-700 dark:bg-teal-900/30 dark:border-teal-500 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50"
+        }`}
+      >
+        {isActive
+          ? <><MicOff className="h-4 w-4" /> Stop Interview</>
+          : <><Mic className="h-4 w-4 text-teal-600 dark:text-teal-400" /> Live Interview</>}
+      </button>
+
+      {/* Floating bottom-right indicator while active */}
+      {isActive && (
+        <div
+          data-testid="live-interview-indicator"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-teal-700 dark:bg-teal-800 text-white px-4 py-2.5 rounded-full shadow-xl text-sm font-medium select-none"
+        >
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-teal-300 animate-pulse shrink-0" />
+          <span>Listening… <span className="opacity-75 text-xs">{SECTION_LABELS[activeSectionNum] ?? "HPI"}</span></span>
+          {fieldsCaptured > 0 && (
+            <span className="bg-white/20 px-2 py-0.5 rounded-full text-xs font-semibold">
+              {fieldsCaptured} field{fieldsCaptured !== 1 ? "s" : ""} captured
+            </span>
+          )}
+          <button
+            onClick={stopListening}
+            title="Stop live interview"
+            className="ml-1 opacity-70 hover:opacity-100 transition-opacity"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Criteria icon ─────────────────────────────────────────────────────────────
 function CritIcon({ val, invert }: { val: "yes" | "no" | undefined; invert?: boolean }) {
   const met = invert ? val === "no" : val === "yes";
@@ -731,6 +985,14 @@ export default function EncounterSimulatorPage() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     hpi: true, prior_episode: false, asthma_assessment: false, ros: true, pmh: true, fhx: true, meds: true,
   });
+
+  // ── Live Interview flash/hint states ───────────────────────────────────────
+  const [liveFlashStates, setLiveFlashStates] = useState<Record<string, "green" | "yellow" | "red">>({});
+  const [liveHints, setLiveHints] = useState<Record<string, string>>({});
+  const onFlash    = useCallback((field: string, state: "green"|"yellow"|"red") => setLiveFlashStates(p => ({ ...p, [field]: state })), []);
+  const clearFlash = useCallback((field: string) => setLiveFlashStates(p => { const n = { ...p }; delete n[field]; return n; }), []);
+  const onHint     = useCallback((field: string, hint: string) => setLiveHints(p => ({ ...p, [field]: hint })), []);
+  const clearHint  = useCallback((field: string) => setLiveHints(p => { const n = { ...p }; delete n[field]; return n; }), []);
   const toggleSection = useCallback((key: string) => {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
@@ -1287,8 +1549,21 @@ export default function EncounterSimulatorPage() {
                   open={openSections.hpi} onToggle={() => toggleSection("hpi")} count={effHpi.length} />
                 {openSections.hpi && (
                   <>
-                    {/* Voice dictation bar */}
-                    <VoiceDictationBar config={config} inputs={inputs} setInputs={setInputs} toast={toast} />
+                    {/* Dictation + Live Interview bar row */}
+                    <div className="flex items-start gap-2 flex-wrap mb-1">
+                      <VoiceDictationBar config={config} inputs={inputs} setInputs={setInputs} toast={toast} />
+                      <LiveInterviewBar
+                        config={config}
+                        complaint={complaint}
+                        inputs={inputs}
+                        setInputs={setInputs}
+                        openSections={openSections}
+                        onFlash={onFlash}
+                        clearFlash={clearFlash}
+                        onHint={onHint}
+                        clearHint={clearHint}
+                      />
+                    </div>
                     {/* Onset timing chips */}
                     {config.onsetOptions && config.onsetOptions.length > 0 && (
                       <div className="mb-2">
@@ -1342,6 +1617,7 @@ export default function EncounterSimulatorPage() {
                         const isCust = qConfig.custom.hpi.some(c => c.field === q.field);
                         return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                           editMode={editMode} isCustom={isCust}
+                          flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
                           onDelete={editMode ? () => isCust ? deleteCustomQuestion("hpi", q.field) : hideQuestion(q.field) : undefined} />;
                       })}
                       {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("hpi", label)} />}
@@ -1643,6 +1919,7 @@ export default function EncounterSimulatorPage() {
                       const isCust = qConfig.custom.ros.some(c => c.field === q.field);
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
+                        flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("ros", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effRos.length === 0 && !editMode && (
@@ -1668,6 +1945,7 @@ export default function EncounterSimulatorPage() {
                       const isCust = qConfig.custom.pmh.some(c => c.field === q.field);
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
+                        flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("pmh", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effPmh.length === 0 && !editMode && (
@@ -1693,6 +1971,7 @@ export default function EncounterSimulatorPage() {
                       const isCust = qConfig.custom.fhx.some(c => c.field === q.field);
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
+                        flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("fhx", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effFhx.length === 0 && !editMode && (
@@ -1720,6 +1999,7 @@ export default function EncounterSimulatorPage() {
                       const isCust = qConfig.custom.meds.some(c => c.field === q.field);
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
+                        flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("meds", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effMeds.length === 0 && !editMode && (
