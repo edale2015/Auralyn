@@ -277,6 +277,29 @@ function SectionHeader({ icon, label, step, open, onToggle, count }: {
   );
 }
 
+// ── Client-side vitals + demographics extractor ───────────────────────────────
+function extractVitalsAndDemographics(text: string): Record<string, any> {
+  const patch: Record<string, any> = {};
+  const o2 = text.match(/(?:o2|oxygen|sat(?:uration)?)[^0-9]*(\d{2,3})/i);
+  if (o2) patch["O2_sat"] = Number(o2[1]);
+  const hr = text.match(/(?:heart rate|hr|pulse)[^0-9]*(\d{2,3})/i);
+  if (hr) patch["heart_rate"] = Number(hr[1]);
+  const bp = text.match(/(?:bp|blood pressure)[^0-9]*(\d{2,3})\s*\/\s*(\d{2,3})/i);
+  if (bp) { patch["systolic_bp"] = Number(bp[1]); patch["diastolic_bp"] = Number(bp[2]); }
+  const temp = text.match(/(?:temp(?:erature)?)[^0-9]*(\d{2,3}(?:\.\d)?)/i);
+  if (temp) patch["temp_f"] = Number(temp[1]);
+  const rr = text.match(/(?:resp(?:iratory rate)?|\brr\b)[^0-9]*(\d{1,2})/i);
+  if (rr) patch["resp_rate"] = Number(rr[1]);
+  // Demographics
+  const ageM = text.match(/(\d{1,3})[- ](?:year|yr)[- ]old/i);
+  if (ageM) patch["age"] = Number(ageM[1]);
+  if (/\b(?:male|man|gentleman|mr\.?)\b/i.test(text) && !/\b(?:female|woman)\b/i.test(text)) patch["sex"] = "male";
+  else if (/\b(?:female|woman|lady|ms\.?|mrs\.?)\b/i.test(text)) patch["sex"] = "female";
+  if (/\b(?:smoker|smok(?:es|ing)|tobacco|cigarette)\b/i.test(text)) patch["smoker"] = "yes";
+  if (/\b(?:pregnant|pregnancy)\b/i.test(text)) patch["pregnancy_confirmed"] = "yes";
+  return patch;
+}
+
 // ── Voice Dictation Bar ───────────────────────────────────────────────────────
 function VoiceDictationBar({ config, inputs, setInputs, toast }: {
   config: any;
@@ -284,6 +307,7 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
   setInputs: React.Dispatch<React.SetStateAction<Inputs>>;
   toast: (props: { title?: string; description?: string; variant?: "default" | "destructive" }) => void;
 }) {
+  const [activeMode, setActiveMode] = useState<"hpi" | "full" | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [isParsing, setIsParsing] = useState(false);
@@ -293,28 +317,37 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
 
   const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-  const parseAndFill = useCallback(async (text: string) => {
+  const parseAndFill = useCallback(async (text: string, mode: "hpi" | "full") => {
     if (!text.trim()) return;
     setIsParsing(true);
     try {
-      const allFields = [
-        ...(config.hpiQuestions ?? []),
-        ...(config.rosQuestions ?? []),
-        ...(config.pmhQuestions ?? []),
-        ...(config.fhxQuestions ?? []),
-        ...(config.medsQuestions ?? []),
-      ].map((q: any) => ({ field: q.field, label: q.label }));
+      let extraPatch: Record<string, any> = {};
+      let fieldsForGPT: Array<{ field: string; label: string }>;
+
+      if (mode === "full") {
+        extraPatch = extractVitalsAndDemographics(text);
+        fieldsForGPT = [
+          ...(config.hpiQuestions ?? []),
+          ...(config.rosQuestions ?? []),
+          ...(config.pmhQuestions ?? []),
+          ...(config.fhxQuestions ?? []),
+          ...(config.medsQuestions ?? []),
+        ].map((q: any) => ({ field: q.field, label: q.label }));
+      } else {
+        fieldsForGPT = (config.hpiQuestions ?? []).map((q: any) => ({ field: q.field, label: q.label }));
+      }
 
       const res = await fetch("/api/voice-parse-hpi", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ transcript: text, complaintId: config.complaintId, fields: allFields }),
+        body: JSON.stringify({ transcript: text, complaintId: config.complaintId, fields: fieldsForGPT }),
       });
       if (!res.ok) throw new Error("Parse failed");
       const data = await res.json();
       const fieldValues: Record<string, string> = data.fieldValues ?? {};
-      const count = Object.keys(fieldValues).length;
-      setInputs(prev => ({ ...prev, ...fieldValues }));
+      const merged = { ...extraPatch, ...fieldValues };
+      const count = Object.keys(merged).length;
+      setInputs(prev => ({ ...prev, ...merged }));
       setFilledCount(count);
       toast({
         title: count > 0 ? `Filled ${count} field${count === 1 ? "" : "s"} from dictation` : "No fields matched",
@@ -328,10 +361,11 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
     }
   }, [config, setInputs, toast]);
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback((mode: "hpi" | "full") => {
     setTranscript("");
     transcriptRef.current = "";
     setFilledCount(null);
+    setActiveMode(mode);
     const recognition = new SR();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -346,10 +380,12 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
       setTranscript(display);
       transcriptRef.current = full || display;
     };
-    recognition.onerror = () => setIsListening(false);
+    recognition.onerror = () => { setIsListening(false); setActiveMode(null); };
     recognition.onend = () => {
       setIsListening(false);
-      if (transcriptRef.current.trim()) parseAndFill(transcriptRef.current);
+      const capturedMode = mode;
+      setActiveMode(null);
+      if (transcriptRef.current.trim()) parseAndFill(transcriptRef.current, capturedMode);
     };
     recognitionRef.current = recognition;
     recognition.start();
@@ -362,27 +398,50 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
 
   if (!SR) return null;
 
+  const isHpiActive = isListening && activeMode === "hpi";
+  const isFullActive = isListening && activeMode === "full";
+
   return (
     <div className="mb-3 rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={isListening ? stopListening : startListening}
-          disabled={isParsing}
-          data-testid="btn-voice-dictation"
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium transition-all disabled:opacity-50 ${
-            isListening
-              ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-300"
-              : "bg-background border-border text-muted-foreground hover:border-blue-400 hover:text-foreground"
-          }`}
-        >
-          {isListening
-            ? <><MicOff className="h-4 w-4" /> Stop dictating</>
-            : <><Mic className="h-4 w-4" /> Dictate HPI</>}
-        </button>
+        {/* Dictate HPI */}
+        {!isFullActive && (
+          <button
+            onClick={isHpiActive ? stopListening : () => startListening("hpi")}
+            disabled={isParsing}
+            data-testid="btn-voice-dictation"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium transition-all disabled:opacity-50 ${
+              isHpiActive
+                ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-300"
+                : "bg-background border-border text-muted-foreground hover:border-blue-400 hover:text-foreground"
+            }`}
+          >
+            {isHpiActive ? <><MicOff className="h-4 w-4" /> Stop dictating</> : <><Mic className="h-4 w-4" /> Dictate HPI</>}
+          </button>
+        )}
+
+        {/* Dictate Full Encounter */}
+        {!isHpiActive && (
+          <button
+            onClick={isFullActive ? stopListening : () => startListening("full")}
+            disabled={isParsing}
+            data-testid="btn-voice-dictation-full"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-medium transition-all disabled:opacity-50 ${
+              isFullActive
+                ? "bg-red-50 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-300"
+                : "bg-background border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950"
+            }`}
+          >
+            {isFullActive
+              ? <><MicOff className="h-4 w-4" /> Stop dictating</>
+              : <><Mic className="h-4 w-4" /> Dictate Full Encounter</>}
+          </button>
+        )}
 
         {isParsing && (
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Parsing transcript…
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {activeMode === "full" ? "Parsing full encounter…" : "Parsing transcript…"}
           </span>
         )}
         {filledCount !== null && !isParsing && (
@@ -396,13 +455,26 @@ function VoiceDictationBar({ config, inputs, setInputs, toast }: {
         {isListening && (
           <span className="ml-auto flex items-center gap-1 text-xs text-red-500 animate-pulse">
             <span className="inline-block h-2 w-2 rounded-full bg-red-500" /> Recording
+            {isFullActive && <span className="ml-1 text-violet-500 font-semibold not-italic">· Full Encounter</span>}
           </span>
         )}
       </div>
 
       {(isListening || transcript) && (
         <div className="text-xs text-muted-foreground bg-background/80 rounded border border-border/50 px-3 py-2 min-h-[36px] leading-relaxed italic">
-          {transcript || "Listening… speak the patient history"}
+          {transcript || (isFullActive
+            ? "Listening… speak vitals, demographics, meds, allergies, PMH, and symptoms"
+            : "Listening… speak the HPI")}
+        </div>
+      )}
+
+      {!isListening && filledCount === null && (
+        <div className="text-xs text-muted-foreground/60 flex items-start gap-1.5">
+          <span className="shrink-0">ℹ</span>
+          <span>
+            <span className="text-blue-600 dark:text-blue-400 font-medium">Dictate HPI</span> — fills HPI only. &nbsp;
+            <span className="text-violet-600 dark:text-violet-400 font-medium">Dictate Full Encounter</span> — fills vitals, demographics, medications, allergies, PMH, and all sections from one dictation.
+          </span>
         </div>
       )}
     </div>
@@ -763,6 +835,19 @@ export default function EncounterSimulatorPage() {
   );
   const anyHardFlag = activeRedFlags.length > 0;
   const disposition = useMemo(() => config.computeDisposition(inputs), [inputs, config]);
+
+  // Cannot-miss alert: fires when any cannotMiss differential reaches ≥20%
+  const cannotMissAlerts = useMemo(() => {
+    return (config.differentials ?? []).filter((dx: any) => {
+      if (!dx.cannotMiss) return false;
+      const live = (dx.criteria ?? []).filter((c: any) => !String(c.field).startsWith("_text_"));
+      if (live.length === 0) return false;
+      const met = live.filter((c: any) =>
+        c.invert ? inputs[c.field] === "no" : inputs[c.field] === "yes"
+      ).length;
+      return Math.round((met / live.length) * 100) >= 20;
+    });
+  }, [config.differentials, inputs]);
 
   // ── Asthma / GINA staging ──────────────────────────────────────────────────
   const ASTHMA_COMPLAINT_SET = new Set(['chest_pain', 'cough', 'pulm_shortness_of_breath']);
@@ -1740,6 +1825,32 @@ export default function EncounterSimulatorPage() {
               Each diagnosis shows a <span className="font-semibold">likelihood %</span> based on how many of its clinical criteria match your answers.
               A higher % means more criteria are met. <span className="text-red-500 font-semibold">Cannot-miss</span> diagnoses are always shown.
             </p>
+
+            {/* Cannot-miss alert banner */}
+            {cannotMissAlerts.length > 0 && (
+              <div className="mb-3 rounded-lg border-2 border-red-600 bg-red-600 text-white p-3 space-y-1.5" data-testid="cannot-miss-banner">
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  <ShieldAlert className="h-4 w-4 shrink-0" />
+                  CANNOT MISS — review these criteria now
+                </div>
+                {cannotMissAlerts.map((dx: any) => {
+                  const live = (dx.criteria ?? []).filter((c: any) => !String(c.field).startsWith("_text_"));
+                  const met = live.filter((c: any) => c.invert ? inputs[c.field] === "no" : inputs[c.field] === "yes").length;
+                  const pct = live.length > 0 ? Math.round((met / live.length) * 100) : 0;
+                  return (
+                    <div key={dx.id} className="flex items-center gap-2 text-xs bg-red-700/50 rounded px-2 py-1">
+                      <span className="font-bold text-white">⚠</span>
+                      <span className="font-semibold">{dx.name}</span>
+                      <span className="ml-auto font-mono bg-white/20 px-1.5 rounded">{pct}% criteria met</span>
+                    </div>
+                  );
+                })}
+                <div className="text-xs opacity-75 pt-0.5">
+                  Scroll down to review the highlighted card and confirm or exclude before proceeding.
+                </div>
+              </div>
+            )}
+
             {config.differentials.length > 0 ? (
               <div className="space-y-2">
                 {config.differentials.map(dx => (
