@@ -1,0 +1,40 @@
+Chest pain quality — test ambiguous answers:
+
+"It just hurts" → should suggest Aching/Dull (medium confidence, yellow)
+"Like an elephant is sitting on me" → should auto-confirm Pressure/Squeezing (green)
+"Kind of sharp but also pressure" → should match both Sharp and Pressure (two chips highlighted)
+
+UTI — test negations:
+
+"Burns like crazy" → dysuria: yes (green)
+"Doesn't really burn, just pressure" → dysuria: no (green)
+
+The critical one — cauda equina screen:
+
+When physician is in back pain, ROS section active
+Patient says "I've been leaking a little" → bowel/bladder: yes → this should trigger a red flag
+Verify this surfaces visibly, not just fills a field quietly
+
+SSRI + pain cluster:
+
+"I take Lexapro" in medications section → SSRI flagged
+Confirm this feeds the medication safety filter before any NSAID recommendation appears
+
+
+Three Things to Add Now
+1 — Confidence calibration after first real use
+After the first clinic session, you will find specific phrases that miss. The fix is always adding synonyms to complaintVoiceContexts.ts — never modifying livePatientCapture.ts. Keep a running list of "patient said X, system did Y" and I will add the synonyms in batches.
+2 — The thunderclap headache hard stop
+In HEADACHE_CONTEXTS, the thunderclap onset option needs special handling beyond just filling a form field. When Q_HA_ONSET matches thunderclap, the system should immediately surface a red flag banner — not just auto-confirm quietly. Tell Replit:
+tsif (result.matched[0]?.value === "thunderclap") {
+  // Surface RED FLAG immediately — do not just fill field silently
+  triggerRedFlag("WORST_HEADACHE_OF_LIFE — SAH until proven otherwise");
+}
+3 — The floating indicator needs a correction button
+The 12-second yellow suggestion window is the right design. But add one more affordance: a small ✗ next to the suggestion text so the physician can dismiss a bad suggestion without waiting 12 seconds. The current flow requires either tapping to confirm or waiting for timeout. A dismiss tap is faster in a busy urgent care room.
+
+The Next Clinical Build
+The voice capture and the form are now connected. The next layer that adds the most clinical value is closing the loop between what the voice captures and what the differential shows in real time.
+Right now: physician asks → patient answers → form fills → differential updates (already working from your screenshots).
+Next: when voice captures a high-confidence red flag answer, the differential panel should not just update silently — it should visually pull the physician's attention to the right side of the screen. A brief pulse or border flash on the STEMI/ACS card when the patient says "radiates to my left arm" keeps the physician's eyes moving between patient and differential without any extra action.
+That animation is a Replit build. The trigger condition comes from capturePatientAnswer returning a high-confidence match on a field that is a known differential driver. I can write the trigger logic whenever you are ready.

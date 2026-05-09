@@ -34,6 +34,7 @@ import {
 } from "@/data/encounterConfigs";
 import { capturePatientAnswer, type QuestionContext, type CaptureResult } from "@/lib/livePatientCapture";
 import { getContextsForComplaint } from "@/lib/complaintVoiceContexts";
+import { getAllDifferentialTriggers, type PulseLevel, type DifferentialTrigger } from "@/lib/differentialPulseTrigger";
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
@@ -141,7 +142,7 @@ function saveQConfig(id: string, cfg: QConfig) {
 }
 
 // ── Three-state yes / no / unknown toggle ─────────────────────────────────────
-function YNToggle({ label, field, inputs, setInputs, compact = false, editMode = false, isCustom = false, onDelete, flashState, hintText }: {
+function YNToggle({ label, field, inputs, setInputs, compact = false, editMode = false, isCustom = false, onDelete, flashState, hintText, onDismissHint }: {
   label: string; field: string;
   inputs: Inputs;
   setInputs: (fn: (p: Inputs) => Inputs) => void;
@@ -151,6 +152,7 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
   onDelete?: () => void;
   flashState?: "green" | "yellow" | "red";
   hintText?: string;
+  onDismissHint?: () => void;
 }) {
   const val = inputs[field] as "yes" | "no" | undefined;
   const cycle = () =>
@@ -180,7 +182,18 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
         </button>
         {hintText && flashState === "yellow" && (
           <div className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5 px-1 flex items-center gap-1">
-            <span>💡</span>{hintText}
+            <span>💡</span>
+            <span className="flex-1">{hintText}</span>
+            {onDismissHint && (
+              <button
+                data-testid={`dismiss-hint-${field}`}
+                onClick={e => { e.stopPropagation(); onDismissHint(); }}
+                title="Dismiss suggestion"
+                className="ml-1 opacity-60 hover:opacity-100 transition-opacity shrink-0"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -208,8 +221,19 @@ function YNToggle({ label, field, inputs, setInputs, compact = false, editMode =
         </button>
       )}
       {hintText && flashState === "yellow" && (
-        <div className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5 px-1 flex items-center gap-1 col-span-2">
-          <span>💡</span>{hintText}
+        <div className="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5 px-1 flex items-center gap-1 col-span-2 w-full">
+          <span>💡</span>
+          <span className="flex-1">{hintText}</span>
+          {onDismissHint && (
+            <button
+              data-testid={`dismiss-hint-${field}`}
+              onClick={e => { e.stopPropagation(); onDismissHint(); }}
+              title="Dismiss suggestion"
+              className="ml-1 opacity-60 hover:opacity-100 transition-opacity shrink-0"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -521,7 +545,7 @@ function playChime() {
   } catch {}
 }
 
-function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, onFlash, clearFlash, onHint, clearHint }: {
+function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, onFlash, clearFlash, onHint, clearHint, onDifferentialTrigger, onVoiceRedFlag }: {
   config: any;
   complaint: string;
   inputs: Inputs;
@@ -531,6 +555,8 @@ function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, 
   clearFlash: (field: string) => void;
   onHint: (field: string, hint: string) => void;
   clearHint: (field: string) => void;
+  onDifferentialTrigger: (triggers: DifferentialTrigger[]) => void;
+  onVoiceRedFlag: (msg: string) => void;
 }) {
   const [isActive, setIsActive]           = useState(false);
   const [fieldsCaptured, setFieldsCaptured] = useState(0);
@@ -569,6 +595,11 @@ function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, 
       return;
     }
 
+    // ── Thunderclap hard stop ──────────────────────────────────────────────
+    if (result.matched[0]?.value === "thunderclap") {
+      onVoiceRedFlag("WORST_HEADACHE_OF_LIFE — SAH until proven otherwise");
+    }
+
     const patch: Record<string, any> = {};
     const flashFields: string[] = [];
 
@@ -587,7 +618,6 @@ function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, 
             patch["onset_timing"] = m.value;
             flashFields.push("onset_timing");
           } else {
-            // character chips — m.value is the field name e.g. "char_pressure"
             patch[m.value] = "yes";
             flashFields.push(m.value);
           }
@@ -596,6 +626,10 @@ function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, 
           break;
       }
     }
+
+    // ── Differential pulse triggers ────────────────────────────────────────
+    const triggers = getAllDifferentialTriggers(result, complaintRef.current);
+    if (triggers.length > 0) onDifferentialTrigger(triggers);
 
     if (result.autoConfirm) {
       setInputs(prev => ({ ...prev, ...patch }));
@@ -607,14 +641,13 @@ function LiveInterviewBar({ config, complaint, inputs, setInputs, openSections, 
         setTimeout(() => clearFlash(f), 1500);
       }
     } else {
-      // Yellow suggestion — don't auto-fill, highlight + show hint
       for (const f of flashFields) {
         onFlash(f, "yellow");
         onHint(f, result.displayHint ?? `Patient said "${result.rawAnswer}" — tap to confirm`);
         setTimeout(() => { clearFlash(f); clearHint(f); }, 12000);
       }
     }
-  }, [setInputs, onFlash, clearFlash, onHint, clearHint]);
+  }, [setInputs, onFlash, clearFlash, onHint, clearHint, onDifferentialTrigger, onVoiceRedFlag]);
 
   const processUtterance = useCallback((speech: string) => {
     const cid = complaintRef.current;
@@ -745,7 +778,7 @@ function CritIcon({ val, invert }: { val: "yes" | "no" | undefined; invert?: boo
 }
 
 // ── Differential card ─────────────────────────────────────────────────────────
-function DifferentialCard({ dx, inputs }: { dx: any; inputs: Inputs }) {
+function DifferentialCard({ dx, inputs, pulseLevel }: { dx: any; inputs: Inputs; pulseLevel?: PulseLevel | null }) {
   // Criteria whose field starts with "_text_" are text-only (dynamic/KB configs).
   // They don't check inputs — they just display static clinical text.
   const isTextOnly = (field: string) => field.startsWith("_text_");
@@ -771,8 +804,14 @@ function DifferentialCard({ dx, inputs }: { dx: any; inputs: Inputs }) {
     : dx.cannotMiss ? "border-orange-200 bg-orange-50/20 dark:bg-orange-950/10"
     : "border-border bg-card";
 
+  const pulseCls =
+    pulseLevel === "CRITICAL" ? "pulse-critical"
+    : pulseLevel === "ELEVATE" ? "pulse-elevate"
+    : pulseLevel === "INFORM"  ? "pulse-inform"
+    : "";
+
   return (
-    <div className={`rounded-lg border p-3 space-y-1.5 ${urgency}`}>
+    <div data-dx-id={dx.id} className={`rounded-lg border p-3 space-y-1.5 ${urgency} ${pulseCls}`}>
       <div className="flex items-start justify-between gap-1">
         <div>
           <div className="font-semibold text-sm leading-tight flex items-center gap-1.5">
@@ -989,10 +1028,31 @@ export default function EncounterSimulatorPage() {
   // ── Live Interview flash/hint states ───────────────────────────────────────
   const [liveFlashStates, setLiveFlashStates] = useState<Record<string, "green" | "yellow" | "red">>({});
   const [liveHints, setLiveHints] = useState<Record<string, string>>({});
+  const [dxPulseStates, setDxPulseStates] = useState<Record<string, PulseLevel>>({});
+  const [voiceRedFlags, setVoiceRedFlags] = useState<string[]>([]);
   const onFlash    = useCallback((field: string, state: "green"|"yellow"|"red") => setLiveFlashStates(p => ({ ...p, [field]: state })), []);
   const clearFlash = useCallback((field: string) => setLiveFlashStates(p => { const n = { ...p }; delete n[field]; return n; }), []);
   const onHint     = useCallback((field: string, hint: string) => setLiveHints(p => ({ ...p, [field]: hint })), []);
   const clearHint  = useCallback((field: string) => setLiveHints(p => { const n = { ...p }; delete n[field]; return n; }), []);
+  const onDifferentialTrigger = useCallback((triggers: DifferentialTrigger[]) => {
+    for (const t of triggers) {
+      for (const dxId of t.diagnoses) {
+        setDxPulseStates(prev => ({ ...prev, [dxId]: t.level }));
+        setTimeout(() => setDxPulseStates(prev => {
+          const n = { ...prev }; delete n[dxId]; return n;
+        }), t.durationMs);
+        if (t.scrollTo) {
+          setTimeout(() => {
+            const el = document.querySelector(`[data-dx-id="${dxId}"]`);
+            el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }, 100);
+        }
+      }
+    }
+  }, []);
+  const onVoiceRedFlag = useCallback((msg: string) => {
+    setVoiceRedFlags(prev => prev.includes(msg) ? prev : [...prev, msg]);
+  }, []);
   const toggleSection = useCallback((key: string) => {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
@@ -1562,6 +1622,8 @@ export default function EncounterSimulatorPage() {
                         clearFlash={clearFlash}
                         onHint={onHint}
                         clearHint={clearHint}
+                        onDifferentialTrigger={onDifferentialTrigger}
+                        onVoiceRedFlag={onVoiceRedFlag}
                       />
                     </div>
                     {/* Onset timing chips */}
@@ -1618,6 +1680,7 @@ export default function EncounterSimulatorPage() {
                         return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                           editMode={editMode} isCustom={isCust}
                           flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
+                          onDismissHint={liveHints[q.field] ? () => { clearFlash(q.field); clearHint(q.field); } : undefined}
                           onDelete={editMode ? () => isCust ? deleteCustomQuestion("hpi", q.field) : hideQuestion(q.field) : undefined} />;
                       })}
                       {editMode && <AddQuestionRow onAdd={label => addCustomQuestion("hpi", label)} />}
@@ -1920,6 +1983,7 @@ export default function EncounterSimulatorPage() {
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
                         flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
+                        onDismissHint={liveHints[q.field] ? () => { clearFlash(q.field); clearHint(q.field); } : undefined}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("ros", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effRos.length === 0 && !editMode && (
@@ -1946,6 +2010,7 @@ export default function EncounterSimulatorPage() {
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
                         flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
+                        onDismissHint={liveHints[q.field] ? () => { clearFlash(q.field); clearHint(q.field); } : undefined}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("pmh", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effPmh.length === 0 && !editMode && (
@@ -1972,6 +2037,7 @@ export default function EncounterSimulatorPage() {
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
                         flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
+                        onDismissHint={liveHints[q.field] ? () => { clearFlash(q.field); clearHint(q.field); } : undefined}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("fhx", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effFhx.length === 0 && !editMode && (
@@ -2000,6 +2066,7 @@ export default function EncounterSimulatorPage() {
                       return <YNToggle key={q.field} label={q.label} field={q.field} inputs={inputs} setInputs={setInputs}
                         editMode={editMode} isCustom={isCust}
                         flashState={liveFlashStates[q.field]} hintText={liveHints[q.field]}
+                        onDismissHint={liveHints[q.field] ? () => { clearFlash(q.field); clearHint(q.field); } : undefined}
                         onDelete={editMode ? () => isCust ? deleteCustomQuestion("meds", q.field) : hideQuestion(q.field) : undefined} />;
                     })}
                     {effMeds.length === 0 && !editMode && (
@@ -2106,6 +2173,32 @@ export default function EncounterSimulatorPage() {
               A higher % means more criteria are met. <span className="text-red-500 font-semibold">Cannot-miss</span> diagnoses are always shown.
             </p>
 
+            {/* Voice capture red flag hard-stop banner */}
+            {voiceRedFlags.length > 0 && (
+              <div className="mb-3 rounded-lg border-2 border-red-700 bg-red-700 text-white p-3 space-y-1.5" data-testid="voice-red-flag-banner">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 font-bold text-sm">
+                    <ShieldAlert className="h-4 w-4 shrink-0 animate-pulse" />
+                    VOICE CAPTURE ALERT — Review immediately
+                  </div>
+                  <button
+                    data-testid="dismiss-voice-red-flags"
+                    onClick={() => setVoiceRedFlags([])}
+                    className="opacity-70 hover:opacity-100 transition-opacity shrink-0"
+                    title="Dismiss"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {voiceRedFlags.map((msg, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm bg-red-800/60 rounded px-2 py-1.5">
+                    <span className="font-bold">⚡</span>
+                    <span className="font-semibold">{msg}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Cannot-miss alert banner */}
             {cannotMissAlerts.length > 0 && (
               <div className="mb-3 rounded-lg border-2 border-red-600 bg-red-600 text-white p-3 space-y-1.5" data-testid="cannot-miss-banner">
@@ -2134,7 +2227,7 @@ export default function EncounterSimulatorPage() {
             {config.differentials.length > 0 ? (
               <div className="space-y-2">
                 {config.differentials.map(dx => (
-                  <DifferentialCard key={dx.id} dx={dx} inputs={inputs} />
+                  <DifferentialCard key={dx.id} dx={dx} inputs={inputs} pulseLevel={dxPulseStates[dx.id] ?? null} />
                 ))}
               </div>
             ) : (

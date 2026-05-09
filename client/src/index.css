@@ -425,3 +425,32 @@
 .animate-pulse-alert {
   animation: alert-pulse 1.4s ease-in-out infinite;
 }
+
+/* ── Differential card pulse classes (voice capture → differential animation) ─ */
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.4); }
+  50%       { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0.1); }
+}
+@keyframes pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.3); }
+  50%       { box-shadow: 0 0 0 6px rgba(217, 119, 6, 0.1); }
+}
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); }
+  50%       { box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.05); }
+}
+.pulse-critical {
+  animation: pulse-red 0.6s ease-in-out 2;
+  border-color: #DC2626 !important;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.4);
+}
+.pulse-elevate {
+  animation: pulse-amber 0.6s ease-in-out 2;
+  border-color: #D97706 !important;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.3);
+}
+.pulse-inform {
+  animation: pulse-blue 0.4s ease-in-out 1;
+  border-color: #2563EB !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
