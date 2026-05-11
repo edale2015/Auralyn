@@ -94,6 +94,7 @@ import ClinicalDecisionPipelinePage from "@/pages/ClinicalDecisionPipelinePage";
 import CarePathwayOptimizerPage from "@/pages/CarePathwayOptimizerPage";
 import GovernanceCommandCenterPage from "@/pages/GovernanceCommandCenterPage";
 import ResearchRadarDashboard      from "@/pages/ResearchRadarDashboard";
+import LongevityIntelligencePage   from "@/pages/LongevityIntelligencePage";
 import ClinicalSkillsDashboard    from "@/pages/ClinicalSkillsDashboard";
 import InfraStatusDashboard       from "@/pages/InfraStatusDashboard";
 import PhysicianCMEQuizTool       from "@/pages/PhysicianCMEQuizTool";
@@ -246,6 +247,7 @@ function WorkbenchRouter() {
         <Route path="/care-pathway-optimizer" component={CarePathwayOptimizerPage} />
         <Route path="/governance-command-center">{() => <RoleGuard allowedRoles={["admin"]}><GovernanceCommandCenterPage /></RoleGuard>}</Route>
         <Route path="/research-radar">{() => <RoleGuard allowedRoles={["admin"]}><ResearchRadarDashboard /></RoleGuard>}</Route>
+        <Route path="/longevity-intelligence">{() => <RoleGuard allowedRoles={["admin", "physician"]}><LongevityIntelligencePage /></RoleGuard>}</Route>
         <Route path="/clinical-skills">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalSkillsDashboard /></RoleGuard>}</Route>
         <Route path="/infra-status">{() => <RoleGuard allowedRoles={["admin"]}><InfraStatusDashboard /></RoleGuard>}</Route>
         <Route path="/cme-quiz">{() => <RoleGuard allowedRoles={["admin", "physician"]}><PhysicianCMEQuizTool /></RoleGuard>}</Route>

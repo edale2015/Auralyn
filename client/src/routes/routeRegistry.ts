@@ -57,4 +57,5 @@ export const ROUTES = {
   AURALYN:                   "/auralyn",
   LIVE_MONITOR:              "/live-monitor",
   COMMAND_CENTER:            "/command-center",
+  LONGEVITY_INTELLIGENCE:    "/longevity-intelligence",
 };

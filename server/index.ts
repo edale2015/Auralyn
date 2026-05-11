@@ -434,6 +434,8 @@ import { registerLoop, heartbeatLoop, stopLoop } from "./monitoring/loopRegistry
 import { runDriftCheck }                     from "./harness/driftCheck";
 import { evaluateCase }                     from "./hybrid-reasoning/hybridController";
 import { runWeeklyResearchRadar, getRadarStatus } from "./harness/researchRadar";
+import longevityRouter from "./routes/longevity";
+import { LongevityIntelligenceAgent } from "./agents/LongevityIntelligenceAgent";
 import { specRouter }              from "./harness/specDrivenDevelopment";
 import { runPeriodicSkillNudge, activateSkill, retireSkill } from "./learning/clinicalSkillsSystem";
 import { SelfHealingMonitor, recordSchedulerHeartbeat } from "./infra/selfHealingMonitor";
@@ -1052,6 +1054,10 @@ app.post("/api/research-radar/run", async (_req, res) => {
   }
 });
 
+// ── Longevity Intelligence: findings + review + scan trigger ─────────────────
+app.use("/api/longevity", longevityRouter);
+console.log("[LongevityAgent] /api/longevity/* registered");
+
 // ── Clinical Skills: CRUD routes ──────────────────────────────────────────────
 app.use(specRouter);
 
@@ -1197,6 +1203,35 @@ function scheduleSkillNudge(): void {
     }
     scheduleSkillNudge();
   }, ms);
+}
+
+// ── Longevity Intelligence: weekly Monday 2am UTC scheduler ──────────────────
+function scheduleLongevityScan(): void {
+  const msUntilNextMonday2amUtc = (): number => {
+    const now  = new Date();
+    const next = new Date(now);
+    const daysUntilMonday = (8 - now.getUTCDay()) % 7 || 7;
+    next.setUTCDate(now.getUTCDate() + daysUntilMonday);
+    next.setUTCHours(2, 0, 0, 0);
+    return next.getTime() - now.getTime();
+  };
+
+  const runAndReschedule = async () => {
+    recordSchedulerHeartbeat("longevity_scan");
+    console.log("[LongevityAgent] Weekly scan starting at", new Date().toISOString());
+    try {
+      const agent = new LongevityIntelligenceAgent();
+      const result = await agent.run();
+      console.log(`[LongevityAgent] ✅ Scan complete — ${result.total} findings, ${result.highEvidence} high-evidence`);
+    } catch (err: any) {
+      console.error("[LongevityAgent] ❌ Scan threw:", err.message);
+    }
+    setTimeout(runAndReschedule, 7 * 24 * 60 * 60 * 1000);
+  };
+
+  const delay = msUntilNextMonday2amUtc();
+  console.log(`[LongevityAgent] Scheduler armed — first run in ${Math.round(delay / 60_000)} minutes (next Monday 2am UTC)`);
+  setTimeout(runAndReschedule, delay);
 }
 
 // ── Drift canary: daily 2am UTC scheduler ────────────────────────────────────
@@ -1466,11 +1501,13 @@ app.use((req, res, next) => {
       scheduleDriftCheck();
       scheduleResearchRadar();
       scheduleSkillNudge();
+      scheduleLongevityScan();
 
       SelfHealingMonitor.start();
-      SelfHealingMonitor.registerSchedulerRearm("drift_canary_scheduler",   () => scheduleDriftCheck());
-      SelfHealingMonitor.registerSchedulerRearm("research_radar_scheduler", () => scheduleResearchRadar());
-      SelfHealingMonitor.registerSchedulerRearm("skill_nudge_scheduler",    () => scheduleSkillNudge());
+      SelfHealingMonitor.registerSchedulerRearm("drift_canary_scheduler",    () => scheduleDriftCheck());
+      SelfHealingMonitor.registerSchedulerRearm("research_radar_scheduler",  () => scheduleResearchRadar());
+      SelfHealingMonitor.registerSchedulerRearm("skill_nudge_scheduler",     () => scheduleSkillNudge());
+      SelfHealingMonitor.registerSchedulerRearm("longevity_scan_scheduler",  () => scheduleLongevityScan());
 
       const shutdown = (signal: string) => {
         console.log(`[Shutdown] ${signal} received — stopping background engines`);
