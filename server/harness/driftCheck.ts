@@ -17,7 +17,8 @@
  *   - No new red flags added or removed
  */
 
-import { appendAuditEvent } from "../governance/audit";
+import { appendAuditEvent }   from "../governance/audit";
+import { EXPANDED_CANARIES } from "./driftCanaryExpansion";
 
 // ─── Canary definitions ───────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ export interface CanaryCase {
   mustNotHaveRedFlag?:  boolean;
 }
 
-export const DRIFT_CANARIES: CanaryCase[] = [
+const BASE_CANARIES: CanaryCase[] = [
   {
     id:                   "sore_throat_viral",
     complaint:            "sore_throat",
@@ -259,6 +260,9 @@ export const DRIFT_CANARIES: CanaryCase[] = [
     mustNotHaveRedFlag:   true,
   },
 ];
+
+// Merge base canaries with expanded coverage — combined set used by all runners
+export const DRIFT_CANARIES: CanaryCase[] = [...BASE_CANARIES, ...EXPANDED_CANARIES];
 
 // ─── Drift runner ─────────────────────────────────────────────────────────────
 
