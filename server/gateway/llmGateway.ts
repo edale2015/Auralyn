@@ -17,6 +17,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI    from "openai";
 import { createHash } from "crypto";
 import { appendAuditEvent } from "../governance/audit";
+import { localDevComplete } from "../dev/localDevHarness";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ interface GatewayRequest {
 export interface GatewayResponse {
   content:          string;
   model:            string;
-  provider:         "anthropic" | "openai";
+  provider:         "anthropic" | "openai" | "ollama_local";
   fromCache:        boolean;
   tokensUsed:       number;
   estimatedCostUsd: number;
@@ -212,6 +213,26 @@ export const llmGateway = {
   async complete(request: GatewayRequest): Promise<GatewayResponse> {
     const startMs = Date.now();
     const routing = MODEL_ROUTING[request.purpose];
+
+    // ── Local dev harness (dev only — no-op in production) ────────────────────
+    const localResult = await localDevComplete({
+      purpose:   request.purpose,
+      messages:  request.messages,
+      system:    request.system,
+      maxTokens: request.maxTokens,
+    }).catch(() => null);
+
+    if (localResult) {
+      return {
+        content:          localResult.content,
+        model:            localResult.model,
+        provider:         "ollama_local",
+        fromCache:        false,
+        tokensUsed:       0,
+        estimatedCostUsd: 0,
+        latencyMs:        Date.now() - startMs,
+      };
+    }
 
     // ── Semantic cache check ──────────────────────────────────────────────────
     if (request.cacheKey && !request.skipCache) {
