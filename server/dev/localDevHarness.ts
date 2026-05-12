@@ -54,6 +54,7 @@
  *   Monthly dev cost reduction per developer: ~$6-240/month
  */
 
+import { fileURLToPath } from "url";
 import type { ModelPurpose } from "../gateway/llmGateway";
 
 // ─── Guard: only active in development with explicit opt-in ───────────────────
@@ -258,8 +259,9 @@ WHAT NEVER CHANGES:
   This is enforced structurally in localDevComplete().
 `;
 
-// CLI runner
-if (require.main === module) {
+// CLI runner — ESM-safe entry guard
+const _isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (_isMain) {
   if (process.argv.includes("--smoke-test")) {
     runSmokeTests().catch(console.error);
   } else if (process.argv.includes("--setup")) {
