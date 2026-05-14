@@ -1,0 +1,58 @@
+/**
+ * index.ts — Complaint Pack Registry
+ * All registered ComplaintPacks, indexed by complaint ID.
+ */
+
+export { URIRespiratoryPack } from "./uri-respiratory";
+export { ChestPainPack }      from "./chest-pain";
+export { GUUTIPack }          from "./gu-uti";
+export { HeadachePack }       from "./headache";
+export { AbdominalPainPack }  from "./abdominal-pain";
+
+import { URIRespiratoryPack } from "./uri-respiratory";
+import { ChestPainPack }      from "./chest-pain";
+import { GUUTIPack }          from "./gu-uti";
+import { HeadachePack }       from "./headache";
+import { AbdominalPainPack }  from "./abdominal-pain";
+import type { ComplaintPack } from "./types";
+
+export type { ComplaintPack, ExtractedClinicalState, TriageResult, AnswerEntry } from "./types";
+
+export const COMPLAINT_PACK_REGISTRY: Record<string, ComplaintPack> = {
+  // URI / Respiratory family
+  "uri_respiratory":        URIRespiratoryPack,
+  "sore_throat":            URIRespiratoryPack,
+  "cough":                  URIRespiratoryPack,
+  "ent_sinus_pressure":     URIRespiratoryPack,
+  "earache":                URIRespiratoryPack,
+  "pulm_shortness_of_breath": URIRespiratoryPack,
+
+  // Chest pain
+  "chest_pain":             ChestPainPack,
+  "cardio_palpitations":    ChestPainPack,
+
+  // GU / UTI
+  "gu_uti_symptoms":        GUUTIPack,
+
+  // Headache
+  "neuro_headache":         HeadachePack,
+  "dizziness":              HeadachePack,
+
+  // Abdominal pain
+  "abdominal_pain":         AbdominalPainPack,
+};
+
+/**
+ * Get the complaint pack for a given complaint ID.
+ * Returns undefined if no pack is registered.
+ */
+export function getComplaintPack(complaintId: string): ComplaintPack | undefined {
+  return COMPLAINT_PACK_REGISTRY[complaintId];
+}
+
+/**
+ * List all registered complaint IDs.
+ */
+export function listRegisteredComplaints(): string[] {
+  return Object.keys(COMPLAINT_PACK_REGISTRY);
+}

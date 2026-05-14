@@ -177,6 +177,7 @@ import TelemedicineDoctorDashboard from "@/pages/TelemedicineDoctorDashboard";
 import ClinicalValidation from "@/pages/ClinicalValidation";
 import OutcomeMonitoring  from "@/pages/OutcomeMonitoring";
 import ClinicalICUMonitor from "@/pages/ClinicalICUMonitor";
+import PatientLivingEncounter from "@/pages/PatientLivingEncounter";
 
 validateRoutes();
 
@@ -364,6 +365,7 @@ function Router() {
       <Route path="/" component={Login} />
       <Route path="/login" component={Login} />
       <Route path="/start" component={StartVisit} />
+      <Route path="/care/:shareToken" component={PatientLivingEncounter} />
       <Route path="/intake/:token" component={PatientIntake} />
       <Route path="/simple/:token" component={SimpleIntake} />
       <Route path="/intake/:token/status" component={IntakeStatus} />
