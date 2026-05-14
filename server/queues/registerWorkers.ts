@@ -21,6 +21,7 @@ export function registerWorkers(): void {
     const { createWebhookWorker } = require("../workers/webhookWorker");
     const { createReportWorker } = require("../workers/reportWorker");
     const { createMetricsWorker } = require("../workers/metricsWorker");
+    const { createCareGapWorker } = require("../workers/careGapWorker");
 
     createTriageWorker();
     createNotificationWorker();
@@ -31,13 +32,14 @@ export function registerWorkers(): void {
     createWebhookWorker();
     createReportWorker();
     createMetricsWorker();
+    createCareGapWorker();
 
     workersRegistered = true;
     logger.info("BullMQ workers registered", {
       workers: [
         "triage", "notification", "learning",
         "audit", "ehr-outbound", "explanation",
-        "webhook", "report", "metrics",
+        "webhook", "report", "metrics", "care-gap-detection",
       ],
     });
   } catch (err: any) {

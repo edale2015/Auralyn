@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Bell, ChevronDown, ChevronUp, X } from "lucide-react";
+import { AlertTriangle, Bell, ChevronDown, ChevronUp, X, MessageSquare, Clock } from "lucide-react";
 import { useState } from "react";
 import { PhysicianBriefingCard } from "./PhysicianBriefingCard";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,92 @@ export function BriefingBanner({ encounterId, patientName }: Props) {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── LivingEncounterTimeline ──────────────────────────────────────────────────
+// Shows post-visit patient updates and the living encounter feed below the
+// main clinical form. Physicians can see how the patient is doing after discharge.
+
+interface TimelineUpdate {
+  id: string;
+  message: string;
+  channel: string;
+  severity: string;
+  disposition_changed: boolean;
+  new_disposition?: string;
+  created_at: string;
+}
+
+interface TimelineProps {
+  encounterId: string;
+}
+
+const SEVERITY_STYLE: Record<string, { badge: string; dot: string }> = {
+  routine:  { badge: "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-0", dot: "bg-emerald-400" },
+  elevated: { badge: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border-0",         dot: "bg-amber-400" },
+  urgent:   { badge: "bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 border-0",     dot: "bg-orange-500" },
+  critical: { badge: "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border-0",                 dot: "bg-red-600 animate-pulse" },
+};
+
+export function LivingEncounterTimeline({ encounterId }: TimelineProps) {
+  const { data, isLoading } = useQuery<{ ok: boolean; updates: TimelineUpdate[]; count: number }>({
+    queryKey: ["/api/dialogue/updates/encounter", encounterId],
+    queryFn: async () => {
+      const token = localStorage.getItem("app_auth_token");
+      const res = await fetch(`/api/dialogue/updates/encounter/${encounterId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("No updates");
+      return res.json();
+    },
+    retry: false,
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading) return null;
+  const updates = data?.updates ?? [];
+  if (updates.length === 0) return null;
+
+  return (
+    <div className="mt-4 space-y-2" data-testid={`timeline-${encounterId}`}>
+      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+        <MessageSquare className="w-3.5 h-3.5" />
+        Patient Updates ({updates.length})
+      </div>
+
+      <div className="space-y-2">
+        {updates.map((u) => {
+          const s = SEVERITY_STYLE[u.severity] ?? SEVERITY_STYLE.routine;
+          return (
+            <div
+              key={u.id}
+              className="rounded-lg border border-border/30 bg-card/60 px-3 py-2 space-y-1"
+              data-testid={`timeline-update-${u.id}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.dot}`} />
+                  <Badge className={`text-[9px] px-1.5 py-0 h-4 ${s.badge}`}>
+                    {u.severity.toUpperCase()}
+                  </Badge>
+                  {u.disposition_changed && u.new_disposition && (
+                    <Badge className="text-[9px] px-1.5 py-0 h-4 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 border-0">
+                      → {u.new_disposition}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 text-[9px] text-muted-foreground flex-shrink-0">
+                  <Clock className="w-2.5 h-2.5" />
+                  {new Date(u.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+              <p className="text-[11px] text-foreground/80 leading-snug">{u.message}</p>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

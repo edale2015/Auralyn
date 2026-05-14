@@ -89,4 +89,11 @@ export const publishers = {
     rollup: (payload: Record<string, unknown> = {}) =>
       publish(QUEUE_NAMES.METRICS, "rollup-metrics", payload, lowPriorityJobOptions),
   },
+
+  careGap: {
+    scanAll: (payload: Record<string, unknown> = {}) =>
+      publish(QUEUE_NAMES.CARE_GAP, "scan-all-active-inpatients", payload, lowPriorityJobOptions),
+    scanEncounter: (payload: Record<string, unknown>) =>
+      publish(QUEUE_NAMES.CARE_GAP, "scan-single-encounter", payload),
+  },
 };

@@ -56,6 +56,13 @@ export function startProductionScheduler(): void {
         logger.info("[Scheduler] Scheduled job: executive-report (every 86400s)");
       })
     );
+
+    _handles.push(
+      makeLockedJob("care-gap-scan", 15 * 60 * 1000, async () => {
+        await publishers.careGap.scanAll({});
+        logger.info("[Scheduler] Scheduled job: care-gap-scan (every 900s)");
+      })
+    );
   }
 
   _handles.push(

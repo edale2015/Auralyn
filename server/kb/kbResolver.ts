@@ -22,6 +22,8 @@ import {
 import { and, eq } from "drizzle-orm";
 import { getKbEntity, listKbEntities } from "./kbRepository";
 import { logger } from "../utils/logger";
+import { COMPLAINT_PACK_REGISTRY } from "./complaintPacks/index";
+import type { ExtractedClinicalState } from "./complaintPacks/index";
 
 export interface ResolvedComplaintPack {
   complaint:           string;
@@ -101,6 +103,24 @@ export async function resolveComplaintPack(complaint: string): Promise<ResolvedC
     dispositions,
     resolvedFromDb: Boolean(complaintRows[0]),
   };
+}
+
+// ── In-memory complaint pack router ──────────────────────────────────────────
+// Routes to typed in-memory packs first; falls back to DB resolveComplaintPack.
+
+export function resolveComplaintPackDirect(
+  complaintId: string,
+  clinicalState: ExtractedClinicalState
+): ReturnType<typeof COMPLAINT_PACK_REGISTRY[keyof typeof COMPLAINT_PACK_REGISTRY]["computeTriage"]> | null {
+  const normalizedId = complaintId.trim().toLowerCase().replace(/\s+/g, "_");
+  const pack = COMPLAINT_PACK_REGISTRY[normalizedId as keyof typeof COMPLAINT_PACK_REGISTRY];
+  if (!pack) return null;
+  try {
+    return pack.computeTriage(clinicalState);
+  } catch (e) {
+    logger.warn(`[KBResolver] resolveComplaintPackDirect failed for ${normalizedId}`, { error: String(e) });
+    return null;
+  }
 }
 
 export async function resolveEntityPackByType(entityType: string): Promise<Record<string, unknown>[]> {

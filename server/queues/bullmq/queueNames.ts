@@ -10,6 +10,7 @@ export const QUEUE_NAMES = {
   WEBHOOK: "webhook",
   REPORT: "report",
   METRICS: "metrics",
+  CARE_GAP: "care-gap-detection",
 } as const;
 
 export type QueueName = typeof QUEUE_NAMES[keyof typeof QUEUE_NAMES];

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { BriefingBanner, LivingEncounterTimeline } from "@/components/physician/BriefingBanner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -391,6 +392,12 @@ export default function LiveClinicPage() {
           {/* ── STEP 2: AI Triage Result ────────────────────────────────────── */}
           {step === "result" && currentEncounter && (
             <div className="p-4 space-y-3">
+              {/* Pre-encounter briefing banner — appears when dialogue intake is complete */}
+              <BriefingBanner
+                encounterId={currentEncounter.id}
+                patientName={currentEncounter.patientName}
+              />
+
               <div className="rounded-lg bg-card border border-border/30 p-3 space-y-1">
                 <p className="text-[10px] text-muted-foreground font-medium">ENCOUNTER</p>
                 <p className="text-xs font-semibold">{currentEncounter.id}</p>
@@ -454,6 +461,9 @@ export default function LiveClinicPage() {
                   </Button>
                 </div>
               )}
+
+              {/* Post-visit patient update feed — auto-hides when empty */}
+              <LivingEncounterTimeline encounterId={currentEncounter.id} />
             </div>
           )}
 
