@@ -227,4 +227,41 @@ router.get("/patient-summary/:shareToken", async (req, res) => {
   }
 });
 
+// ─── Anatomical Diagram ───────────────────────────────────────────────────────
+
+/**
+ * GET /api/dialogue/patient-summary/:shareToken/diagram
+ * Returns an anatomical diagram for the patient living encounter page.
+ * No auth required — same token-based protection as the summary endpoint.
+ */
+router.get("/patient-summary/:shareToken/diagram", async (req, res) => {
+  try {
+    const { getDiagram } = await import("../diagrams/AnatomicalDiagramEngine");
+    const summary = await getPatientSummary(req.params.shareToken);
+    if (!summary) return res.status(404).json({ ok: false, error: "Summary not found" });
+
+    const topDx = summary.summary?.topDifferentials?.[0]?.name ?? "";
+    const complaintId = summary.summary?.complaintId ?? summary.complaintId ?? "unknown";
+    const certainty =
+      (summary.summary?.confidence ?? 0) >= 0.8 ? "confirmed" :
+      (summary.summary?.confidence ?? 0) >= 0.6 ? "probable"  :
+      (summary.summary?.confidence ?? 0) >= 0.4 ? "possible"  :
+      "uncertain";
+
+    const diagram = getDiagram({
+      complaintId,
+      primaryDiagnosis: topDx || complaintId,
+      certaintyLevel:   certainty as any,
+      patientAge:       summary.summary?.ageYears,
+      patientSex:       summary.summary?.sex as any,
+      redFlagsPresent:  summary.summary?.criticalGaps ?? [],
+      keyFindings:      summary.summary?.keyFindings ?? {},
+    });
+
+    res.json({ ok: true, diagram });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 export default router;
