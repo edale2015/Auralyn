@@ -283,6 +283,49 @@ export async function assessHumanFactors(
 }
 
 /**
+ * Incrementally update health metrics given one new patient response.
+ * Use this on each turn instead of rebuilding from the full log.
+ */
+export function updateMetrics(
+  existing: ConversationHealthMetrics,
+  newResponse: string
+): ConversationHealthMetrics {
+  const newLen      = newResponse.trim().length;
+  const totalTurns  = existing.turnsCompleted + 1;
+  const newAvg      = Math.round(
+    (existing.averageResponseLength * existing.turnsCompleted + newLen) / totalTurns
+  );
+
+  const isShort    = newLen < 10;
+  const isUnknown  = /\b(i don'?t know|idk|not sure|can'?t remember)\b/i.test(newResponse);
+  const isDistress = DISTRESS_PATTERNS.some(p => p.test(newResponse));
+
+  const last5 = [...existing.lastFiveResponseLengths.slice(-4), newLen];
+  const half        = Math.floor(last5.length / 2);
+  const firstHalf   = last5.slice(0, half);
+  const secondHalf  = last5.slice(half);
+  const avgFirst    = firstHalf.length  ? firstHalf.reduce((a, b)  => a + b, 0) / firstHalf.length  : newAvg;
+  const avgSecond   = secondHalf.length ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : newAvg;
+  const trend: "stable" | "declining" | "improving" =
+    avgSecond < avgFirst * 0.7 ? "declining" :
+    avgSecond > avgFirst * 1.3 ? "improving" : "stable";
+
+  const newUnknownCount = existing.unknownAnswerCount + (isUnknown ? 1 : 0);
+
+  return {
+    averageResponseLength:   newAvg,
+    shortResponseCount:      existing.shortResponseCount + (isShort ? 1 : 0),
+    unknownAnswerCount:      newUnknownCount,
+    repetitionCount:         existing.repetitionCount,
+    distressWordCount:       existing.distressWordCount + (isDistress ? 1 : 0),
+    turnsCompleted:          totalTurns,
+    lastFiveResponseLengths: last5,
+    responseTimeTrend:       trend,
+    coherenceScore:          1 - (newUnknownCount / Math.max(totalTurns, 1)),
+  };
+}
+
+/**
  * Build health metrics from a turn log (answer log from dialogue session).
  */
 export function buildHealthMetrics(answerLog: Array<{ answer: string }>): ConversationHealthMetrics {

@@ -12,6 +12,8 @@ import { extractClinicalState, mergeClinicalStateDelta } from "../kb/ClinicalSta
 import { getComplaintPack, type ExtractedClinicalState, type AnswerEntry } from "../kb/complaintPacks/index";
 import type { DialogueQuestion, QuestionSet } from "../kb/complaintPacks/types";
 import { applyPHIGuard } from "../safety/PHIGuard";
+import { assessHumanFactors, buildHealthMetrics } from "./HumanFactorsLayer";
+import type { HumanFactorSignal } from "./HumanFactorsLayer";
 
 const openai = new OpenAI({
   apiKey:  process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -55,6 +57,7 @@ export interface ProcessResponseResult {
   safetyAlert?:       string;
   isComplete:         boolean;
   triageSummary?:     any;
+  humanFactorSignal?: HumanFactorSignal;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -256,6 +259,48 @@ export async function processResponse(
       answeredAt:   lastTurn.respondedAt,
       extractKey:   (lastTurn as any).extractKey,
     } as AnswerEntry & { extractKey?: string });
+  }
+
+  // ── Human Factors assessment ────────────────────────────────────────────
+  // Run before clinical logic so distress/confusion/barrier signals short-circuit
+  // to an adapted response immediately, without continuing to ask questions.
+  try {
+    const hfMetrics    = buildHealthMetrics(session.answerLog);
+    const hfAssessment = await assessHumanFactors(
+      safAnswer,
+      hfMetrics,
+      lastTurn?.questionText ?? "",
+      session.turns.map(t => t.promptText)
+    );
+
+    if (hfAssessment.signal !== "none" && hfAssessment.adaptedResponse) {
+      if (hfAssessment.shouldAlertStaff && hfAssessment.escalationMessage) {
+        session.safetyAlerts = [
+          ...session.safetyAlerts,
+          `HF_ALERT:${hfAssessment.signal}:${hfAssessment.escalationMessage}`,
+        ];
+      }
+      if (hfAssessment.shouldPauseIntake) {
+        await saveSession(session);
+        return {
+          sessionId,
+          phase:             session.phase,
+          nextPrompt:        hfAssessment.adaptedResponse,
+          isComplete:        false,
+          humanFactorSignal: hfAssessment.signal,
+        };
+      }
+      await saveSession(session);
+      return {
+        sessionId,
+        phase:             session.phase,
+        nextPrompt:        hfAssessment.adaptedResponse,
+        isComplete:        false,
+        humanFactorSignal: hfAssessment.signal,
+      };
+    }
+  } catch {
+    // HF assessment is non-blocking — never fail the intake turn on its behalf
   }
 
   // Rebuild clinical state from full answer log
