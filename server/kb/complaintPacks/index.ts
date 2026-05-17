@@ -8,14 +8,14 @@ export { ChestPainPack }      from "./chest-pain";
 export { GUUTIPack }          from "./gu-uti";
 export { HeadachePack }       from "./headache";
 export { AbdominalPainPack }  from "./abdominal-pain";
-export { MSKBackPainPack, DermatologyPack, PsychiatricPack } from "./remaining-packs";
+export { MSKBackPainPack, DermatologyPack, PsychiatricPack, PediatricFeverPack } from "./remaining-packs";
 
 import { URIRespiratoryPack } from "./uri-respiratory";
 import { ChestPainPack }      from "./chest-pain";
 import { GUUTIPack }          from "./gu-uti";
 import { HeadachePack }       from "./headache";
 import { AbdominalPainPack }  from "./abdominal-pain";
-import { MSKBackPainPack, DermatologyPack, PsychiatricPack } from "./remaining-packs";
+import { MSKBackPainPack, DermatologyPack, PsychiatricPack, PediatricFeverPack } from "./remaining-packs";
 import type { ComplaintPack } from "./types";
 
 export type { ComplaintPack, ExtractedClinicalState, TriageResult, AnswerEntry } from "./types";
@@ -56,6 +56,11 @@ export const COMPLAINT_PACK_REGISTRY: Record<string, ComplaintPack> = {
   "behavioral_health":         PsychiatricPack,
   "anxiety":                   PsychiatricPack,
   "depression":                PsychiatricPack,
+
+  // Pediatric Fever
+  "pediatric_fever":           PediatricFeverPack,
+  "id_fever":                  PediatricFeverPack,
+  "fever":                     PediatricFeverPack,
 };
 
 /**

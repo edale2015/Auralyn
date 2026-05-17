@@ -9,6 +9,7 @@ import type {
   RedFlagCriteria, Differential, QuestionSet, WorkupBundle,
   DispositionRule, MedicationGroup
 } from "./types";
+import { buildStateFromInput, type ValidationInput } from "./validationHelpers";
 
 // ─── Red Flags ───────────────────────────────────────────────────────────────
 
@@ -442,3 +443,8 @@ export const ChestPainPack: ComplaintPack = {
   medicationGroups: MEDICATION_GROUPS,
   computeTriage,
 };
+
+// ─── Named export for golden case validation ──────────────────────────────────
+export function assessChestPain(input: ValidationInput): TriageResult {
+  return ChestPainPack.computeTriage(buildStateFromInput(input, "chest_pain", "chest pain"));
+}

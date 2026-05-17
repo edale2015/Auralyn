@@ -9,6 +9,7 @@ import type {
   RedFlagCriteria, Differential, QuestionSet, WorkupBundle,
   DispositionRule, MedicationGroup
 } from "./types";
+import { buildStateFromInput, type ValidationInput } from "./validationHelpers";
 
 const RED_FLAGS: RedFlagCriteria[] = [
   {
@@ -281,19 +282,28 @@ const DISPOSITION_RULES: DispositionRule[] = [
   },
   {
     id: "D_GU_04",
+    label: "Urgent Care Today — PID or STI with pelvic involvement",
+    disposition: "URGENT_CARE_TODAY",
+    color: "orange",
+    priority: 4,
+    rationale: "Pelvic inflammatory disease or STI with adnexal tenderness requires same-day GYN evaluation and empiric treatment.",
+    condition: s => !!(s.symptoms["adnexal_tenderness"] || (s.symptoms["discharge"] && (s.symptoms["stdRisk"] || s.symptoms["std_risk"]))),
+  },
+  {
+    id: "D_GU_05",
     label: "Telehealth — uncomplicated UTI in non-pregnant woman",
     disposition: "TELEHEALTH",
     color: "yellow",
-    priority: 4,
+    priority: 5,
     rationale: "Uncomplicated lower UTI. Can be managed via telehealth.",
     condition: s => s.sex === "female" && !s.pregnant && !s.symptoms["flank_pain"],
   },
   {
-    id: "D_GU_05",
+    id: "D_GU_06",
     label: "Primary Care 48h — chronic/recurrent GU concerns",
     disposition: "PRIMARY_CARE_48H",
     color: "green",
-    priority: 5,
+    priority: 6,
     rationale: "Subacute or recurrent GU symptoms needing work-up.",
     condition: () => true,
   },
@@ -368,3 +378,8 @@ export const GUUTIPack: ComplaintPack = {
   medicationGroups: MEDICATION_GROUPS,
   computeTriage,
 };
+
+// ─── Named export for golden case validation ──────────────────────────────────
+export function assessGU(input: ValidationInput): TriageResult {
+  return GUUTIPack.computeTriage(buildStateFromInput(input, "gu_uti_symptoms", "UTI symptoms"));
+}
