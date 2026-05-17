@@ -123,4 +123,42 @@ router.post("/sms/webhook", express.urlencoded({ extended: false }), async (req,
   res.sendStatus(200);
 });
 
+// ─── F002: POST /api/clinical/encounters/:id/override ────────────────────────
+// Called by PhysicianOverrideDialog.tsx when a physician changes the AI's
+// recommended disposition.  Writes an RLHF delta to clinical_memory so the
+// learning loop can adjust future recommendations.
+router.post("/encounters/:id/override", requireRole(["admin", "physician"]), async (req: any, res: any) => {
+  try {
+    const encounterId           = req.params.id;
+    const { originalRecommendation, overrideValue, rationale, physicianId, tenantId, complaintId } = req.body ?? {};
+
+    if (!overrideValue?.trim() || !rationale?.trim()) {
+      return res.status(400).json({ error: "overrideValue and rationale are required" });
+    }
+
+    const { writeSupervisorDispositionOverride } = await import("../context/memoryWriters");
+    const result = await writeSupervisorDispositionOverride({
+      encounterId,
+      physicianId:       physicianId ?? (req as any).user?.id ?? "unknown-physician",
+      tenantId:          tenantId    ?? "default",
+      complaintId:       complaintId ?? "unknown",
+      fromDisposition:   originalRecommendation ?? "unknown",
+      toDisposition:     overrideValue,
+      reason:            rationale,
+    });
+
+    return res.json({
+      ok:            true,
+      memoryAccepted: result.accepted,
+      memoryKey:      result.key,
+      encounterId,
+      fromDisposition: originalRecommendation,
+      toDisposition:   overrideValue,
+    });
+  } catch (err: any) {
+    console.error("[F002 Override] Error:", err?.message);
+    return res.status(500).json({ error: err?.message ?? "override failed" });
+  }
+});
+
 export default router;

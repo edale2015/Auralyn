@@ -75,7 +75,31 @@ Extract 4-10 specific, actionable rules. Be precise.`;
       saved++;
     }
 
-    return res.json({ ok: true, documentId: docId, rulesExtracted: saved, summary: parsed.summary, rules });
+    // F004: write to clinical_memory so the pipeline's learned-context layer
+    // can inject this guideline during future differential assembly.
+    let memoryResult: { accepted: boolean; key: string } | null = null;
+    try {
+      const { writeGlobalGuideline } = await import("../context/memoryWriters");
+      const guidelineId = `DOC_${docId}_${Date.now()}`;
+      memoryResult = await writeGlobalGuideline({
+        guidelineId,
+        title:   title ?? "Untitled Guideline",
+        content: { summary: parsed.summary, rules: parsed.rules ?? [], source },
+      });
+      console.log(`[F004] writeGlobalGuideline: ${guidelineId} accepted=${memoryResult.accepted}`);
+    } catch (memErr: any) {
+      console.warn("[F004] writeGlobalGuideline failed (non-critical):", memErr?.message);
+    }
+
+    return res.json({
+      ok: true,
+      documentId: docId,
+      rulesExtracted: saved,
+      summary: parsed.summary,
+      rules,
+      memoryAccepted: memoryResult?.accepted ?? false,
+      memoryKey:      memoryResult?.key ?? null,
+    });
   } catch (e: any) { return res.status(500).json({ error: e.message }); }
 });
 

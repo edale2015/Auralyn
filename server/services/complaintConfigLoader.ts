@@ -543,7 +543,21 @@ export async function loadComplaintConfig(ccId: string, options: LoadComplaintCo
     regEntry = allEntries.find(e => e.aliases.includes(key));
   }
 
-  if (!regEntry) return null;
+  if (!regEntry) {
+    // F001: Sheets registry has no entry — try DB before returning null
+    console.warn(`[ComplaintConfig] "${key}" not found in Sheets registry — trying DB fallback`);
+    try {
+      const { loadComplaintConfigFromDB } = await import("../clinical/loadComplaintConfigFromDB");
+      const dbConfig = await loadComplaintConfigFromDB(key);
+      if (dbConfig) {
+        console.warn(`[ComplaintConfig] DB fallback succeeded for "${key}" (registry miss)`);
+        return dbConfig;
+      }
+    } catch (dbErr) {
+      console.warn(`[ComplaintConfig] DB fallback failed for "${key}":`, (dbErr as Error)?.message ?? dbErr);
+    }
+    return null;
+  }
   const canonicalKey = regEntry.ccId;
 
   let qRows: SheetRow[], rfRows: SheetRow[], sRows: SheetRow[],
@@ -586,12 +600,21 @@ export async function loadComplaintConfig(ccId: string, options: LoadComplaintCo
     assertOutputTemplatesNotCorrupt(tRows);
     assertClusterScoringRulesNotCorrupt(csrRows);
   } catch (loadErr) {
+    console.warn(`[ComplaintConfig] Sheets load/validation failed for "${key}":`, (loadErr as Error)?.message ?? loadErr);
     if (cached) {
-      console.warn(
-        `[ComplaintConfig] Load/corruption-guard failed for "${key}" — using last-known-good stale config`,
-        loadErr
-      );
+      console.warn(`[ComplaintConfig] Returning last-known-good stale cache for "${key}"`);
       return cached.config;
+    }
+    // F001: DB fallback — try kb_master_rules before giving up
+    try {
+      const { loadComplaintConfigFromDB } = await import("../clinical/loadComplaintConfigFromDB");
+      const dbConfig = await loadComplaintConfigFromDB(key);
+      if (dbConfig) {
+        console.warn(`[ComplaintConfig] DB fallback succeeded for "${key}" — staleConfig will be set by pipeline`);
+        return dbConfig;
+      }
+    } catch (dbErr) {
+      console.warn(`[ComplaintConfig] DB fallback also failed for "${key}":`, (dbErr as Error)?.message ?? dbErr);
     }
     throw loadErr;
   }

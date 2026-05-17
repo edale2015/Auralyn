@@ -267,6 +267,10 @@ export async function runClinicalPipeline(params: {
     try {
       cfg = await loadComplaintConfig(complaintId);
       configLoadedAt = nowIso();
+      // F001: DB fallback is detected via scoringModule marker set by loadComplaintConfigFromDB
+      if (cfg?.registry?.scoringModule === "db_fallback") {
+        staleConfig = true;
+      }
       configVersion  = hashConfigVersion({
         ccId:      complaintId,
         version:   cfg?.registry?.version,
