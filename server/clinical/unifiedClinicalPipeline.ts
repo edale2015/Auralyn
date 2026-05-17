@@ -43,6 +43,12 @@ import { queryKBCached, buildKBPromptBlock, type PatientContext }
   from "../retrieval/kbQueryLayer";
 import { loadComplaintConfig, type ComplaintConfig }
   from "../services/complaintConfigLoader";
+import { ClinicalContextManager } from "../context/ClinicalContextManager";
+import { AgentArtifactBus } from "../context/AgentArtifactBus";
+import { ContextCompactor } from "../context/ContextCompactor";
+import { buildDefaultRegistry } from "../context/RoleScopedToolRegistry";
+import type { EncounterContext, Artifact } from "../context/types";
+import { storeEncounterContext, appendCompactionEvent } from "../routes/contextInspector.routes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,7 +88,10 @@ export interface PipelineResult {
   auditId:              string;
   staleConfig:          boolean;
   staleWarning?:        string;
+  encounterContext?:    EncounterContext;
 }
+
+let _toolRegistryLogged = false;
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -134,6 +143,52 @@ export async function runClinicalPipeline(params: {
   let planText                 = "";
   let staleConfig              = false;
   let configLoadedAt           = new Date().toISOString();
+
+  // ── T006–T012: Context Engineering Layer ────────────────────────────────────
+  // Initialise once per pipeline run; all 13 steps record into this harness.
+  const _encCtx: EncounterContext = {
+    immutables: {
+      encounterId:     sessionId,
+      tenantId:        (patientInput as any).tenantId ?? "default",
+      physicianId:     physicianId,
+      patient: {
+        ageYears:           patientInput.age ?? 0,
+        sex:                (patientInput.sex as "M" | "F" | "Other") ?? "Other",
+        allergies:          patientInput.allergies ?? [],
+        currentMedications: patientInput.currentMeds ?? [],
+        relevantHistory:    patientInput.pmh ?? [],
+        pregnancyStatus:    patientInput.pregnant ? "pregnant" : "n/a",
+      },
+      chiefComplaint:       complaintId.replace(/_/g, " "),
+      presentingVitals:     patientInput.vitals
+        ? { ...patientInput.vitals as any, capturedAt: new Date().toISOString() }
+        : undefined,
+      redFlagsIdentified:   [],
+      hardConstraints:      [],
+      encounterStartedAt:   new Date().toISOString(),
+    },
+    working: {
+      currentDifferential:   [],
+      pendingQuestions:      [],
+      answeredQuestions:     [],
+      candidateDispositions: [],
+      currentAgent:          "triage",
+      step:                  0,
+      estimatedTokens:       0,
+    },
+    artifacts: [],
+    traceRefId: `s3://auralyn-audit/${new Date().toISOString().slice(0,10)}/${sessionId}/trace.jsonl`,
+  };
+  const _ctxMgr    = new ClinicalContextManager(_encCtx);
+  const _bus       = new AgentArtifactBus();
+  const _compactor = new ContextCompactor();
+
+  // T011 — Log action-space sizes once at startup
+  if (!_toolRegistryLogged) {
+    const _reg = buildDefaultRegistry();
+    console.log("[context-engineering] action space sizes:", _reg.actionSpaceSizes());
+    _toolRegistryLogged = true;
+  }
   let configVersion            = "unknown";
 
   // ── Step 1: Complaint Identification ────────────────────────────────────────
@@ -254,6 +309,49 @@ export async function runClinicalPipeline(params: {
   rfStep.output = { redFlagsHit, hardStopFired, finalDisposition };
   steps.push(rfStep);
 
+  // T008 — Promote fired red flags into immutables (permanent for this encounter)
+  for (const rfId of redFlagsHit) {
+    _ctxMgr.addRedFlag({
+      id:          rfId,
+      description: rfId.replace(/_/g, " "),
+      identifiedAt: new Date().toISOString(),
+      identifiedBy: "rule_engine",
+      source:      `pipeline:step6:${complaintId}`,
+    });
+  }
+  // T010 — Publish step-6 findings to artifact bus
+  if (redFlagsHit.length > 0) {
+    const rfArt: Artifact = {
+      id:          `art_rf_${sessionId}_step6`,
+      type:        "validated_finding",
+      producedBy:  "triage",
+      producedAt:  new Date().toISOString(),
+      consumedBy:  [],
+      payload: {
+        finding:              `Red flags: ${redFlagsHit.join(", ")}`,
+        positiveOrNegative:   "present",
+        source:               "vitals",
+      },
+      provenance: { source: "rule_engine", citation: `pipeline:step6` },
+      estimatedTokens: 30,
+    };
+    try { _bus.publish("triage", rfArt); } catch { /* contract guard */ }
+    _ctxMgr.recordArtifact(rfArt);
+  }
+  // T012 — Compaction check before disposition (step 9)
+  _ctxMgr.updateWorking({ step: 6, currentAgent: "differential", estimatedTokens: JSON.stringify(_encCtx.working).length });
+  if (_compactor.shouldCompact(_ctxMgr.getContext())) {
+    const cResult = _compactor.compact(_ctxMgr.getContext());
+    _ctxMgr.updateWorking(cResult.newWorking);
+    for (const a of cResult.newArtifacts) _ctxMgr.recordArtifact(a);
+    appendCompactionEvent(sessionId, {
+      sessionId, step: 6,
+      beforeTokens: cResult.beforeTokens, afterTokens: cResult.afterTokens,
+      artifactsEmitted: cResult.newArtifacts.length,
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
   // ── Step 7: Cluster Scoring ──────────────────────────────────────────────────
 
   const csStep: PipelineStepResult = { step: 7, name: "Cluster Scoring", status: "ok", fired: [], output: {} };
@@ -309,6 +407,25 @@ export async function runClinicalPipeline(params: {
 
   dispStep.output = { finalDisposition, hardStopOverride: hardStopFired };
   steps.push(dispStep);
+
+  // T010 — Publish disposition decision to artifact bus
+  const dispArt: Artifact = {
+    id:         `art_disp_${sessionId}_step9`,
+    type:       "decision",
+    producedBy: "disposition",
+    producedAt: new Date().toISOString(),
+    consumedBy: [],
+    payload: {
+      decision:               finalDisposition,
+      rationale:              `Pipeline step 9 — ${hardStopFired ? "HARD STOP" : "rule-based disposition"}`,
+      alternatives_considered: [],
+    },
+    provenance: { source: "rule_engine", citation: `pipeline:step9` },
+    estimatedTokens: 40,
+  };
+  try { _bus.publish("disposition", dispArt); } catch { /* contract guard */ }
+  _ctxMgr.recordArtifact(dispArt);
+  _ctxMgr.updateWorking({ step: 9, currentAgent: "disposition" });
 
   // ── Step 10: Medication Group Selection ─────────────────────────────────────
 
@@ -425,6 +542,11 @@ export async function runClinicalPipeline(params: {
     warnings: staleWarning ? [staleWarning] : undefined,
   });
 
+  // T008 — Persist final context to inspector cache
+  _ctxMgr.updateWorking({ step: 13, currentAgent: "supervisor" });
+  const _finalCtx = _ctxMgr.getContext();
+  storeEncounterContext(sessionId, sessionId, _finalCtx);
+
   return {
     complaintId,
     steps,
@@ -440,6 +562,7 @@ export async function runClinicalPipeline(params: {
     auditId,
     staleConfig,
     staleWarning,
+    encounterContext:     _finalCtx,
   };
 }
 

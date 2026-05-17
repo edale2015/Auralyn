@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ContextInspector } from "@/components/ContextInspector";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1678,6 +1679,7 @@ export default function MasterRuleMapPage() {
           <TabsTrigger value="drilldown"    data-testid="tab-drilldown">Drill-down</TabsTrigger>
           <TabsTrigger value="gaps"         data-testid="tab-gaps">Gaps</TabsTrigger>
           <TabsTrigger value="tools"        data-testid="tab-tools">Tools & RLHF</TabsTrigger>
+          <TabsTrigger value="context"      data-testid="tab-context">Context Inspector</TabsTrigger>
         </TabsList>
 
         <TabsContent value="rules" className="mt-4">
@@ -1721,6 +1723,10 @@ export default function MasterRuleMapPage() {
 
         <TabsContent value="tools" className="mt-4">
           <ValidatorTab />
+        </TabsContent>
+
+        <TabsContent value="context" className="mt-4">
+          <ContextInspector />
         </TabsContent>
       </Tabs>
     </div>
