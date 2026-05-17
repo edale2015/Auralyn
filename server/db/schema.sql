@@ -460,3 +460,65 @@ CREATE TABLE IF NOT EXISTS kb_learning_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_kb_learning_events_status ON kb_learning_events (status, created_at DESC);
+
+-- ── kb_master_rules ───────────────────────────────────────────────────────────
+-- Unified 30-column rule registry (27 spec + diagnostic_criteria, key_questions, icd10)
+-- Populated by syncSourceTablesToMasterRules.ts — safe to re-run.
+
+CREATE TABLE IF NOT EXISTS kb_master_rules (
+  rule_id                 TEXT        PRIMARY KEY,
+  rule_name               TEXT        NOT NULL,
+  rule_type               TEXT        NOT NULL,
+  priority                INT         NOT NULL DEFAULT 5,
+  complaint_id            TEXT,
+  cluster_id              TEXT,
+  diagnosis_id            TEXT,
+  modifier_dependencies   TEXT[]      NOT NULL DEFAULT '{}',
+  question_dependencies   TEXT[]      NOT NULL DEFAULT '{}',
+  red_flag_dependencies   TEXT[]      NOT NULL DEFAULT '{}',
+  input_fields            TEXT[]      NOT NULL DEFAULT '{}',
+  logic_description       TEXT,
+  logic_type              TEXT        NOT NULL DEFAULT 'boolean',
+  source_tab              TEXT,
+  target_tabs             TEXT[]      NOT NULL DEFAULT '{}',
+  outputs                 JSONB,
+  disposition_impact      TEXT,
+  medication_impact       TEXT,
+  workup_impact           TEXT,
+  safety_level            TEXT        NOT NULL DEFAULT 'MODERATE',
+  override_rules          TEXT[]      NOT NULL DEFAULT '{}',
+  confidence_weight       NUMERIC(4,3) NOT NULL DEFAULT 0.500,
+  active                  BOOLEAN     NOT NULL DEFAULT TRUE,
+  version                 TEXT        NOT NULL DEFAULT 'v1',
+  last_updated            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  owner                   TEXT        NOT NULL DEFAULT 'system',
+  notes                   TEXT,
+  diagnostic_criteria     TEXT,
+  key_questions           TEXT[]      NOT NULL DEFAULT '{}',
+  icd10                   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_mr_type        ON kb_master_rules (rule_type);
+CREATE INDEX IF NOT EXISTS idx_kb_mr_complaint   ON kb_master_rules (complaint_id);
+CREATE INDEX IF NOT EXISTS idx_kb_mr_safety      ON kb_master_rules (safety_level);
+CREATE INDEX IF NOT EXISTS idx_kb_mr_active_type ON kb_master_rules (active, rule_type);
+
+-- ── context_metrics_daily ─────────────────────────────────────────────────────
+-- Daily aggregates of auralyn.context.* metrics (written by 04:00 UTC cron job).
+
+CREATE TABLE IF NOT EXISTS context_metrics_daily (
+  id               BIGSERIAL   PRIMARY KEY,
+  metric_date      DATE        NOT NULL,
+  tenant_id        TEXT        NOT NULL DEFAULT 'global',
+  metric_name      TEXT        NOT NULL,
+  metric_value_p50 NUMERIC(10,4),
+  metric_value_p95 NUMERIC(10,4),
+  metric_value_p99 NUMERIC(10,4),
+  count            INT         NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cmd_date_tenant_metric
+  ON context_metrics_daily (metric_date, tenant_id, metric_name);
+CREATE INDEX IF NOT EXISTS idx_cmd_metric_date
+  ON context_metrics_daily (metric_name, metric_date DESC);

@@ -402,6 +402,7 @@ import decisionTreeRoutes, { suggestFixRouter } from "./routes/decisionTreeRoute
 import masterRuleMapRoutes from "./routes/masterRuleMap.routes";
 import masterRulesRoutes from "./routes/masterRules.routes";
 import contextInspectorRoutes from "./routes/contextInspector.routes";
+import contextHealthRoutes    from "./routes/contextHealth.routes";
 import dialogueRoutes from "./routes/dialogue";
 import encounterConfigsRoutes from "./routes/encounterConfigs.routes";
 import voiceParseRoutes from "./routes/voiceParse.routes";
@@ -940,7 +941,8 @@ app.use("/api/network", networkRoutes);
 app.use("/api/kb-governance", kbGovernanceRoutes);
 app.use("/api/rule-map", masterRuleMapRoutes);
 app.use("/api/master-rules", masterRulesRoutes);
-app.use("/api/context", contextInspectorRoutes);
+app.use("/api/context",        contextInspectorRoutes);
+app.use("/api/context-health", contextHealthRoutes);
 app.use("/api/dialogue", dialogueRoutes);
 console.log("[Dialogue] /api/dialogue/* active (start·respond·briefing·updates·patient-summary)");
 app.use("/api/encounter-configs", encounterConfigsRoutes);
