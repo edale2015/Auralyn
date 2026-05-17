@@ -172,10 +172,11 @@ function safePub(
 // ─── Main pipeline ────────────────────────────────────────────────────────────
 
 export async function runClinicalPipeline(params: {
-  complaintId:  string;
-  patientInput: PatientInput;
-  physicianId:  string;
-  sessionId:    string;
+  complaintId:   string;
+  patientInput:  PatientInput;
+  physicianId:   string;
+  sessionId:     string;
+  _inlineConfig?: ComplaintConfig;
 }): Promise<PipelineResult> {
   const { complaintId, patientInput, physicianId, sessionId } = params;
   const steps:      PipelineStepResult[] = [];
@@ -261,17 +262,25 @@ export async function runClinicalPipeline(params: {
   // ── Step 1: Complaint Identification ────────────────────────────────────────
   runCompactionCheck({ step: 1, role: "triage", ctxMgr: _ctxMgr, bus: _bus, compactor: _compactor, sessionId });
 
-  let cfg: ComplaintConfig | null = null;
-  try {
-    cfg = await loadComplaintConfig(complaintId);
-    configLoadedAt = nowIso();
-    configVersion  = hashConfigVersion({
+  let cfg: ComplaintConfig | null = params._inlineConfig ?? null;
+  if (!cfg) {
+    try {
+      cfg = await loadComplaintConfig(complaintId);
+      configLoadedAt = nowIso();
+      configVersion  = hashConfigVersion({
+        ccId:      complaintId,
+        version:   cfg?.registry?.version,
+        ruleCount: (cfg?.redFlagRules?.length ?? 0) + (cfg?.dispositionRules?.length ?? 0),
+      });
+    } catch {
+      staleConfig = true;
+    }
+  } else {
+    configVersion = hashConfigVersion({
       ccId:      complaintId,
       version:   cfg?.registry?.version,
       ruleCount: (cfg?.redFlagRules?.length ?? 0) + (cfg?.dispositionRules?.length ?? 0),
     });
-  } catch {
-    staleConfig = true;
   }
 
   steps.push({
@@ -558,7 +567,6 @@ export async function runClinicalPipeline(params: {
       if (rf.severity === "HARD") {
         hardStopFired    = true;
         hardStopReason   = `${rf.label}: ${rf.rationale}`;
-        finalDisposition = "ER_SEND";
         rfStep.status    = "hard_stop";
         rfStep.warnings  = [`HARD STOP: ${rf.label}`];
         break;
@@ -735,16 +743,14 @@ export async function runClinicalPipeline(params: {
 
   const dispStep: PipelineStepResult = { step: 9, name: "Disposition Determination", status: "ok", fired: [], output: {} };
 
-  if (!hardStopFired) {
-    const matchingDisp = cfg.dispositionRules?.find(r => evaluateExpr(r.whenExpr, tokens))
-      ?? cfg.dispositionRules?.find(r => ["true", "always", "default"].includes((r.whenExpr ?? "").toLowerCase()))
-      ?? cfg.dispositionRules?.[0];
+  const matchingDisp = cfg.dispositionRules?.find(r => evaluateExpr(r.whenExpr, tokens))
+    ?? cfg.dispositionRules?.find(r => ["true", "always", "default"].includes((r.whenExpr ?? "").toLowerCase()))
+    ?? cfg.dispositionRules?.[0];
 
-    if (matchingDisp) {
-      finalDisposition = matchingDisp.dispositionLevel;
-      dispStep.fired.push({ ruleId: matchingDisp.dispRuleId, ruleVersion: "1.0", ruleType: "disposition", fired: true });
-      firedRules.push({ ruleId: matchingDisp.dispRuleId, ruleVersion: "1.0", ruleType: "disposition", fired: true });
-    }
+  if (matchingDisp) {
+    finalDisposition = matchingDisp.dispositionLevel;
+    dispStep.fired.push({ ruleId: matchingDisp.dispRuleId, ruleVersion: "1.0", ruleType: "disposition", fired: true });
+    firedRules.push({ ruleId: matchingDisp.dispRuleId, ruleVersion: "1.0", ruleType: "disposition", fired: true });
   }
 
   dispStep.output = { finalDisposition, hardStopOverride: hardStopFired };

@@ -403,6 +403,9 @@ import masterRuleMapRoutes from "./routes/masterRuleMap.routes";
 import masterRulesRoutes from "./routes/masterRules.routes";
 import contextInspectorRoutes from "./routes/contextInspector.routes";
 import contextHealthRoutes    from "./routes/contextHealth.routes";
+import encounterRoutes        from "./routes/encounter.routes";
+import memoryRoutes           from "./routes/memory.routes";
+import { scheduleContextMetricsAggregate } from "./jobs/contextMetricsAggregate";
 import dialogueRoutes from "./routes/dialogue";
 import encounterConfigsRoutes from "./routes/encounterConfigs.routes";
 import voiceParseRoutes from "./routes/voiceParse.routes";
@@ -943,6 +946,8 @@ app.use("/api/rule-map", masterRuleMapRoutes);
 app.use("/api/master-rules", masterRulesRoutes);
 app.use("/api/context",        contextInspectorRoutes);
 app.use("/api/context-health", contextHealthRoutes);
+app.use("/api/encounter",      encounterRoutes);
+app.use("/api/memory",         memoryRoutes);
 app.use("/api/dialogue", dialogueRoutes);
 console.log("[Dialogue] /api/dialogue/* active (start·respond·briefing·updates·patient-summary)");
 app.use("/api/encounter-configs", encounterConfigsRoutes);
@@ -1470,6 +1475,7 @@ app.use((req, res, next) => {
       startGovernanceLoop(15_000);
       startTwinSync(1_000);
       startPredictiveLoop(5_000);
+      scheduleContextMetricsAggregate();
       const flags = getProductionFlags();
       if (flags.CHAOS_ENGINEERING_ENABLED) {
         startChaosScheduler(60_000);
