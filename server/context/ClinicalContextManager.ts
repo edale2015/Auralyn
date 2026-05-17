@@ -12,6 +12,11 @@
  *   4. Answer queries like "have we already ruled this out?"
  *   5. Record artifacts produced by agents.
  *
+ * T018 — logs consumed_artifacts + prompt_tokens for every assembly.
+ * T019 — accepts optional pre-fetched learned context for ## LEARNED PREFERENCES & PROTOCOLS.
+ * T020 — emits prompt_tokens and excluded telemetry via telemetry.ts.
+ * T023 — getPromptPrefixHash(role) for KV-cache prefix stability verification.
+ *
  * It does NOT call the model. It does NOT decide what tools to use.
  * Those are upstream concerns. This module is the single source of truth
  * for "what does this agent see right now."
@@ -19,6 +24,7 @@
  * File: server/context/ClinicalContextManager.ts
  */
 
+import { createHash } from "crypto";
 import {
   AgentRole,
   Artifact,
@@ -30,10 +36,15 @@ import {
   RedFlag,
   WorkingContext,
 } from "./types";
+import {
+  emitPromptTokens,
+  emitArtifactsExcluded,
+  emitPrefixStability,
+} from "./telemetry";
 
 // Conservative token budget. Real models can take more, but performance
 // degrades well before the limit. These are effective window sizes.
-const PROMPT_BUDGET_TOKENS: Record<AgentRole, number> = {
+export const PROMPT_BUDGET_TOKENS: Record<AgentRole, number> = {
   triage:       6_000,
   differential: 12_000,
   disposition:  14_000,
@@ -48,6 +59,7 @@ export function estimateTokens(text: string): number {
 
 export class ClinicalContextManager {
   private ctx: EncounterContext;
+  private prefixHashCache: Map<AgentRole, string> = new Map();
 
   constructor(initial: EncounterContext) {
     this.ctx = initial;
@@ -101,11 +113,15 @@ export class ClinicalContextManager {
   addRedFlag(flag: RedFlag): void {
     if (this.ctx.immutables.redFlagsIdentified.some(f => f.id === flag.id)) return;
     this.ctx.immutables.redFlagsIdentified.push(flag);
+    // Invalidate prefix hash cache when immutables change
+    this.prefixHashCache.clear();
   }
 
   addHardConstraint(constraint: string): void {
     if (!this.ctx.immutables.hardConstraints.includes(constraint)) {
       this.ctx.immutables.hardConstraints.push(constraint);
+      // Invalidate prefix hash cache when immutables change
+      this.prefixHashCache.clear();
     }
   }
 
@@ -140,24 +156,49 @@ export class ClinicalContextManager {
    * The bookending of immutables addresses middle-of-context recall failure —
    * safety-critical facts that appear only in the middle are more likely to
    * be missed by the model.
+   *
+   * T018 — logs consumption count and token estimate.
+   * T019 — learnedContext (pre-fetched memory records) injected under
+   *         ## LEARNED PREFERENCES & PROTOCOLS.
+   * T020 — emits prompt_tokens and artifacts_excluded_for_budget metrics.
    */
-  assemblePromptFor(role: AgentRole, instruction: string): AssembledPrompt {
+  assemblePromptFor(
+    role:           AgentRole,
+    instruction:    string,
+    learnedContext?: string,
+  ): AssembledPrompt {
     const budget = PROMPT_BUDGET_TOKENS[role];
+    const encId  = this.ctx.immutables.encounterId;
 
-    const systemPrompt     = this.buildSystemPrompt(role);
-    const immutablesBlock  = this.serializeImmutables();
-    const workingBlock     = this.serializeWorkingForRole(role);
+    const systemPrompt    = this.buildSystemPrompt(role);
+    const immutablesBlock = this.serializeImmutables();
+    const workingBlock    = this.serializeWorkingForRole(role);
+
+    // Memory block — "## LEARNED PREFERENCES & PROTOCOLS" (T019)
+    const memoryBlock = learnedContext && learnedContext.length > 0
+      ? `## LEARNED PREFERENCES & PROTOCOLS\n${learnedContext}`
+      : "";
+
     const { artifactBlock, includedIds, excludedIds } = this.selectArtifactsForRole(
       role,
-      budget - estimateTokens(systemPrompt + immutablesBlock + workingBlock + instruction) - 500,
+      budget - estimateTokens(
+        systemPrompt + immutablesBlock + workingBlock + instruction + memoryBlock,
+      ) - 500,
     );
 
-    const userPrompt = [
+    const userPromptParts = [
       "## CLINICAL IMMUTABLES (top)",
       immutablesBlock,
       "",
       "## WORKING CONTEXT",
       workingBlock,
+    ];
+
+    if (memoryBlock) {
+      userPromptParts.push("", memoryBlock);
+    }
+
+    userPromptParts.push(
       "",
       "## DURABLE ARTIFACTS",
       artifactBlock,
@@ -167,9 +208,30 @@ export class ClinicalContextManager {
       "",
       "## YOUR TASK",
       instruction,
-    ].join("\n");
+    );
 
+    const userPrompt      = userPromptParts.join("\n");
     const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
+
+    // T018 consumption logging
+    const consumed = this.ctx.artifacts.filter(
+      a => includedIds.includes(a.id),
+    ).length;
+    console.log(
+      `[${role}] consumed_artifacts=${consumed}, prompt_tokens=${estimatedTokens}`,
+    );
+
+    // T020 telemetry
+    emitPromptTokens(role, estimatedTokens, encId);
+    emitArtifactsExcluded(excludedIds.length, encId);
+
+    // T023 prefix stability
+    const prevHash = this.prefixHashCache.get(role);
+    const newHash  = this.computePrefixHash(role);
+    if (prevHash !== undefined) {
+      emitPrefixStability(role, prevHash === newHash, encId);
+    }
+    this.prefixHashCache.set(role, newHash);
 
     return {
       systemPrompt,
@@ -182,6 +244,21 @@ export class ClinicalContextManager {
         reason:      excludedIds.length > 0 ? "token_budget" : "none",
       },
     };
+  }
+
+  // ─── T023 — KV-cache prefix stability ────────────────────────────────────
+
+  /**
+   * Returns a 16-char hex hash of the system prompt + immutables block
+   * for a given role. Stable across consecutive calls unless immutables change.
+   */
+  getPromptPrefixHash(role: AgentRole): string {
+    return this.computePrefixHash(role);
+  }
+
+  private computePrefixHash(role: AgentRole): string {
+    const prefix = this.buildSystemPrompt(role) + this.serializeImmutables();
+    return createHash("sha256").update(prefix).digest("hex").slice(0, 16);
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────
@@ -237,12 +314,12 @@ export class ClinicalContextManager {
     if (im.presentingVitals) {
       const v = im.presentingVitals;
       const parts: string[] = [];
-      if (v.hr)                     parts.push(`HR ${v.hr}`);
-      if (v.sbp && v.dbp)           parts.push(`BP ${v.sbp}/${v.dbp}`);
-      if (v.rr)                     parts.push(`RR ${v.rr}`);
-      if (v.spo2)                   parts.push(`SpO2 ${v.spo2}%`);
-      if (v.tempC)                  parts.push(`Temp ${v.tempC}°C`);
-      if (v.painScale !== undefined) parts.push(`Pain ${v.painScale}/10`);
+      if (v.hr)                      parts.push(`HR ${v.hr}`);
+      if (v.sbp && v.dbp)            parts.push(`BP ${v.sbp}/${v.dbp}`);
+      if (v.rr)                      parts.push(`RR ${v.rr}`);
+      if (v.spo2)                    parts.push(`SpO2 ${v.spo2}%`);
+      if (v.tempC)                   parts.push(`Temp ${v.tempC}°C`);
+      if (v.painScale !== undefined)  parts.push(`Pain ${v.painScale}/10`);
       lines.push(`Vitals: ${parts.join("  ")}`);
     }
     if (im.redFlagsIdentified.length) {

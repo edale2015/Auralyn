@@ -11,10 +11,13 @@
  * `failed_attempt` artifacts gets nothing back. A differential agent that
  * tries to PRODUCE a `decision` artifact gets rejected.
  *
+ * T020 — emits telemetry on every publish and every contract violation.
+ *
  * File: server/context/AgentArtifactBus.ts
  */
 
 import { AgentRole, Artifact, ArtifactType } from "./types";
+import { emitArtifactPublished, emitContractViolation } from "./telemetry";
 
 interface AgentContract {
   produces: ArtifactType[];
@@ -63,26 +66,35 @@ export class ContractViolation extends Error {
 export class AgentArtifactBus {
   private artifacts:    Artifact[] = [];
   private readReceipts: Map<string, Set<AgentRole>> = new Map();
+  private encounterId?: string;
+
+  constructor(encounterId?: string) {
+    this.encounterId = encounterId;
+  }
 
   /**
    * Publish an artifact produced by an agent.
    * Throws ContractViolation if the agent isn't authorized to produce this type.
+   * Emits telemetry on success; emits violation metric before throwing.
    */
   publish(producer: AgentRole, artifact: Artifact): void {
     const contract = CONTRACTS[producer];
     if (!contract.produces.includes(artifact.type)) {
+      emitContractViolation(producer, artifact.type);
       throw new ContractViolation(
         `Agent '${producer}' is not allowed to produce artifact type '${artifact.type}'. ` +
         `Allowed types: ${contract.produces.join(", ")}`,
       );
     }
     if (artifact.producedBy !== producer) {
+      emitContractViolation(producer, artifact.type);
       throw new ContractViolation(
         `Artifact.producedBy ('${artifact.producedBy}') does not match publisher ('${producer}').`,
       );
     }
     if (this.artifacts.some(a => a.id === artifact.id)) return;
     this.artifacts.push(artifact);
+    emitArtifactPublished(artifact.type, this.encounterId ?? "unknown");
   }
 
   /**
