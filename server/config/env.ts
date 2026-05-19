@@ -7,7 +7,17 @@ export const ENV = {
   MD_PASSWORD: process.env.MD_PASSWORD ?? "",
   CLINICIAN_PASSWORD: process.env.CLINICIAN_PASSWORD ?? "",
 
-  DATABASE_URL: process.env.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL ?? "",
+  DATABASE_URL: (() => {
+    const raw = process.env.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL ?? "";
+    if (!raw) return raw;
+    // Force sslmode=require — required by assertProductionSafe (HIPAA §164.312(e)(2)(ii))
+    // Replace any existing sslmode= value, or append if absent
+    if (raw.includes("sslmode=require") || raw.includes("ssl=true")) return raw;
+    if (raw.includes("sslmode=")) {
+      return raw.replace(/sslmode=[^&]*/, "sslmode=require");
+    }
+    return raw + (raw.includes("?") ? "&" : "?") + "sslmode=require";
+  })(),
   REDIS_URL: process.env.REDIS_URL ?? "",
 
   REVIEW_AUTH_MODE: process.env.REVIEW_AUTH_MODE ?? "on",
