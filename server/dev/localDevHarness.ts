@@ -259,8 +259,9 @@ WHAT NEVER CHANGES:
   This is enforced structurally in localDevComplete().
 `;
 
-// CLI runner — ESM-safe entry guard
-const _isMain = process.argv[1] === fileURLToPath(import.meta.url);
+// CLI runner — ESM-safe entry guard (import.meta.url is undefined in CJS prod bundle)
+let _isMain = false;
+try { _isMain = process.argv[1] === fileURLToPath(import.meta.url); } catch { _isMain = false; }
 if (_isMain) {
   if (process.argv.includes("--smoke-test")) {
     runSmokeTests().catch(console.error);
