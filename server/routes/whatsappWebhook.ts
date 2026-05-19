@@ -14,6 +14,19 @@ import { handleWhatsAppKBIntake } from "../whatsapp/kbIntake";
 
 const router = Router();
 
+function buildWebhookUrl(req: any): string {
+  // Behind Cloud Run / GFE, req.protocol is always "http" (internal).
+  // Twilio signs using the public HTTPS URL, so we must reconstruct from
+  // x-forwarded-proto and x-forwarded-host (set by Google Frontend).
+  const proto =
+    (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0].trim() ??
+    req.protocol;
+  const host =
+    (req.headers["x-forwarded-host"] as string | undefined)?.split(",")[0].trim() ??
+    req.get("host");
+  return `${proto}://${host}${req.originalUrl}`;
+}
+
 function validateTwilioSignature(req: any): boolean {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!authToken) {
@@ -22,26 +35,44 @@ function validateTwilioSignature(req: any): boolean {
   }
 
   const twilioSignature = req.headers["x-twilio-signature"] as string | undefined;
+
+  // ── Debug: log all headers + reconstructed URL on every request ──
+  const url = buildWebhookUrl(req);
+  const params: Record<string, string> = req.body ?? {};
+  console.log("[WhatsApp] Incoming POST headers:", JSON.stringify({
+    "x-twilio-signature": twilioSignature ?? "(missing)",
+    "x-forwarded-proto":  req.headers["x-forwarded-proto"] ?? "(missing)",
+    "x-forwarded-host":   req.headers["x-forwarded-host"]  ?? "(missing)",
+    "host":               req.get("host"),
+    "content-type":       req.headers["content-type"],
+  }));
+  console.log("[WhatsApp] Reconstructed URL for HMAC:", url);
+  console.log("[WhatsApp] Body params received:", JSON.stringify(params));
+
   if (!twilioSignature) {
     console.error("[WhatsApp] ⛔ Missing X-Twilio-Signature header — rejecting request");
     return false;
   }
 
-  const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-  const params: Record<string, string> = req.body ?? {};
-
   const sortedKeys = Object.keys(params).sort();
   const paramString = sortedKeys.map(k => `${k}${params[k]}`).join("");
   const stringToSign = url + paramString;
+
+  console.log("[WhatsApp] String-to-sign (first 120 chars):", stringToSign.slice(0, 120));
 
   const expectedSig = createHmac("sha1", authToken)
     .update(stringToSign, "utf8")
     .digest("base64");
 
+  console.log("[WhatsApp] Expected sig:", expectedSig, "| Received sig:", twilioSignature);
+
   try {
     const expected = Buffer.from(expectedSig);
     const received = Buffer.from(twilioSignature);
-    if (expected.length !== received.length) return false;
+    if (expected.length !== received.length) {
+      console.error("[WhatsApp] ⛔ Signature length mismatch — expected", expected.length, "got", received.length);
+      return false;
+    }
     return timingSafeEqual(expected, received);
   } catch {
     return false;
