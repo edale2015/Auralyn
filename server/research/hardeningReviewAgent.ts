@@ -24,8 +24,9 @@ import { execSync } from "child_process";
 import Anthropic    from "@anthropic-ai/sdk";
 import OpenAI       from "openai";
 // adm-zip is a CommonJS module — use createRequire for safe ESM interop
+// Fallback to "file:///" when import.meta.url is undefined (CJS production bundle)
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);
+const require = createRequire(import.meta.url ?? "file:///");
 const AdmZip  = require("adm-zip");
 
 const PROJECT_ROOT    = process.cwd();

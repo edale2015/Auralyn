@@ -607,7 +607,7 @@ export async function runGoldenCaseValidation(): Promise<{
 
 // ─── CLI entry ────────────────────────────────────────────────────────────────
 
-const _isMain = process.argv[1] && import.meta.url.includes(process.argv[1].replace(/\\/g, "/").split("/").pop()!);
+const _isMain = process.argv[1] && (import.meta.url ?? "").includes(process.argv[1].replace(/\\/g, "/").split("/").pop()!);
 if (_isMain) {
   (async () => {
     console.log("══════════════════════════════════════════════════");
