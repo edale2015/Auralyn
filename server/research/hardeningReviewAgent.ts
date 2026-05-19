@@ -26,7 +26,8 @@ import OpenAI       from "openai";
 // adm-zip is a CommonJS module — use createRequire for safe ESM interop
 // Fallback to "file:///" when import.meta.url is undefined (CJS production bundle)
 import { createRequire } from "module";
-const require = createRequire(import.meta.url ?? "file:///");
+// import.meta.url is undefined in CJS prod bundle — fall back to cwd so node_modules is found
+const require = createRequire(import.meta.url ?? (process.cwd() + "/package.json"));
 const AdmZip  = require("adm-zip");
 
 const PROJECT_ROOT    = process.cwd();
