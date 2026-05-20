@@ -189,16 +189,19 @@ async function runTriageAndSend(params: {
   ]).catch(() => {});
 
   // ── Async enrichment: LLM orchestrator runs AFTER patient has answer ──
-  // Generates physician review packet without blocking the patient reply.
-  runOrchestratorTriage({
-    complaintSlug: params.complaintSlug,
-    answers: params.answers,
-    sessionId: params.caseId,
-    caseId: params.caseId,
-    channel: "whatsapp",
-  }).catch((e: any) =>
-    console.warn("[WhatsApp] Async orchestrator (non-blocking):", e?.message)
-  );
+  // setImmediate guarantees this starts only after the current call stack
+  // (including sendWhatsAppMessage above) is fully resolved — truly non-blocking.
+  setImmediate(() => {
+    runOrchestratorTriage({
+      complaintSlug: params.complaintSlug,
+      answers: params.answers,
+      sessionId: params.caseId,
+      caseId: params.caseId,
+      channel: "whatsapp",
+    }).catch((e: any) =>
+      console.warn("[WhatsApp] Async orchestrator (non-blocking):", e?.message)
+    );
+  });
 
   setTimeout(async () => {
     const surveyText = `📋 *Quick feedback*\n\nHow would you rate your experience today?\n\n5️⃣ Excellent  4️⃣ Good  3️⃣ Okay  2️⃣ Poor  1️⃣ Very poor\n\nReply 1–5`;
