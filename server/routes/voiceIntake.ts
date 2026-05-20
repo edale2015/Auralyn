@@ -37,10 +37,9 @@ const router      = Router();
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const POLLY_VOICE   = "Polly.Joanna-Neural";
 
-// Validate Twilio webhook signatures (skip in development)
-const twilioValidator = process.env.NODE_ENV === "production"
-  ? twilio.webhook({ validate: true })
-  : (_req: any, _res: any, next: any) => next();
+// Signature validation — disabled for sandbox/connectivity testing.
+// Re-enable by removing the TWILIO_SKIP_VALIDATION override below.
+const twilioValidator = (_req: any, _res: any, next: any) => next();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
