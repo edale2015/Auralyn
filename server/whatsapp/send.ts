@@ -125,6 +125,7 @@ export async function sendWhatsAppMessage(
   let messageSid: string | undefined;
 
   try {
+    console.log("[T5] Twilio REST API send started", Date.now());
     const result = await twilioBreaker.call(async () =>
       withRetry(async () => {
         attempts++;
@@ -137,6 +138,7 @@ export async function sendWhatsAppMessage(
         return msg;
       }, 3, 1000)
     );
+    console.log("[T6] Twilio REST API send finished", Date.now());
 
     _sendAuditLog.push({
       ts: new Date().toISOString(), to: formattedTo, bodyLen: body.length,

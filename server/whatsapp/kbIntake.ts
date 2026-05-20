@@ -216,6 +216,7 @@ export async function handleWhatsAppKBIntake(params: {
   text: string;
   messageSid: string;
 }): Promise<boolean> {
+  console.log("[T2] handleWhatsAppKBIntake started", Date.now());
   const { from, text } = params;
   const threadId = from.replace(/^whatsapp:/, "").replace(/^\+/, "");
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
@@ -268,7 +269,9 @@ export async function handleWhatsAppKBIntake(params: {
     }
   }
 
+  const _t2 = Date.now();
   const caseId = await getActiveCaseId({ channel: "whatsapp", threadId });
+  console.log("[T2a] getActiveCaseId finished", Date.now(), `(+${Date.now()-_t2}ms)`);
 
   if (!caseId) {
     const complaints = (listEnabledComplaints() as any[]).slice(0, 20);
@@ -288,6 +291,7 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
+    const _tc = Date.now();
     const created = await createCase({
       channel: "whatsapp",
       threadId,
@@ -296,15 +300,27 @@ export async function handleWhatsAppKBIntake(params: {
       complaintDisplay: match.display,
       engine: "GENERIC_V1",
     });
+    console.log("[T2b] createCase finished", Date.now(), `(+${Date.now()-_tc}ms)`);
 
+    const _ts = Date.now();
     await startSession(created.caseId, created.caseId, "whatsapp");
+    console.log("[T2c] startSession finished", Date.now(), `(+${Date.now()-_ts}ms)`);
+
+    const _tsa = Date.now();
     await setActiveCaseId({ channel: "whatsapp", threadId, activeCaseId: created.caseId });
+    console.log("[T2d] setActiveCaseId finished", Date.now(), `(+${Date.now()-_tsa}ms)`);
 
     logInteraction({ sessionId: created.caseId, caseId: created.caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+
+    const _tm = Date.now();
     await incrementMessageCount(created.caseId);
     await appendMessage(created.caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
+    console.log("[T2e] incrementMessageCount+appendMessage finished", Date.now(), `(+${Date.now()-_tm}ms)`);
 
+    console.log("[T3] getNextRequiredQuestion started", Date.now());
     const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
+    console.log("[T4] getNextRequiredQuestion finished", Date.now());
+
     if (!firstQ) {
       await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
       await runTriageAndSend({ caseId: created.caseId, complaintSlug: match.slug, answers: {}, to: cleanFrom, threadId });
@@ -315,7 +331,9 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
+  const _tg = Date.now();
   const c = await getCase(caseId);
+  console.log("[T2a-existing] getCase finished", Date.now(), `(+${Date.now()-_tg}ms)`);
   if (!c) {
     await clearActiveCaseId({ channel: "whatsapp", threadId });
     await sendWhatsAppMessage(cleanFrom, "Session expired. Send 'hi' to start a new triage.");
@@ -323,11 +341,16 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+
+  const _tap = Date.now();
   await incrementMessageCount(caseId);
   await appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
+  console.log("[T2b-existing] incrementMessageCount+appendMessage finished", Date.now(), `(+${Date.now()-_tap}ms)`);
 
   const answers = (c.answers?.structured ?? {}) as Record<string, any>;
+  console.log("[T3] getNextRequiredQuestion started", Date.now());
   const nextQ = getNextRequiredQuestion({ complaintSlug: c.complaint.slug, answers });
+  console.log("[T4] getNextRequiredQuestion finished", Date.now());
 
   if (!nextQ) {
     await runTriageAndSend({ caseId, complaintSlug: c.complaint.slug, answers, to: cleanFrom, threadId });
@@ -342,7 +365,10 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   const patch: Record<string, any> = { [nextQ.Q_ID]: parsed };
+  const _tma = Date.now();
   const updated = await mergeAnswers(caseId, patch);
+  console.log("[T2c-existing] mergeAnswers finished", Date.now(), `(+${Date.now()-_tma}ms)`);
+
   const updatedAnswers = (updated.answers?.structured ?? {}) as Record<string, any>;
   const answeredCount = Object.keys(updatedAnswers).length;
   const next2 = getNextRequiredQuestion({ complaintSlug: updated.complaint.slug, answers: updatedAnswers });

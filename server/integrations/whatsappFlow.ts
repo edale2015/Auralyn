@@ -56,6 +56,7 @@ async function processIncomingAsync(from: string, text: string, messageSid: stri
   }
 
   slot.inProgress = true;
+  console.log("[T1] processIncomingAsync started", Date.now());
   try {
     const { handleWhatsAppKBIntake } = await import("../whatsapp/kbIntake");
     await handleWhatsAppKBIntake({ from, text, messageSid }).catch((e: any) =>
