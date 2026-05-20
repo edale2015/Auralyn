@@ -17,8 +17,13 @@ function buildIdempotencyKey(job: ClinicalPipelineJob): string {
     .digest('hex');
 }
 
-export const { queue: clinicalPipelineQueue, worker: clinicalPipelineWorker } =
-  createDurableQueue<ClinicalPipelineJob>({
+let clinicalPipelineQueue: import('bullmq').Queue<ClinicalPipelineJob> | null = null;
+let _initStarted = false;
+
+async function initClinicalPipelineQueue() {
+  if (_initStarted) return;
+  _initStarted = true;
+  const result = await createDurableQueue<ClinicalPipelineJob>({
     name: 'clinical_pipeline',
     processor: async (job) => {
       logger.info('[clinicalPipeline] processing stage', {
@@ -29,6 +34,10 @@ export const { queue: clinicalPipelineQueue, worker: clinicalPipelineWorker } =
       return { ok: true, processedStage: job.data.stage, encounterId: job.data.encounterId };
     },
   });
+  clinicalPipelineQueue = result.queue;
+}
+
+initClinicalPipelineQueue().catch(() => {});
 
 export async function enqueueClinicalJob(job: ClinicalPipelineJob): Promise<string | null> {
   if (!clinicalPipelineQueue) {

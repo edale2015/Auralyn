@@ -135,9 +135,8 @@ async function checkBullMQWorker(): Promise<ServiceHealth> {
 
     let queueHealthy = false;
     try {
-      const { createDurableQueue } = await import("../queue/queueFactory");
-      const q = await createDurableQueue("followup");
-      queueHealthy = !!q;
+      const { isRedisAvailable } = await import("../queue/queueFactory");
+      queueHealthy = isRedisAvailable();
     } catch { queueHealthy = false; }
 
     const status: ServiceStatus = queueHealthy ? "healthy" : "degraded";

@@ -2,38 +2,54 @@ import { ENV } from "../../config/env";
 import { logger } from "../../utils/logger";
 
 let _conn: any = null;
-let _initAttempted = false;
+let _reachable: boolean | null = null;  // null=probe in progress, true=ok, false=unreachable
 
-export function getBullConnection(): any {
-  if (_conn) return _conn;
-  if (_initAttempted) return null;
-
-  _initAttempted = true;
-
+/**
+ * Eager async probe at module load.
+ * Sets _reachable = true/false within ~3 s.
+ * All callers of getBullConnection() / isBullAvailable() that run after startup
+ * (~3+ s after module load) will see the correct state and never create
+ * BullMQ Queue/Worker objects with an unreachable connection.
+ */
+(async () => {
   if (!ENV.REDIS_URL || ENV.REDIS_URL.startsWith("https://")) {
     logger.info("[BullMQ] REDIS_URL absent or Upstash REST — BullMQ ioredis disabled");
-    return null;
+    _reachable = false;
+    return;
   }
 
   try {
     const IORedis = require("ioredis");
-    _conn = new IORedis(ENV.REDIS_URL, {
+    const probe = new IORedis(ENV.REDIS_URL, {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
       lazyConnect: true,
-      connectTimeout: 4000,
+      connectTimeout: 3000,
       retryStrategy: () => null,
     });
-    _conn.on("error", () => {});
-    logger.info("[BullMQ] ioredis connection created (lazy)");
-    return _conn;
-  } catch (e: any) {
-    logger.warn("[BullMQ] ioredis init failed — BullMQ disabled", { message: e?.message?.slice(0, 120) });
-    _conn = null;
-    return null;
+    probe.on("error", () => {/* suppress */});
+    probe.on("close", () => { if (_reachable) { _conn = null; _reachable = false; } });
+    probe.on("end",   () => { if (_reachable) { _conn = null; _reachable = false; } });
+
+    await probe.connect();
+    const pong = await probe.ping();
+    if (pong !== "PONG") throw new Error("unexpected ping response");
+
+    _conn = probe;
+    _reachable = true;
+    logger.info("[BullMQ] ioredis connection verified — BullMQ enabled");
+  } catch {
+    _reachable = false;
+    logger.info("[BullMQ] Redis unreachable — BullMQ disabled (no ioredis connection will be attempted again)");
   }
+})();
+
+/** Returns the shared ioredis connection, or null if Redis is unreachable or probe pending. */
+export function getBullConnection(): any {
+  return _reachable === true ? _conn : null;
 }
 
+/** True only after the startup probe confirmed Redis is alive. */
 export function isBullAvailable(): boolean {
-  return Boolean(ENV.REDIS_URL) && !ENV.REDIS_URL.startsWith("https://");
+  return _reachable === true;
 }

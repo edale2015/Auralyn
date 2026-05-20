@@ -24,23 +24,32 @@ import { cosineSimilarity } from "../retrieval/hybridRetriever";
 // ── Redis lazy initialization ─────────────────────────────────────────────────
 
 let _redis: import("ioredis").default | null = null;
+let _redisUnavailable = false;  // after first failed probe, stop retrying
 
 async function getRedis(): Promise<import("ioredis").default | null> {
+  if (_redisUnavailable) return null;
   if (_redis) return _redis;
   const url = process.env.REDIS_URL;
-  if (!url) return null;
+  if (!url) { _redisUnavailable = true; return null; }
   try {
     const { default: Redis } = await import("ioredis");
     const client = new Redis(url, {
       lazyConnect:          true,
       connectTimeout:       3000,
-      maxRetriesPerRequest: 1,
+      maxRetriesPerRequest: null,
       enableOfflineQueue:   false,
+      retryStrategy:        () => null,
     });
+    client.on('error', () => {});
+    client.on('close', () => { _redis = null; _redisUnavailable = true; });
+    client.on('end',   () => { _redis = null; _redisUnavailable = true; });
     await client.connect();
+    const pong = await client.ping();
+    if (pong !== 'PONG') throw new Error('ping failed');
     _redis = client;
     return _redis;
   } catch {
+    _redisUnavailable = true;
     return null;
   }
 }

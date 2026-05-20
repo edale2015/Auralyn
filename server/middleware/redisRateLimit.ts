@@ -1,23 +1,37 @@
 import type { Request, Response, NextFunction } from "express";
 
 let redisClient: any = null;
+let _redisUnavailable = false;  // after first failed probe, stop retrying
 
 async function getRedisClient() {
+  if (_redisUnavailable) return null;
   if (redisClient) return redisClient;
   const redisUrl = process.env.REDIS_URL;
   // Skip ioredis for Upstash — use @upstash/redis REST client via shared module
   if (!redisUrl || redisUrl.includes("upstash.io")) {
     const { getRedisAsync } = await import("../queue/redis");
     redisClient = await getRedisAsync().catch(() => null);
+    if (!redisClient) _redisUnavailable = true;
     return redisClient;
   }
   try {
     const IORedis = (await import("ioredis")).default;
-    redisClient = new IORedis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true });
-    await redisClient.connect().catch(() => { redisClient = null; });
+    const client = new IORedis(redisUrl, {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+      connectTimeout: 3000,
+      retryStrategy: () => null,
+    });
+    client.on("error", () => {/* suppress */});
+    client.on("close", () => { redisClient = null; _redisUnavailable = true; });
+    client.on("end",   () => { redisClient = null; _redisUnavailable = true; });
+    await client.connect();
+    const pong = await client.ping();
+    if (pong !== "PONG") throw new Error("ping failed");
+    redisClient = client;
     return redisClient;
   } catch {
-    redisClient = null;
+    _redisUnavailable = true;
     return null;
   }
 }

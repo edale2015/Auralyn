@@ -47,7 +47,7 @@ function toMemoryJob<T>(name: string, data: T, id: string, options: { attempts?:
 export function registerHandler(name: string, handler: JobHandler): void {
   handlers.set(name, handler);
   if (!durableQueues.has(name)) {
-    const durable = createDurableQueue<any>({
+    createDurableQueue<any>({
       name,
       processor: async (job) => {
         const runtime: Job = {
@@ -62,8 +62,9 @@ export function registerHandler(name: string, handler: JobHandler): void {
         };
         return handler(runtime);
       },
-    });
-    if (durable.queue) durableQueues.set(name, durable.queue);
+    }).then(durable => {
+      if (durable.queue) durableQueues.set(name, durable.queue);
+    }).catch(() => {/* Redis unavailable — in-memory fallback will be used */});
   }
 }
 

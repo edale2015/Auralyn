@@ -82,6 +82,7 @@ async function initQueues() {
         connectTimeout: 4000,
         retryStrategy: () => null,
       });
+      conn.on('error', () => {/* suppress — TCP unavailable in this env */});
       await Promise.race([
         conn.connect(),
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),

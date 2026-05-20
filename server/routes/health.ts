@@ -17,10 +17,13 @@ healthRouter.get("/readyz", async (_req, res) => {
     await testDbConnection();
 
     if (ENV.REDIS_URL && !ENV.REDIS_URL.includes("upstash.io")) {
-      const IORedis = (await import("ioredis")).default;
-      const redis = new IORedis(ENV.REDIS_URL, { maxRetriesPerRequest: 1 });
+      const { getRedisAsync } = await import("../queue/redis");
+      const redis = await Promise.race([
+        getRedisAsync(),
+        new Promise<null>(r => setTimeout(() => r(null), 3500)),
+      ]);
+      if (!redis) throw new Error("Redis unavailable");
       const pong = await redis.ping();
-      await redis.disconnect();
       if (pong !== "PONG") throw new Error("Redis ping failed");
     }
 

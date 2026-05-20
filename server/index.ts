@@ -1,3 +1,14 @@
+// ── Suppress ioredis TCP ETIMEDOUT from unavailable Redis in dev ───────────────
+// BullMQ internally duplicates ioredis connections; those duplicates have no
+// error listener, so their ETIMEDOUT fires as an uncaughtException.
+// We suppress only TCP connect timeouts — all other exceptions still crash.
+process.on("uncaughtException", (err: any) => {
+  if (err?.code === "ETIMEDOUT" && err?.syscall === "connect") return;
+  if (err?.code === "ECONNREFUSED" && err?.syscall === "connect") return;
+  console.error("[FATAL] Uncaught exception:", err);
+  process.exit(1);
+});
+
 import express, { type Request, Response, NextFunction, Router } from "express";
 import cookieParser from "cookie-parser";
 import { clinicalRateLimiter, authRateLimiter, webhookRateLimiter } from "./middleware/rateLimiter";

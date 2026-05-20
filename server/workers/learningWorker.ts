@@ -3,10 +3,14 @@ import { upsertJobRecord } from "../repos/jobRepo";
 import { attachWorkerEvents } from "./baseWorkerEvents";
 import { logger } from "../utils/logger";
 import { withEngineMetrics } from "../monitoring/engineMetrics";
-import { getRedis } from "../queue/redis";
+import { getRedisOrNull } from "../queue/redis";
 
 export function createLearningWorker() {
-  const connection = getRedis();
+  const connection = getRedisOrNull();
+  if (!connection) {
+    logger.warn("[LearningWorker] Redis unavailable — learning worker not started");
+    return null;
+  }
 
   const worker = new Worker(
     "learning",

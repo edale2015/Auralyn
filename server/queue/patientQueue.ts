@@ -34,7 +34,19 @@ async function initRedis(): Promise<boolean> {
     Worker = bullmq.Worker;
     IORedis = ioredis.default;
 
-    const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+    const connection = new IORedis(redisUrl, {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+      connectTimeout: 3000,
+      retryStrategy: () => null,
+    });
+    connection.on('error', () => {});
+
+    // Probe before handing to BullMQ — prevents BullMQ from duplicating a dead conn
+    await connection.connect();
+    const pong = await connection.ping();
+    if (pong !== 'PONG') throw new Error('Redis ping failed');
+
     redisQueue = new Queue("patients", { connection });
 
     redisWorker = new Worker(
@@ -43,7 +55,7 @@ async function initRedis(): Promise<boolean> {
         const result = await runFullClinicalFlow(job.data);
         return result;
       },
-      { connection: new IORedis(redisUrl, { maxRetriesPerRequest: null }) }
+      { connection }
     );
 
     console.log("[PatientQueue] Redis/BullMQ queue initialized");

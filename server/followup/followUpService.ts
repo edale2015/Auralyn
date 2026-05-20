@@ -31,7 +31,8 @@ async function getFollowUpQueue() {
   if (followUpQueue) return followUpQueue;
   try {
     const { createDurableQueue } = await import("../queue/queueFactory");
-    followUpQueue = await createDurableQueue("followup");
+    const result = await createDurableQueue({ name: "followup" });
+    followUpQueue = result.queue;
     return followUpQueue;
   } catch {
     console.warn("[FollowUp] BullMQ unavailable — follow-up jobs will not persist across restarts");
@@ -180,7 +181,13 @@ export async function registerFollowUpWorker(): Promise<void> {
     const { Worker } = await import("bullmq");
     const IORedis    = (await import("ioredis")).default;
 
-    const conn = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+    const conn = new IORedis(redisUrl, {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+      connectTimeout: 3000,
+      retryStrategy: () => null,
+    });
+    conn.on('error', () => {});
 
     new Worker(
       "followup",
