@@ -101,18 +101,32 @@ export function startAutonomousLoop(intervalMs = 60_000) {
     loadSessionsFromDB(),
   ]).catch((e: any) => console.error("[AutonomousLoop] Startup init error:", e?.message));
 
+  // Helper: hand control back to the event loop so in-flight HTTP requests
+  // (e.g. WhatsApp webhooks) are not starved by the background cycle.
+  const yield$ = () => new Promise<void>(r => setImmediate(r));
+
   loopInterval = setInterval(async () => {
     cycleCount++;
     console.log(`[AutonomousLoop] Cycle #${cycleCount} — learning + prediction + drift + self-healing + model-governance`);
-    const [, , , healActions] = await Promise.all([
-      runLearningCycleSafe(),
-      runPredictionSafe(),
-      runDriftDetectionSafe(),
-      runSelfHealing().catch(() => []),
-    ]);
+
+    // Run sequentially with a yield between each step so the event loop
+    // can process pending I/O (HTTP, Firestore callbacks) between tasks.
+    await yield$();
+    await runLearningCycleSafe();
+
+    await yield$();
+    await runPredictionSafe();
+
+    await yield$();
+    await runDriftDetectionSafe();
+
+    await yield$();
+    const healActions = await runSelfHealing().catch(() => [] as any[]);
     if (healActions.length > 0) {
       console.log(`[AutonomousLoop] Self-heal: ${healActions.length} action(s) taken`);
     }
+
+    await yield$();
     await runModelGovernanceSafe();
   }, intervalMs);
 

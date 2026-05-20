@@ -87,7 +87,12 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 export function startSelfLearningLoop(intervalMs = 60_000) {
   if (timer) return;
-  timer = setInterval(runSelfLearning, intervalMs);
+  // Async wrapper yields to event loop first so in-flight WhatsApp callbacks
+  // are not starved by the synchronous weight-update computation.
+  timer = setInterval(async () => {
+    await new Promise<void>(r => setImmediate(r));
+    runSelfLearning();
+  }, intervalMs);
   console.log(`[SelfLearning] Loop started (every ${intervalMs / 1000}s)`);
 }
 

@@ -30,8 +30,14 @@ export async function runLearningCycle(): Promise<{ processed: number; updated: 
 
     const updated: string[] = [];
 
-    for (const o of recent) {
+    const yield$ = () => new Promise<void>(r => setImmediate(r));
+    for (let i = 0; i < recent.length; i++) {
+      const o = recent[i];
       if (!o.predicted) continue;
+      // Yield to event loop every 20 rows so in-flight WhatsApp requests
+      // are not starved while the learning engine processes outcomes.
+      if (i > 0 && i % 20 === 0) await yield$();
+
       const delta = o.predicted === o.actual ? 0.02 : -0.05;
       const diagnosis = o.predicted;
 
