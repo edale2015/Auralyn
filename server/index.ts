@@ -467,6 +467,13 @@ declare module "http" {
   }
 }
 
+// ── Keep-alive health endpoint — registered before ALL middleware ──────────────
+// Zero dependencies, instant 200. Used by UptimeRobot / external ping services
+// to prevent Cloud Run cold starts. Ping https://auralyn.tech/health every 5 min.
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
+});
+
 app.use(cookieParser());
 app.use(correlationId);
 app.use(requestLogger);
@@ -1433,6 +1440,27 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+
+      // ── Self-ping keep-alive — prevents Cloud Run cold starts ─────────────
+      // Pings /health every 5 minutes so the instance stays warm.
+      // Pair with an external service (UptimeRobot → https://auralyn.tech/health)
+      // for full cold-start prevention when no traffic is flowing.
+      const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+      const selfPingUrl = `http://0.0.0.0:${port}/health`;
+      setInterval(async () => {
+        try {
+          const { default: http } = await import("http");
+          http.get(selfPingUrl, (res) => {
+            res.resume(); // drain response
+            console.log(`[KeepAlive] ✅ Self-ping OK — uptime=${Math.floor(process.uptime())}s status=${res.statusCode}`);
+          }).on("error", (err: Error) => {
+            console.warn("[KeepAlive] ⚠️  Self-ping failed:", err.message);
+          });
+        } catch (e: any) {
+          console.warn("[KeepAlive] ⚠️  Self-ping error:", e.message);
+        }
+      }, KEEPALIVE_INTERVAL_MS);
+
       initAsyncWorkerHandlers();
       startAutonomousLoop(60_000);
       startEngines();
