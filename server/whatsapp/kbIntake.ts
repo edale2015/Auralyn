@@ -15,6 +15,7 @@ import {
 import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
 import { getNextRequiredQuestion } from "../services/questionFlowService";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
+import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
   logInteraction,
   startSession,
@@ -29,6 +30,17 @@ import {
   getSurveyState,
   clearSurveyState,
 } from "../services/surveyStateService";
+
+// Map master-rules disposition codes → CaseTriage disposition values
+function mapMasterDisposition(disp: string | null): string | null {
+  if (!disp) return null;
+  const d = disp.toUpperCase();
+  if (["ER_NOW", "ED_NOW", "CALL_911", "911"].includes(d)) return "er_send";
+  if (["URGENT_CARE", "UC"].includes(d))                     return "urgent_care";
+  if (["PCP", "ROUTINE", "PRIMARY_CARE"].includes(d))        return "pcp";
+  if (["HOME_CARE", "SELF_CARE", "TELEHEALTH"].includes(d))  return "self_care";
+  return null;
+}
 
 function formatQuestionAsMenu(q: { Q_ID: string; QUESTION_TEXT: string; ANSWER_TYPE: string }, progress: string): string {
   if (q.ANSWER_TYPE === "number") {
@@ -48,7 +60,7 @@ function parseWhatsAppAnswer(text: string, answerType: string): string | number 
   return null;
 }
 
-function formatTriageResult(triage: any): string {
+function formatTriageResult(triage: any, masterResult?: PipelineResult | null): string {
   const emoji: Record<string, string> = {
     er_send: "🔴",
     urgent_care: "🟠",
@@ -56,9 +68,9 @@ function formatTriageResult(triage: any): string {
     self_care: "🟢",
   };
   const label: Record<string, string> = {
-    er_send: "Emergency — Go to ER",
-    urgent_care: "Go to Urgent Care",
-    pcp: "See Your Doctor",
+    er_send: "Emergency — Go to ER immediately",
+    urgent_care: "Go to Urgent Care today",
+    pcp: "See Your Doctor this week",
     self_care: "Self-Care at Home",
   };
   const e = emoji[triage.disposition] ?? "🔵";
@@ -71,10 +83,22 @@ function formatTriageResult(triage: any): string {
     `📋 Top finding: ${triage.topCluster ?? "—"}`,
     `📊 Confidence: ${triage.confidence}`,
   ];
-  if ((triage.rfTriggered?.length ?? 0) > 0) {
+
+  // Master rules overlay — hard stop / critical red flags
+  if (masterResult?.hardStop && masterResult.hardStopReason) {
+    const flagName = masterResult.hardStopReason.split(":")[0].trim();
+    lines.push(``, `🚨 *Critical alert: ${flagName}*`, `_Seek emergency care immediately._`);
+  } else if ((triage.rfTriggered?.length ?? 0) > 0) {
     lines.push(``, `⚠️ *Red flag(s) noted — seek care promptly.*`);
   }
-  lines.push(``, `_This is AI-assisted clinical decision support only. Not a substitute for physician evaluation._`);
+
+  // Rule engine summary
+  if (masterResult && masterResult.totalRulesFired > 0) {
+    const rfCount = (masterResult.criticalFlagsHit?.length ?? 0);
+    lines.push(``, `🧠 *${masterResult.totalRulesFired} clinical rules evaluated*${rfCount > 0 ? ` · ${rfCount} critical flag(s)` : ""}`);
+  }
+
+  lines.push(``, `_AI-assisted decision support only. Not a substitute for physician evaluation._`);
   return lines.join("\n");
 }
 
@@ -91,23 +115,50 @@ async function runTriageAndSend(params: {
   to: string;
   threadId: string;
 }) {
-  await sendWhatsAppMessage(params.to, "⏳ Analyzing your answers…");
+  await sendWhatsAppMessage(params.to, "⏳ Analyzing your answers with 8,413 clinical rules…");
 
-  const triage = await runOrchestratorTriage({
-    complaintSlug: params.complaintSlug,
-    answers: params.answers,
-    sessionId: params.caseId,
-    caseId: params.caseId,
-    channel: "whatsapp",
-  });
+  // Run orchestrator triage + master rules pipeline in parallel
+  const [triage, masterResult] = await Promise.all([
+    runOrchestratorTriage({
+      complaintSlug: params.complaintSlug,
+      answers: params.answers,
+      sessionId: params.caseId,
+      caseId: params.caseId,
+      channel: "whatsapp",
+    }),
+    executePipeline(params.complaintSlug, params.answers as Record<string, string | number | boolean>)
+      .catch((e: any) => {
+        console.error("[WhatsApp] executePipeline error:", e?.message);
+        return null as PipelineResult | null;
+      }),
+  ]);
+
+  // Apply master rules hard stop: override disposition if critical red flag fires
+  if (masterResult?.hardStop) {
+    const overrideDisp = mapMasterDisposition(masterResult.finalDisposition);
+    if (overrideDisp) {
+      (triage as any).disposition = overrideDisp;
+      console.log(`[WhatsApp] 🚨 Master rules HARD STOP → disposition overridden to ${overrideDisp} (${masterResult.hardStopReason})`);
+    }
+    // Merge critical flags into rfTriggered for downstream logic
+    if ((masterResult.criticalFlagsHit?.length ?? 0) > 0) {
+      (triage as any).rfTriggered = [
+        ...(triage.rfTriggered ?? []),
+        ...masterResult.criticalFlagsHit,
+      ];
+    }
+  }
+
+  console.log(`[WhatsApp] Pipeline — orchestrator=${triage.disposition} master_rules=${masterResult?.finalDisposition ?? "n/a"} rules_fired=${masterResult?.totalRulesFired ?? 0} hard_stop=${masterResult?.hardStop ?? false}`);
 
   const needsReview =
     triage.confidence === "LOW" ||
     (triage.rfTriggered?.length ?? 0) > 0 ||
-    (triage.consistencyFlags?.length ?? 0) > 0;
+    (triage.consistencyFlags?.length ?? 0) > 0 ||
+    masterResult?.hardStop === true;
 
   await setTriage(params.caseId, triage, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any);
-  const resultText = formatTriageResult(triage);
+  const resultText = formatTriageResult(triage, masterResult);
   await sendWhatsAppMessage(params.to, resultText);
 
   logInteraction({

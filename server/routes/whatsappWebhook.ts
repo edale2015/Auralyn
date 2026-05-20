@@ -95,24 +95,9 @@ function validateTwilioSignature(req: any): boolean {
 }
 
 router.post("/whatsapp/webhook", async (req, res) => {
-  // ── CONNECTIVITY TEST MODE ─────────────────────────────────────────────────
-  // All validation and processing is temporarily disabled.
-  // Confirm Twilio can reach this endpoint, then restore full handling.
-  const from   = req.body?.From   ?? "(no From)";
-  const body   = req.body?.Body   ?? "(no Body)";
-  const to     = req.body?.To     ?? "(no To)";
-  const sid    = req.body?.MessageSid ?? "(no SID)";
-  console.log(`[WhatsApp] ✅ CONNECTIVITY TEST — message received From=${from} Body="${body}" To=${to} SID=${sid}`);
-  console.log(`[WhatsApp] Headers:`, JSON.stringify({
-    "x-twilio-signature": req.headers["x-twilio-signature"] ?? "(none)",
-    "content-type":       req.headers["content-type"],
-    "x-forwarded-proto":  req.headers["x-forwarded-proto"] ?? "(none)",
-    "x-forwarded-host":   req.headers["x-forwarded-host"]  ?? "(none)",
-  }));
-  return res.status(200).type("text/xml").send("<Response></Response>");
-
-  // ── FULL PIPELINE (restored after connectivity confirmed) ──────────────────
-  /* eslint-disable no-unreachable */
+  // NOTE: Real-time messages are handled by the early handler in server/index.ts
+  // (registered before globalSafetyGate). This fallback runs only if that
+  // handler is bypassed (direct router mount in tests, etc.).
   if (!validateTwilioSignature(req)) {
     console.error("[WhatsApp] ⛔ Signature validation FAILED — rejecting.");
     return res.status(403).send("Forbidden");

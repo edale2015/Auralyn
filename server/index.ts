@@ -498,15 +498,28 @@ app.use(express.urlencoded({
 // ── Twilio webhooks — MUST be registered before globalSafetyGate ──────────────
 // Twilio expects a 200 within 15 s. The safety gate does async DB checks that
 // can block for seconds under load; mounting these routes early bypasses that.
+// We respond immediately with an empty TwiML envelope, then kick off the full
+// KB triage pipeline asynchronously (which sends replies via Twilio REST API).
 app.post("/whatsapp/webhook", (req, res) => {
-  const from = String(req.body?.From ?? "(no From)");
-  const body = String(req.body?.Body ?? "(no Body)");
-  const sid  = String(req.body?.MessageSid ?? "(no SID)");
+  const from = String(req.body?.From ?? "");
+  const body = String(req.body?.Body ?? "");
+  const sid  = String(req.body?.MessageSid ?? "");
   const sig  = String((req.headers["x-twilio-signature"] as string | undefined) ?? "(none)");
-  console.log(`[WhatsApp] ✅ EARLY — From=${from} Body="${body.slice(0, 60)}" SID=${sid} sig_present=${sig !== "(none)"}`);
-  res.status(200).type("text/xml").send(
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Message>Auralyn received your message. What brings you in today?</Message></Response>`
-  );
+  console.log(`[WhatsApp] ✅ EARLY — From=${from} Body="${body.slice(0, 80)}" SID=${sid} sig_present=${sig !== "(none)"}`);
+
+  // Acknowledge Twilio immediately — must happen within 15 s
+  res.status(200).type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response/>`);
+
+  // Process the message asynchronously via the full KB triage pipeline
+  if (from && body) {
+    import("./whatsapp/kbIntake")
+      .then(({ handleWhatsAppKBIntake }) =>
+        handleWhatsAppKBIntake({ from, text: body, messageSid: sid })
+      )
+      .catch((e: any) =>
+        console.error("[WhatsApp] ❌ KBIntake error:", e?.message ?? e)
+      );
+  }
 });
 
 app.use(tenantContextMiddleware);
