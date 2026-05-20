@@ -9,8 +9,8 @@ const CLINICAL_INTAKE_PATTERNS = [
   /^\/api\/patient\//,
   /^\/api\/clinical\/orchestrate/,
   /^\/api\/clinical\/process/,
-  /^\/whatsapp\/webhook/,
-  /^\/api\/voice/,
+  // NOTE: /whatsapp/webhook intentionally excluded — Twilio needs immediate 200
+  // NOTE: /api/voice intentionally excluded — TwiML must not be gated by DB health
 ];
 
 let dbHealthy = true;

@@ -488,6 +488,20 @@ app.use(express.urlencoded({
   },
 }));
 
+// ── Twilio webhooks — MUST be registered before globalSafetyGate ──────────────
+// Twilio expects a 200 within 15 s. The safety gate does async DB checks that
+// can block for seconds under load; mounting these routes early bypasses that.
+app.post("/whatsapp/webhook", (req, res) => {
+  const from = String(req.body?.From ?? "(no From)");
+  const body = String(req.body?.Body ?? "(no Body)");
+  const sid  = String(req.body?.MessageSid ?? "(no SID)");
+  const sig  = String((req.headers["x-twilio-signature"] as string | undefined) ?? "(none)");
+  console.log(`[WhatsApp] ✅ EARLY — From=${from} Body="${body.slice(0, 60)}" SID=${sid} sig_present=${sig !== "(none)"}`);
+  res.status(200).type("text/xml").send(
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Message>Auralyn received your message. What brings you in today?</Message></Response>`
+  );
+});
+
 app.use(tenantContextMiddleware);
 app.use(globalSafetyGate);
 
