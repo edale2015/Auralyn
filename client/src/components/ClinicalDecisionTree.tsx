@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 
 function authHeaders(): Record<string, string> {
   const t = localStorage.getItem("app_auth_token");
-  return t ? { Authorization: `Bearer ${t}` } : {};
+  return t ? { Authorization: `Bearer ${t}`, "x-review-token": t } : {};
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────

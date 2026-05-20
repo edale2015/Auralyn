@@ -14,7 +14,7 @@ import { Loader2, ChevronDown, ChevronUp, Search, AlertTriangle, CheckCircle2 } 
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token ? { Authorization: `Bearer ${token}`, "x-review-token": token } : {};
 }
 
 // ─── Body system taxonomy ─────────────────────────────────────────────────────

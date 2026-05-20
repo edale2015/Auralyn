@@ -16,7 +16,7 @@ import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token ? { Authorization: `Bearer ${token}`, "x-review-token": token } : {};
 }
 
 // ─── Step definitions (canonical 13-step) ────────────────────────────────────

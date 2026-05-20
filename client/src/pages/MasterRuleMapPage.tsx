@@ -705,7 +705,7 @@ function ruleTypeBadge(t: string) {
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("app_auth_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
+  return token ? { "Authorization": `Bearer ${token}`, "x-review-token": token } : {};
 }
 
 function RulesTab() {
