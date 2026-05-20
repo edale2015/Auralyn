@@ -1,14 +1,8 @@
 import { sendWhatsAppMessage } from "./send";
 import {
-  getActiveCaseId,
-  setActiveCaseId,
-  clearActiveCaseId,
-} from "../services/channelThreadService";
-import {
   createCase,
   appendMessage,
   mergeAnswers,
-  getCase,
   setTriage,
   setCaseState,
 } from "../services/caseService";
@@ -30,8 +24,62 @@ import {
   getSurveyState,
   clearSurveyState,
 } from "../services/surveyStateService";
+import { sha256Hex } from "../services/hash";
 
-// Map master-rules disposition codes → CaseTriage disposition values
+// ── In-memory hot session store ────────────────────────────────────────────────
+// Eliminates ~38s of Firestore round-trips from the patient-facing hot path.
+// Firestore writes are fire-and-forget background persistence — patient reply
+// is never gated on them.  On server restart, the Firestore fallback in
+// getActiveCaseId restores any in-progress sessions automatically.
+interface HotSession {
+  caseId:    string;
+  complaint: { slug: string; display: string };
+  answers:   Record<string, any>;
+  state:     string;
+}
+
+const hotSessions = new Map<string, HotSession>();
+
+function hotKey(threadId: string): string {
+  return `whatsapp:${threadId}`;
+}
+
+function hotGet(threadId: string): HotSession | null {
+  return hotSessions.get(hotKey(threadId)) ?? null;
+}
+
+function hotSet(threadId: string, session: HotSession): void {
+  hotSessions.set(hotKey(threadId), session);
+}
+
+function hotDel(threadId: string): void {
+  hotSessions.delete(hotKey(threadId));
+}
+
+// Firestore fallback — used only on first message after server restart
+async function firestoreLookup(threadId: string): Promise<HotSession | null> {
+  try {
+    const { getActiveCaseId } = await import("../services/channelThreadService");
+    const caseId = await (getActiveCaseId as any)({ channel: "whatsapp", threadId });
+    if (!caseId) return null;
+    const { getCase } = await import("../services/caseService");
+    const doc = await getCase(caseId);
+    if (!doc || doc.state === "CLOSED" || doc.state === "TRIAGED") return null;
+    const session: HotSession = {
+      caseId,
+      complaint: { slug: doc.complaint.slug, display: doc.complaint.display },
+      answers:   (doc.answers?.structured ?? {}) as Record<string, any>,
+      state:     doc.state,
+    };
+    hotSet(threadId, session);        // warm the cache for future messages
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
 function mapMasterDisposition(disp: string | null): string | null {
   if (!disp) return null;
   const d = disp.toUpperCase();
@@ -62,10 +110,7 @@ function parseWhatsAppAnswer(text: string, answerType: string): string | number 
 
 function formatTriageResult(triage: any, masterResult?: PipelineResult | null): string {
   const emoji: Record<string, string> = {
-    er_send: "🔴",
-    urgent_care: "🟠",
-    pcp: "🟡",
-    self_care: "🟢",
+    er_send: "🔴", urgent_care: "🟠", pcp: "🟡", self_care: "🟢",
   };
   const label: Record<string, string> = {
     er_send: "Emergency — Go to ER immediately",
@@ -77,14 +122,12 @@ function formatTriageResult(triage: any, masterResult?: PipelineResult | null): 
   const l = label[triage.disposition] ?? triage.disposition;
 
   const lines = [
-    `✅ *Assessment complete*`,
-    ``,
+    `✅ *Assessment complete*`, ``,
     `${e} *${l}*`,
     `📋 Top finding: ${triage.topCluster ?? "—"}`,
     `📊 Confidence: ${triage.confidence}`,
   ];
 
-  // Master rules overlay — hard stop / critical red flags
   if (masterResult?.hardStop && masterResult.hardStopReason) {
     const flagName = masterResult.hardStopReason.split(":")[0].trim();
     lines.push(``, `🚨 *Critical alert: ${flagName}*`, `_Seek emergency care immediately._`);
@@ -92,9 +135,8 @@ function formatTriageResult(triage: any, masterResult?: PipelineResult | null): 
     lines.push(``, `⚠️ *Red flag(s) noted — seek care promptly.*`);
   }
 
-  // Rule engine summary
   if (masterResult && masterResult.totalRulesFired > 0) {
-    const rfCount = (masterResult.criticalFlagsHit?.length ?? 0);
+    const rfCount = masterResult.criticalFlagsHit?.length ?? 0;
     lines.push(``, `🧠 *${masterResult.totalRulesFired} clinical rules evaluated*${rfCount > 0 ? ` · ${rfCount} critical flag(s)` : ""}`);
   }
 
@@ -108,33 +150,25 @@ function buildComplaintMenu(): string {
   return `👋 Welcome to Auralyn Triage.\n\nWhat's your main symptom? Type it or reply with a number:\n\n${numbered}\n\n_Or just describe your symptom in your own words._`;
 }
 
-// Build a lightweight triage object directly from the rule-engine result.
-// Zero LLM calls — pure DB. Target latency: ~200–400 ms.
 function buildTriageFromPipeline(p: PipelineResult): Record<string, any> {
   const disposition = mapMasterDisposition(p.finalDisposition) ?? "urgent_care";
-
-  // Derive confidence from how many rules fired + hard-stop status
   let confidence: string;
-  if (p.hardStop)              confidence = "HIGH";
+  if (p.hardStop)               confidence = "HIGH";
   else if (p.totalRulesFired >= 8) confidence = "MODERATE";
-  else                         confidence = "LOW";
-
-  // Best topCluster: hard-stop reason, or first fired diagnosis name, or complaint
+  else                          confidence = "LOW";
   const dxStep    = p.steps.find(s => s.ruleType === "diagnosis");
   const topDx     = dxStep?.rulesFired?.[0]?.rule_name ?? null;
   const topCluster = p.hardStop
     ? (p.hardStopReason?.split(":")[0]?.trim() ?? "Critical red flag")
     : (topDx ?? p.complaint_id.replace(/_/g, " "));
-
   return {
-    disposition,
-    confidence,
-    topCluster,
-    rfTriggered:       p.criticalFlagsHit ?? [],
-    consistencyFlags:  [],
+    disposition, confidence, topCluster,
+    rfTriggered: p.criticalFlagsHit ?? [],
+    consistencyFlags: [],
   };
 }
 
+// ── Triage runner (zero LLM — pure rule engine) ────────────────────────────────
 async function runTriageAndSend(params: {
   caseId: string;
   complaintSlug: string;
@@ -142,8 +176,6 @@ async function runTriageAndSend(params: {
   to: string;
   threadId: string;
 }) {
-  // ── Fast path: pure rule engine, single DB query (~200–400 ms, zero LLM calls) ──
-  // Callers already sent a "processing…" message so we go straight to the engine.
   const t0 = Date.now();
   const masterResult = await executePipeline(
     params.complaintSlug,
@@ -164,34 +196,21 @@ async function runTriageAndSend(params: {
 
   const resultText = formatTriageResult(triage, masterResult);
 
-  // Send result to patient + persist triage in parallel — patient reply is not gated on DB write
-  await Promise.all([
-    sendWhatsAppMessage(params.to, resultText),
-    setTriage(params.caseId, triage as any, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any),
-  ]);
-
+  // Patient gets result — Firestore write is background
+  await sendWhatsAppMessage(params.to, resultText);
   console.log(`[WhatsApp] ⚡ ${Date.now() - t0}ms total — disp=${triage.disposition} rules=${masterResult?.totalRulesFired ?? 0} hardStop=${masterResult?.hardStop ?? false}`);
 
-  // Post-reply cleanup — fire-and-forget, patient already has their answer
-  logInteraction({
-    sessionId: params.caseId,
-    caseId: params.caseId,
-    channel: "whatsapp",
-    direction: "outbound",
-    skillName: "triage_result",
-    messageText: resultText,
-    responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}|rules=${masterResult?.totalRulesFired ?? 0}`,
-  }).catch(() => {});
-
-  Promise.all([
-    endSession(params.caseId, triage.disposition as any),
-    clearActiveCaseId({ channel: "whatsapp", threadId: params.threadId }),
-  ]).catch(() => {});
-
-  // ── Async enrichment: LLM orchestrator runs AFTER patient has answer ──
-  // setImmediate guarantees this starts only after the current call stack
-  // (including sendWhatsAppMessage above) is fully resolved — truly non-blocking.
+  // ── Background persistence (fire-and-forget) ──────────────────────────────
   setImmediate(() => {
+    setTriage(params.caseId, triage as any, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any).catch(() => {});
+    endSession(params.caseId, triage.disposition as any).catch(() => {});
+    logInteraction({
+      sessionId: params.caseId, caseId: params.caseId, channel: "whatsapp",
+      direction: "outbound", skillName: "triage_result", messageText: resultText,
+      responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}|rules=${masterResult?.totalRulesFired ?? 0}`,
+    }).catch(() => {});
+
+    // LLM enrichment for physician review packet — never blocks patient
     runOrchestratorTriage({
       complaintSlug: params.complaintSlug,
       answers: params.answers,
@@ -203,6 +222,9 @@ async function runTriageAndSend(params: {
     );
   });
 
+  // Clear hot session
+  hotDel(params.threadId);
+
   setTimeout(async () => {
     const surveyText = `📋 *Quick feedback*\n\nHow would you rate your experience today?\n\n5️⃣ Excellent  4️⃣ Good  3️⃣ Okay  2️⃣ Poor  1️⃣ Very poor\n\nReply 1–5`;
     await sendWhatsAppMessage(params.to, surveyText);
@@ -211,6 +233,7 @@ async function runTriageAndSend(params: {
   }, 2000);
 }
 
+// ── Main handler ───────────────────────────────────────────────────────────────
 export async function handleWhatsAppKBIntake(params: {
   from: string;
   text: string;
@@ -218,41 +241,42 @@ export async function handleWhatsAppKBIntake(params: {
 }): Promise<boolean> {
   console.log("[T2] handleWhatsAppKBIntake started", Date.now());
   const { from, text } = params;
-  const threadId = from.replace(/^whatsapp:/, "").replace(/^\+/, "");
+  const threadId  = from.replace(/^whatsapp:/, "").replace(/^\+/, "");
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
-  const rawText = text.trim();
+  const rawText   = text.trim();
+  const mood      = analyzeMood(rawText);
 
-  const mood = analyzeMood(rawText);
-
+  // ── /start / hello ──────────────────────────────────────────────────────────
   if (rawText.toLowerCase() === "/start" || rawText.toLowerCase() === "hi" || rawText.toLowerCase() === "hello") {
-    const oldCaseId = await getActiveCaseId({ channel: "whatsapp", threadId });
-    if (oldCaseId) {
-      const old = await getCase(oldCaseId);
-      if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
+    const existing = hotGet(threadId);
+    if (existing) {
+      // Background: close old Firestore case
+      setImmediate(() => setCaseState(existing.caseId, "CLOSED").catch(() => {}));
     }
-    await clearActiveCaseId({ channel: "whatsapp", threadId });
-    await clearSurveyState("whatsapp", threadId);
+    hotDel(threadId);
+    clearSurveyState("whatsapp", threadId).catch(() => {});
     await sendWhatsAppMessage(cleanFrom, buildComplaintMenu());
     return true;
   }
 
+  // ── /reset ──────────────────────────────────────────────────────────────────
   if (rawText.toLowerCase() === "/reset") {
-    const oldCaseId = await getActiveCaseId({ channel: "whatsapp", threadId });
-    if (oldCaseId) {
-      const old = await getCase(oldCaseId);
-      if (old?.state === "DRAFT") await setCaseState(oldCaseId, "CLOSED");
+    const existing = hotGet(threadId);
+    if (existing) {
+      setImmediate(() => setCaseState(existing.caseId, "CLOSED").catch(() => {}));
     }
-    await clearActiveCaseId({ channel: "whatsapp", threadId });
-    await clearSurveyState("whatsapp", threadId);
+    hotDel(threadId);
+    clearSurveyState("whatsapp", threadId).catch(() => {});
     await sendWhatsAppMessage(cleanFrom, "Session cleared. Send your symptom or 'hi' to start again.");
     return true;
   }
 
+  // ── Survey replies ──────────────────────────────────────────────────────────
   const survey = await getSurveyState("whatsapp", threadId);
   if (survey) {
     const n = parseInt(rawText.trim());
     if (survey.phase === "csat" && !isNaN(n) && n >= 1 && n <= 5) {
-      await recordCsat(survey.sessionId, n);
+      recordCsat(survey.sessionId, n).catch(() => {});
       logInteraction({ sessionId: survey.sessionId, channel: "whatsapp", direction: "inbound", skillName: "csat_reply", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
       await setSurveyState("whatsapp", threadId, survey.sessionId, "nps");
       const npsText = `Thanks! One more — how likely are you to recommend Auralyn to someone you know?\n\n0 = Not at all   10 = Absolutely yes\n\nReply 0–10`;
@@ -261,19 +285,24 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
     if (survey.phase === "nps" && !isNaN(n) && n >= 0 && n <= 10) {
-      await recordNps(survey.sessionId, n);
-      await clearSurveyState("whatsapp", threadId);
+      recordNps(survey.sessionId, n).catch(() => {});
+      clearSurveyState("whatsapp", threadId).catch(() => {});
       logInteraction({ sessionId: survey.sessionId, channel: "whatsapp", direction: "inbound", skillName: "nps_reply", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
       await sendWhatsAppMessage(cleanFrom, `🙏 Thank you! Your feedback helps us improve care. Stay well.`);
       return true;
     }
   }
 
-  const _t2 = Date.now();
-  const caseId = await getActiveCaseId({ channel: "whatsapp", threadId });
-  console.log("[T2a] getActiveCaseId finished", Date.now(), `(+${Date.now()-_t2}ms)`);
+  // ── Look up existing session ────────────────────────────────────────────────
+  // 1. Hot cache (in-memory, instant)
+  // 2. Firestore fallback (only on first message after restart)
+  console.log("[T2a] session lookup started", Date.now());
+  let session = hotGet(threadId);
+  if (!session) session = await firestoreLookup(threadId);
+  console.log("[T2a] session lookup finished", Date.now(), session ? `caseId=${session.caseId}` : "no session");
 
-  if (!caseId) {
+  // ── New session — complaint selection ───────────────────────────────────────
+  if (!session) {
     const complaints = (listEnabledComplaints() as any[]).slice(0, 20);
     const byNumber = Number(rawText.trim()) - 1;
     let match: { slug: string; display: string } | null = null;
@@ -291,39 +320,39 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
-    const _tc = Date.now();
-    const created = await createCase({
-      channel: "whatsapp",
-      threadId,
-      userId: threadId,
-      complaintSlug: match.slug,
-      complaintDisplay: match.display,
-      engine: "GENERIC_V1",
+    // ── Create session in memory immediately (instant) ──────────────────────
+    const nowIso = new Date().toISOString();
+    const caseId = `CASE_${nowIso.replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
+    session = { caseId, complaint: match, answers: {}, state: "DRAFT" };
+    hotSet(threadId, session);
+
+    // ── Background: persist to Firestore + audit (never blocks patient) ──────
+    setImmediate(() => {
+      createCase({
+        channel: "whatsapp", threadId, userId: threadId,
+        complaintSlug: match!.slug, complaintDisplay: match!.display,
+        engine: "GENERIC_V1",
+      }).catch(() => {});
+
+      // channelThreadService uses "telegram" type but works for whatsapp via dynamic import
+      import("../services/channelThreadService").then(({ setActiveCaseId }) =>
+        (setActiveCaseId as any)({ channel: "whatsapp", threadId, activeCaseId: caseId }).catch(() => {})
+      ).catch(() => {});
+
+      startSession(caseId, caseId, "whatsapp").catch(() => {});
+      incrementMessageCount(caseId).catch(() => {});
+      appendMessage(caseId, { ts: nowIso, dir: "in", channel: "whatsapp", text: rawText }).catch(() => {});
+      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
     });
-    console.log("[T2b] createCase finished", Date.now(), `(+${Date.now()-_tc}ms)`);
 
-    const _ts = Date.now();
-    await startSession(created.caseId, created.caseId, "whatsapp");
-    console.log("[T2c] startSession finished", Date.now(), `(+${Date.now()-_ts}ms)`);
-
-    const _tsa = Date.now();
-    await setActiveCaseId({ channel: "whatsapp", threadId, activeCaseId: created.caseId });
-    console.log("[T2d] setActiveCaseId finished", Date.now(), `(+${Date.now()-_tsa}ms)`);
-
-    logInteraction({ sessionId: created.caseId, caseId: created.caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
-
-    const _tm = Date.now();
-    await incrementMessageCount(created.caseId);
-    await appendMessage(created.caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
-    console.log("[T2e] incrementMessageCount+appendMessage finished", Date.now(), `(+${Date.now()-_tm}ms)`);
-
+    // ── Get first question (sync — ~0ms) ────────────────────────────────────
     console.log("[T3] getNextRequiredQuestion started", Date.now());
     const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
     console.log("[T4] getNextRequiredQuestion finished", Date.now());
 
     if (!firstQ) {
       await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
-      await runTriageAndSend({ caseId: created.caseId, complaintSlug: match.slug, answers: {}, to: cleanFrom, threadId });
+      await runTriageAndSend({ caseId, complaintSlug: match.slug, answers: {}, to: cleanFrom, threadId });
       return true;
     }
 
@@ -331,29 +360,22 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
-  const _tg = Date.now();
-  const c = await getCase(caseId);
-  console.log("[T2a-existing] getCase finished", Date.now(), `(+${Date.now()-_tg}ms)`);
-  if (!c) {
-    await clearActiveCaseId({ channel: "whatsapp", threadId });
-    await sendWhatsAppMessage(cleanFrom, "Session expired. Send 'hi' to start a new triage.");
-    return true;
-  }
+  // ── Existing session — answer handling ─────────────────────────────────────
+  const { caseId, complaint, answers } = session;
 
-  logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+  // Background audit writes
+  setImmediate(() => {
+    incrementMessageCount(caseId).catch(() => {});
+    appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText }).catch(() => {});
+    logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
+  });
 
-  const _tap = Date.now();
-  await incrementMessageCount(caseId);
-  await appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText });
-  console.log("[T2b-existing] incrementMessageCount+appendMessage finished", Date.now(), `(+${Date.now()-_tap}ms)`);
-
-  const answers = (c.answers?.structured ?? {}) as Record<string, any>;
   console.log("[T3] getNextRequiredQuestion started", Date.now());
-  const nextQ = getNextRequiredQuestion({ complaintSlug: c.complaint.slug, answers });
+  const nextQ = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers });
   console.log("[T4] getNextRequiredQuestion finished", Date.now());
 
   if (!nextQ) {
-    await runTriageAndSend({ caseId, complaintSlug: c.complaint.slug, answers, to: cleanFrom, threadId });
+    await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers, to: cleanFrom, threadId });
     return true;
   }
 
@@ -364,20 +386,30 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
-  const patch: Record<string, any> = { [nextQ.Q_ID]: parsed };
-  const _tma = Date.now();
-  const updated = await mergeAnswers(caseId, patch);
-  console.log("[T2c-existing] mergeAnswers finished", Date.now(), `(+${Date.now()-_tma}ms)`);
-
-  const updatedAnswers = (updated.answers?.structured ?? {}) as Record<string, any>;
+  // ── Merge answer in memory (instant) + background Firestore ─────────────────
+  const updatedAnswers = { ...answers, [nextQ.Q_ID]: parsed };
+  session.answers = updatedAnswers;    // mutate hot session in place
   const answeredCount = Object.keys(updatedAnswers).length;
-  const next2 = getNextRequiredQuestion({ complaintSlug: updated.complaint.slug, answers: updatedAnswers });
+
+  setImmediate(() => {
+    // Firestore merge (background — patient already has next question)
+    const answerHash = sha256Hex(JSON.stringify(updatedAnswers));
+    import("../firebase").then(({ getFirestore }) => {
+      getFirestore().collection("cases").doc(caseId).update({
+        updatedAt: new Date().toISOString(),
+        "answers.structured": updatedAnswers,
+        "answers.answerHash": answerHash,
+      }).catch(() => {});
+    }).catch(() => {});
+  });
+
+  const next2 = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers: updatedAnswers });
 
   if (next2) {
     await sendWhatsAppMessage(cleanFrom, formatQuestionAsMenu(next2, `📋 Question ${answeredCount + 1}`));
   } else {
     await sendWhatsAppMessage(cleanFrom, "Thanks — processing your assessment now…");
-    await runTriageAndSend({ caseId, complaintSlug: updated.complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
+    await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
   }
 
   return true;
