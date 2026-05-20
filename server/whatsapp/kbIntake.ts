@@ -108,6 +108,33 @@ function buildComplaintMenu(): string {
   return `👋 Welcome to Auralyn Triage.\n\nWhat's your main symptom? Type it or reply with a number:\n\n${numbered}\n\n_Or just describe your symptom in your own words._`;
 }
 
+// Build a lightweight triage object directly from the rule-engine result.
+// Zero LLM calls — pure DB. Target latency: ~200–400 ms.
+function buildTriageFromPipeline(p: PipelineResult): Record<string, any> {
+  const disposition = mapMasterDisposition(p.finalDisposition) ?? "urgent_care";
+
+  // Derive confidence from how many rules fired + hard-stop status
+  let confidence: string;
+  if (p.hardStop)              confidence = "HIGH";
+  else if (p.totalRulesFired >= 8) confidence = "MODERATE";
+  else                         confidence = "LOW";
+
+  // Best topCluster: hard-stop reason, or first fired diagnosis name, or complaint
+  const dxStep    = p.steps.find(s => s.ruleType === "diagnosis");
+  const topDx     = dxStep?.rulesFired?.[0]?.rule_name ?? null;
+  const topCluster = p.hardStop
+    ? (p.hardStopReason?.split(":")[0]?.trim() ?? "Critical red flag")
+    : (topDx ?? p.complaint_id.replace(/_/g, " "));
+
+  return {
+    disposition,
+    confidence,
+    topCluster,
+    rfTriggered:       p.criticalFlagsHit ?? [],
+    consistencyFlags:  [],
+  };
+}
+
 async function runTriageAndSend(params: {
   caseId: string;
   complaintSlug: string;
@@ -115,52 +142,37 @@ async function runTriageAndSend(params: {
   to: string;
   threadId: string;
 }) {
-  await sendWhatsAppMessage(params.to, "⏳ Analyzing your answers with 8,413 clinical rules…");
+  // ── Fast path: pure rule engine, single DB query (~200–400 ms, zero LLM calls) ──
+  // Callers already sent a "processing…" message so we go straight to the engine.
+  const t0 = Date.now();
+  const masterResult = await executePipeline(
+    params.complaintSlug,
+    params.answers as Record<string, string | number | boolean>
+  ).catch((e: any) => {
+    console.error("[WhatsApp] executePipeline error:", e?.message);
+    return null as PipelineResult | null;
+  });
 
-  // Run orchestrator triage + master rules pipeline in parallel
-  const [triage, masterResult] = await Promise.all([
-    runOrchestratorTriage({
-      complaintSlug: params.complaintSlug,
-      answers: params.answers,
-      sessionId: params.caseId,
-      caseId: params.caseId,
-      channel: "whatsapp",
-    }),
-    executePipeline(params.complaintSlug, params.answers as Record<string, string | number | boolean>)
-      .catch((e: any) => {
-        console.error("[WhatsApp] executePipeline error:", e?.message);
-        return null as PipelineResult | null;
-      }),
-  ]);
-
-  // Apply master rules hard stop: override disposition if critical red flag fires
-  if (masterResult?.hardStop) {
-    const overrideDisp = mapMasterDisposition(masterResult.finalDisposition);
-    if (overrideDisp) {
-      (triage as any).disposition = overrideDisp;
-      console.log(`[WhatsApp] 🚨 Master rules HARD STOP → disposition overridden to ${overrideDisp} (${masterResult.hardStopReason})`);
-    }
-    // Merge critical flags into rfTriggered for downstream logic
-    if ((masterResult.criticalFlagsHit?.length ?? 0) > 0) {
-      (triage as any).rfTriggered = [
-        ...(triage.rfTriggered ?? []),
-        ...masterResult.criticalFlagsHit,
-      ];
-    }
-  }
-
-  console.log(`[WhatsApp] Pipeline — orchestrator=${triage.disposition} master_rules=${masterResult?.finalDisposition ?? "n/a"} rules_fired=${masterResult?.totalRulesFired ?? 0} hard_stop=${masterResult?.hardStop ?? false}`);
+  const triage = masterResult
+    ? buildTriageFromPipeline(masterResult)
+    : { disposition: "urgent_care", confidence: "LOW", topCluster: "—", rfTriggered: [], consistencyFlags: [] };
 
   const needsReview =
-    triage.confidence === "LOW" ||
+    triage.confidence === "LOW"           ||
     (triage.rfTriggered?.length ?? 0) > 0 ||
-    (triage.consistencyFlags?.length ?? 0) > 0 ||
     masterResult?.hardStop === true;
 
-  await setTriage(params.caseId, triage, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any);
   const resultText = formatTriageResult(triage, masterResult);
-  await sendWhatsAppMessage(params.to, resultText);
 
+  // Send result to patient + persist triage in parallel — patient reply is not gated on DB write
+  await Promise.all([
+    sendWhatsAppMessage(params.to, resultText),
+    setTriage(params.caseId, triage as any, (needsReview ? "NEEDS_REVIEW" : "TRIAGED") as any),
+  ]);
+
+  console.log(`[WhatsApp] ⚡ ${Date.now() - t0}ms total — disp=${triage.disposition} rules=${masterResult?.totalRulesFired ?? 0} hardStop=${masterResult?.hardStop ?? false}`);
+
+  // Post-reply cleanup — fire-and-forget, patient already has their answer
   logInteraction({
     sessionId: params.caseId,
     caseId: params.caseId,
@@ -168,11 +180,25 @@ async function runTriageAndSend(params: {
     direction: "outbound",
     skillName: "triage_result",
     messageText: resultText,
-    responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}`,
+    responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}|rules=${masterResult?.totalRulesFired ?? 0}`,
   }).catch(() => {});
 
-  await endSession(params.caseId, triage.disposition);
-  await clearActiveCaseId({ channel: "whatsapp", threadId: params.threadId });
+  Promise.all([
+    endSession(params.caseId, triage.disposition as any),
+    clearActiveCaseId({ channel: "whatsapp", threadId: params.threadId }),
+  ]).catch(() => {});
+
+  // ── Async enrichment: LLM orchestrator runs AFTER patient has answer ──
+  // Generates physician review packet without blocking the patient reply.
+  runOrchestratorTriage({
+    complaintSlug: params.complaintSlug,
+    answers: params.answers,
+    sessionId: params.caseId,
+    caseId: params.caseId,
+    channel: "whatsapp",
+  }).catch((e: any) =>
+    console.warn("[WhatsApp] Async orchestrator (non-blocking):", e?.message)
+  );
 
   setTimeout(async () => {
     const surveyText = `📋 *Quick feedback*\n\nHow would you rate your experience today?\n\n5️⃣ Excellent  4️⃣ Good  3️⃣ Okay  2️⃣ Poor  1️⃣ Very poor\n\nReply 1–5`;

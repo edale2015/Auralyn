@@ -14,11 +14,11 @@ function getRedisConnection(): IORedis | null {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
       lazyConnect: true,
+      connectTimeout: 3000,      // fail fast — don't wait 30 s for TCP timeout
+      retryStrategy: () => null, // no reconnect loop — fall back to in-memory
     });
-    _conn.on('error', (err) => {
-      if ((err as any).code !== 'ECONNRESET') {
-        console.warn('[queueFactory] Redis connection error:', err.message);
-      }
+    _conn.on('error', () => {
+      // suppress — connection unavailable in this env; queues use in-memory fallback
     });
     return _conn;
   } catch {

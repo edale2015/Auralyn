@@ -1475,7 +1475,7 @@ app.use((req, res, next) => {
       }, KEEPALIVE_INTERVAL_MS);
 
       initAsyncWorkerHandlers();
-      startAutonomousLoop(60_000);
+      startAutonomousLoop(300_000);   // 5 min — was 60 s; heavy CPU/DB, no need to run every minute
       startEngines();
       registerFollowUpWorker().catch(console.error);
       // Warm KB runtime cache — loads diagnosis priors, red flag rules, and treatment rules
@@ -1517,16 +1517,16 @@ app.use((req, res, next) => {
           }).catch(() => {});
         }).catch(() => {});
       }).catch(() => {});
-      runFailoverLoop(60_000);
+      runFailoverLoop(300_000);        // 5 min — was 60 s
       startRecoveryLoop(10_000);
       initControlTowerSocket(httpServer);
       startPatientStreamSocket(httpServer);
       initRealtimeGateway(httpServer);
       initWebRTCServer(httpServer);
       initOrchestrationSocket(httpServer);
-      startOptimizerLoop(60_000);
-      startNegotiationWorker(60_000);
-      BackgroundTableRefresher.start(60_000);
+      startOptimizerLoop(300_000);     // 5 min — was 60 s
+      startNegotiationWorker(300_000); // 5 min — was 60 s
+      BackgroundTableRefresher.start(300_000); // 5 min — was 60 s
       startAnomalyEngine(5000);
       startAlertEngine(10_000);
       startGovernanceLoop(15_000);
@@ -1545,7 +1545,7 @@ app.use((req, res, next) => {
       import("./simulation/liveSimulator").then(({ startLiveSimulation }) => startLiveSimulation()).catch(() => {});
       import("./control/controlStream").then(({ startControlStream }) => startControlStream(httpServer)).catch(() => {});
       startEventWorkers();
-      startDeadLetterMonitor(60_000);
+      startDeadLetterMonitor(300_000); // 5 min — was 60 s
       initAuditHashChain().catch((e: any) => console.warn("[AUDIT-CHAIN] Init warning:", e?.message));
       initLearningQueue().catch((e: any) => console.warn("[LearningQueue] Init warning:", e?.message));
       initShadowModeFromRedis().catch((e: any) => console.warn("[ShadowMode] Init warning:", e?.message));
@@ -1560,8 +1560,8 @@ app.use((req, res, next) => {
       registerLoop("alertEngine", "Clinical alert escalation engine", 10_000);
       registerLoop("governanceLoop", "Audit governance agent", 15_000);
       registerLoop("predictiveLoop", "Failure prediction engine", 5_000);
-      registerLoop("autonomousLoop", "Unified learning + drift detection", 60_000);
-      startSelfLearningLoop(60_000);
+      registerLoop("autonomousLoop", "Unified learning + drift detection", 300_000);
+      startSelfLearningLoop(300_000); // 5 min — was 60 s
       startGoldenMonitor(300_000);
       startAgentExecutor(1_000);
       startEvolutionLoop(600_000);
