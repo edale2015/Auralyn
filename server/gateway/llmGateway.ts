@@ -18,6 +18,7 @@ import OpenAI    from "openai";
 import { createHash } from "crypto";
 import { appendAuditEvent } from "../governance/audit";
 import { localDevComplete } from "../dev/localDevHarness";
+import { getRoutedModel } from "../context/modelRouter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -250,11 +251,18 @@ export const llmGateway = {
       }
     }
 
+    // ── T018: Model router — selects optimal model per agent via scorecard ────
+    // clinical_brain / kb_validator / skill_generator are PINNED — router always
+    // returns their fixed model and rejects any scorecard downgrade.
+    // Non-pinned agents (intent_parser, retrieval_pruner, etc.) get routed to
+    // the highest-scoring model within their latency budget.
+    const routerDecision = getRoutedModel(request.purpose);
+
     // ── Try primary provider ──────────────────────────────────────────────────
     let content:    string;
     let tokensUsed: number;
-    let provider:   "anthropic" | "openai" = routing.primary.provider;
-    let model       = routing.primary.model;
+    let provider:   "anthropic" | "openai" = routerDecision.provider;
+    let model       = routerDecision.model;
 
     try {
       if (routing.primary.provider === "anthropic") {

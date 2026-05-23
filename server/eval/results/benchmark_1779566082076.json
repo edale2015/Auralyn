@@ -1,0 +1,375 @@
+{
+  "run_at": "2026-05-23T19:54:42.076Z",
+  "case_count": 12,
+  "agent_count": 5,
+  "cases": [
+    {
+      "case_id": "BENCH_001",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardio_chest_pain",
+      "task_prompt": "You are a clinical intent parser. Return JSON: {intent, urgency, complaint_normalized}\n\nParse this clinical complaint: \"cardio_chest_pain\"\nRule context: base_probability=2.00\nKey fields: complaint_id, symptom_features, cluster_score",
+      "expected_keywords": [
+        "intent",
+        "urgency",
+        "complaint"
+      ],
+      "latency_budget_ms": 3000
+    },
+    {
+      "case_id": "BENCH_002",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardiology",
+      "task_prompt": "You are a clinical retrieval pruner. Return JSON: {top_differentials: string[], excluded: string[], rationale}\n\nComplaint: \"cardiology\"\nDiagnosis hint: multiple\nSafety level: HIGH\nLogic: Thiazide-like diuretic | 12.5–25 mg daily | PO\nPrune to top 3 most likely differentials.",
+      "expected_keywords": [
+        "top_differentials",
+        "excluded",
+        "rationale"
+      ],
+      "latency_budget_ms": 3000
+    },
+    {
+      "case_id": "BENCH_003",
+      "agent": "uncertainty_sampler",
+      "model": "gpt-4o-mini",
+      "complaint_id": "chest_pain_cardiac",
+      "task_prompt": "You are a clinical uncertainty sampler. Return JSON: {uncertainty_score: 0-10, missing_data: string[], recommendation}\n\nComplaint: \"chest_pain_cardiac\"\nDiagnosis: CAR_CATH_01\nCriteria: standard clinical criteria\nKey questions unanswered: none documented\nAssess diagnostic uncertainty.",
+      "expected_keywords": [
+        "uncertainty_score",
+        "missing_data",
+        "recommendation"
+      ],
+      "latency_budget_ms": 4000
+    },
+    {
+      "case_id": "BENCH_004",
+      "agent": "discharge_generator",
+      "model": "gpt-4o-mini",
+      "complaint_id": "fatigue",
+      "task_prompt": "You are a clinical discharge generator. Return JSON: {instructions: string, follow_up, red_flags: string[], medications_note}\n\nGenerate discharge instructions.\nComplaint: \"fatigue\"\nDisposition: Outpatient\nMedication context: per standard formulary\nICD-10: unspecified",
+      "expected_keywords": [
+        "instructions",
+        "follow_up",
+        "red_flags"
+      ],
+      "latency_budget_ms": 5000
+    },
+    {
+      "case_id": "BENCH_005",
+      "agent": "clinical_brain",
+      "model": "gpt-4o",
+      "complaint_id": "gu_testicular_pain_prostatitis",
+      "task_prompt": "You are a clinical triage brain. Return JSON: {disposition, top_diagnosis, safety_flags: string[], confidence: 0-1}\n\nTriage this encounter.\nComplaint: \"gu_testicular_pain_prostatitis\"\nSafety level: MODERATE\nLogic: Urinary symptoms — base probability: 1.5\nDisposition hint: determined by clinical rules\nRed flags: none documented",
+      "expected_keywords": [
+        "disposition",
+        "top_diagnosis",
+        "safety_flags",
+        "confidence"
+      ],
+      "latency_budget_ms": 6000
+    },
+    {
+      "case_id": "BENCH_006",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "gu_uti_symptoms",
+      "task_prompt": "You are a clinical intent parser. Return JSON: {intent, urgency, complaint_normalized}\n\nParse this clinical complaint: \"gu_uti_symptoms\"\nRule context: Male patient — base probability: 1.5\nKey fields: symptoms, duration, severity",
+      "expected_keywords": [
+        "intent",
+        "urgency",
+        "complaint"
+      ],
+      "latency_budget_ms": 3000
+    },
+    {
+      "case_id": "BENCH_007",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "gyn_pelvic_pain",
+      "task_prompt": "You are a clinical retrieval pruner. Return JSON: {top_differentials: string[], excluded: string[], rationale}\n\nComplaint: \"gyn_pelvic_pain\"\nDiagnosis hint: RLQ pain\nSafety level: MODERATE\nLogic: RLQ pain — base probability: 2\nPrune to top 3 most likely differentials.",
+      "expected_keywords": [
+        "top_differentials",
+        "excluded",
+        "rationale"
+      ],
+      "latency_budget_ms": 3000
+    },
+    {
+      "case_id": "BENCH_008",
+      "agent": "uncertainty_sampler",
+      "model": "gpt-4o-mini",
+      "complaint_id": "nausea_vomiting",
+      "task_prompt": "You are a clinical uncertainty sampler. Return JSON: {uncertainty_score: 0-10, missing_data: string[], recommendation}\n\nComplaint: \"nausea_vomiting\"\nDiagnosis: GAS_DKACLU_05\nCriteria: standard clinical criteria\nKey questions unanswered: none documented\nAssess diagnostic uncertainty.",
+      "expected_keywords": [
+        "uncertainty_score",
+        "missing_data",
+        "recommendation"
+      ],
+      "latency_budget_ms": 4000
+    },
+    {
+      "case_id": "BENCH_009",
+      "agent": "discharge_generator",
+      "model": "gpt-4o-mini",
+      "complaint_id": "persistent_cough",
+      "task_prompt": "You are a clinical discharge generator. Return JSON: {instructions: string, follow_up, red_flags: string[], medications_note}\n\nGenerate discharge instructions.\nComplaint: \"persistent_cough\"\nDisposition: ED_NOW\nMedication context: per standard formulary\nICD-10: unspecified",
+      "expected_keywords": [
+        "instructions",
+        "follow_up",
+        "red_flags"
+      ],
+      "latency_budget_ms": 5000
+    },
+    {
+      "case_id": "BENCH_010",
+      "agent": "clinical_brain",
+      "model": "gpt-4o",
+      "complaint_id": "shoulder_pain",
+      "task_prompt": "You are a clinical triage brain. Return JSON: {disposition, top_diagnosis, safety_flags: string[], confidence: 0-1}\n\nTriage this encounter.\nComplaint: \"shoulder_pain\"\nSafety level: MODERATE\nLogic: Adolescent pitcher with lateral shoulder pain\nDisposition hint: Outpatient\nRed flags: none documented",
+      "expected_keywords": [
+        "disposition",
+        "top_diagnosis",
+        "safety_flags",
+        "confidence"
+      ],
+      "latency_budget_ms": 6000
+    },
+    {
+      "case_id": "BENCH_011",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "sore_throat",
+      "task_prompt": "You are a clinical intent parser. Return JSON: {intent, urgency, complaint_normalized}\n\nParse this clinical complaint: \"sore_throat\"\nRule context: Centor criteria: fever +1, exudate +1, no cough +1, tender anterior nodes +1, age<15 +1 → score 0-5\nKey fields: fever, exudate, cough, lymphadenopathy, age",
+      "expected_keywords": [
+        "intent",
+        "urgency",
+        "complaint"
+      ],
+      "latency_budget_ms": 3000
+    },
+    {
+      "case_id": "BENCH_012",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardio_chest_pain",
+      "task_prompt": "You are a clinical retrieval pruner. Return JSON: {top_differentials: string[], excluded: string[], rationale}\n\nComplaint: \"cardio_chest_pain\"\nDiagnosis hint: multiple\nSafety level: HIGH\nLogic: answers.Q_CCP_PRESSURE == 'yes' && (answers.Q_CCP_EXERT == 'yes' || answers.Q_CCP_RADIATE == 'yes' || answers.Q_CCP_SWEAT == 'yes') || (answers.Q_CCP_PLEURITIC == 'yes' && answers.Q_CCP_SOB == 'yes' && answers.Q_CCP_RISK == 'yes') || answers.Q_CCP_TEARING == 'yes'\nPrune to top 3 most likely differentials.",
+      "expected_keywords": [
+        "top_differentials",
+        "excluded",
+        "rationale"
+      ],
+      "latency_budget_ms": 3000
+    }
+  ],
+  "results": [
+    {
+      "case_id": "BENCH_001",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardio_chest_pain",
+      "latency_ms": 1009,
+      "latency_score": 0.664,
+      "content_score": 1,
+      "score": 0.865,
+      "pass": true,
+      "response_preview": "{\n  \"intent\": \"cardiovascular\",\n  \"urgency\": \"moderate\",\n  \"complaint_normalized\": \"chest pain\"\n}",
+      "timestamp": "2026-05-23T19:54:19.682Z"
+    },
+    {
+      "case_id": "BENCH_002",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardiology",
+      "latency_ms": 2014,
+      "latency_score": 0.329,
+      "content_score": 1,
+      "score": 0.731,
+      "pass": true,
+      "response_preview": "{\n  \"top_differentials\": [\n    \"Hypertension\",\n    \"Heart failure\",\n    \"Edema\"\n  ],\n  \"excluded\": [\n    \"Arrhythmia\",\n    \"Coronary artery disease\",\n    \"Valvular heart disease\"\n  ],\n  \"rationale\": \"",
+      "timestamp": "2026-05-23T19:54:20.691Z"
+    },
+    {
+      "case_id": "BENCH_003",
+      "agent": "uncertainty_sampler",
+      "model": "gpt-4o-mini",
+      "complaint_id": "chest_pain_cardiac",
+      "latency_ms": 1247,
+      "latency_score": 0.688,
+      "content_score": 1,
+      "score": 0.875,
+      "pass": true,
+      "response_preview": "{\n  \"uncertainty_score\": 3,\n  \"missing_data\": [],\n  \"recommendation\": \"Consider further evaluation of cardiac risk factors and potential follow-up imaging or tests to confirm diagnosis and assess for ",
+      "timestamp": "2026-05-23T19:54:22.706Z"
+    },
+    {
+      "case_id": "BENCH_004",
+      "agent": "discharge_generator",
+      "model": "gpt-4o-mini",
+      "complaint_id": "fatigue",
+      "latency_ms": 3722,
+      "latency_score": 0.256,
+      "content_score": 1,
+      "score": 0.702,
+      "pass": true,
+      "response_preview": "{\n  \"instructions\": \"You have been discharged from the clinic. It is important to rest and gradually increase your activity level as tolerated. Ensure you maintain a balanced diet and stay hydrated. M",
+      "timestamp": "2026-05-23T19:54:23.953Z"
+    },
+    {
+      "case_id": "BENCH_005",
+      "agent": "clinical_brain",
+      "model": "gpt-4o",
+      "complaint_id": "gu_testicular_pain_prostatitis",
+      "latency_ms": 908,
+      "latency_score": 0.849,
+      "content_score": 1,
+      "score": 0.939,
+      "pass": true,
+      "response_preview": "{\n  \"disposition\": \"outpatient follow-up\",\n  \"top_diagnosis\": \"prostatitis\",\n  \"safety_flags\": [],\n  \"confidence\": 0.85\n}",
+      "timestamp": "2026-05-23T19:54:27.675Z"
+    },
+    {
+      "case_id": "BENCH_006",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "gu_uti_symptoms",
+      "latency_ms": 1183,
+      "latency_score": 0.606,
+      "content_score": 1,
+      "score": 0.842,
+      "pass": true,
+      "response_preview": "{\n  \"intent\": \"urinary tract infection symptoms\",\n  \"urgency\": \"moderate\",\n  \"complaint_normalized\": \"male urinary tract infection symptoms\"\n}",
+      "timestamp": "2026-05-23T19:54:28.583Z"
+    },
+    {
+      "case_id": "BENCH_007",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "gyn_pelvic_pain",
+      "latency_ms": 2785,
+      "latency_score": 0.072,
+      "content_score": 1,
+      "score": 0.629,
+      "pass": true,
+      "response_preview": "{\n  \"top_differentials\": [\n    \"Ovarian cyst rupture\",\n    \"Ectopic pregnancy\",\n    \"Appendicitis\"\n  ],\n  \"excluded\": [\n    \"Diverticulitis\",\n    \"Urinary tract infection\",\n    \"Pelvic inflammatory di",
+      "timestamp": "2026-05-23T19:54:29.766Z"
+    },
+    {
+      "case_id": "BENCH_008",
+      "agent": "uncertainty_sampler",
+      "model": "gpt-4o-mini",
+      "complaint_id": "nausea_vomiting",
+      "latency_ms": 1246,
+      "latency_score": 0.689,
+      "content_score": 1,
+      "score": 0.875,
+      "pass": true,
+      "response_preview": "{\n  \"uncertainty_score\": 3,\n  \"missing_data\": [],\n  \"recommendation\": \"Monitor the patient's symptoms and consider follow-up if nausea and vomiting persist or worsen. Evaluate for potential underlying",
+      "timestamp": "2026-05-23T19:54:32.552Z"
+    },
+    {
+      "case_id": "BENCH_009",
+      "agent": "discharge_generator",
+      "model": "gpt-4o-mini",
+      "complaint_id": "persistent_cough",
+      "latency_ms": 3490,
+      "latency_score": 0.302,
+      "content_score": 1,
+      "score": 0.721,
+      "pass": true,
+      "response_preview": "{\n  \"instructions\": \"You have been discharged from the emergency department. It is important to monitor your cough and any associated symptoms. Stay hydrated and rest as much as possible. If your coug",
+      "timestamp": "2026-05-23T19:54:33.798Z"
+    },
+    {
+      "case_id": "BENCH_010",
+      "agent": "clinical_brain",
+      "model": "gpt-4o",
+      "complaint_id": "shoulder_pain",
+      "latency_ms": 690,
+      "latency_score": 0.885,
+      "content_score": 1,
+      "score": 0.954,
+      "pass": true,
+      "response_preview": "{\n  \"disposition\": \"Outpatient\",\n  \"top_diagnosis\": \"Rotator cuff strain or overuse injury\",\n  \"safety_flags\": [],\n  \"confidence\": 0.9\n}",
+      "timestamp": "2026-05-23T19:54:37.289Z"
+    },
+    {
+      "case_id": "BENCH_011",
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "complaint_id": "sore_throat",
+      "latency_ms": 882,
+      "latency_score": 0.706,
+      "content_score": 1,
+      "score": 0.882,
+      "pass": true,
+      "response_preview": "{\n  \"intent\": \"sore_throat\",\n  \"urgency\": \"low\",\n  \"complaint_normalized\": \"sore throat\"\n}",
+      "timestamp": "2026-05-23T19:54:37.979Z"
+    },
+    {
+      "case_id": "BENCH_012",
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "complaint_id": "cardio_chest_pain",
+      "latency_ms": 3212,
+      "latency_score": 0,
+      "content_score": 1,
+      "score": 0.6,
+      "pass": true,
+      "response_preview": "{\n  \"top_differentials\": [\n    \"Acute Coronary Syndrome (ACS)\",\n    \"Pulmonary Embolism (PE)\",\n    \"Aortic Dissection\"\n  ],\n  \"excluded\": [\n    \"Gastroesophageal Reflux Disease (GERD)\",\n    \"Musculosk",
+      "timestamp": "2026-05-23T19:54:38.862Z"
+    }
+  ],
+  "scorecard": [
+    {
+      "agent": "intent_parser",
+      "model": "gpt-4o-mini",
+      "avg_latency_ms": 1025,
+      "avg_score": 0.863,
+      "pass_rate": 1,
+      "case_count": 3,
+      "latency_budget": 3000,
+      "generated_at": "2026-05-23T19:54:42.075Z"
+    },
+    {
+      "agent": "retrieval_pruner",
+      "model": "gpt-4o-mini",
+      "avg_latency_ms": 2670,
+      "avg_score": 0.653,
+      "pass_rate": 1,
+      "case_count": 3,
+      "latency_budget": 3000,
+      "generated_at": "2026-05-23T19:54:42.075Z"
+    },
+    {
+      "agent": "uncertainty_sampler",
+      "model": "gpt-4o-mini",
+      "avg_latency_ms": 1247,
+      "avg_score": 0.875,
+      "pass_rate": 1,
+      "case_count": 2,
+      "latency_budget": 4000,
+      "generated_at": "2026-05-23T19:54:42.075Z"
+    },
+    {
+      "agent": "discharge_generator",
+      "model": "gpt-4o-mini",
+      "avg_latency_ms": 3606,
+      "avg_score": 0.712,
+      "pass_rate": 1,
+      "case_count": 2,
+      "latency_budget": 5000,
+      "generated_at": "2026-05-23T19:54:42.075Z"
+    },
+    {
+      "agent": "clinical_brain",
+      "model": "gpt-4o",
+      "avg_latency_ms": 799,
+      "avg_score": 0.946,
+      "pass_rate": 1,
+      "case_count": 2,
+      "latency_budget": 6000,
+      "generated_at": "2026-05-23T19:54:42.075Z"
+    }
+  ]
+}

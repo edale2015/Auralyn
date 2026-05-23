@@ -162,6 +162,7 @@ import NetworkControlTower from "@/pages/NetworkControlTower";
 import KBReviewDashboard from "@/pages/KBReviewDashboard";
 import DeepAgentDashboard from "@/pages/DeepAgentDashboard";
 import CommunicationDashboard from "@/pages/CommunicationDashboard";
+import RoutingTelemetryDashboard from "@/pages/RoutingTelemetryDashboard";
 import ScopeCommandCenter from "@/pages/ScopeCommandCenter";
 import CommandWall     from "@/pages/CommandWall";
 import RegionalCommand from "@/pages/RegionalCommand";
@@ -340,6 +341,7 @@ function WorkbenchRouter() {
         <Route path="/kb-review-dashboard" component={KBReviewDashboard} />
         <Route path="/deep-agent" component={DeepAgentDashboard} />
         <Route path="/communication" component={CommunicationDashboard} />
+        <Route path="/routing-telemetry" component={RoutingTelemetryDashboard} />
         <Route path="/clinical-icu-monitor" component={ClinicalICUMonitor} />
         <Route>
           {() => (
