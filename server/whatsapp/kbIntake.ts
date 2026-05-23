@@ -196,48 +196,49 @@ async function checkEscalation(
 }
 
 // ── Batch question formatting ──────────────────────────────────────────────────
-// For a single question that is purely yes/no, use a compact inline format so
-// the whole thing fits on a small screen (iPhone SE) without scrolling.
-function formatSingleYesNo(q: QRow, num: number): string {
-  return `📋 *Question ${num}*\n_(1 = Yes, 2 = No)_\n\n${q.QUESTION_TEXT}\n\nReply *1* or *2*.`;
-}
+// Compact form-style layout: one question per row with an answer slot ( ___ )
+// right after it. Patient fills in each slot and replies with answers in order.
 
 function formatBatchMessage(questions: QRow[], startNum: number): string {
-  // Single number-scale question — keep the full emoji grid
-  if (questions.length === 1 && questions[0].ANSWER_TYPE === "number") {
-    return formatQuestionAsMenu(questions[0], `📋 Question ${startNum}`);
-  }
-  // Single yes/no — compact inline
-  if (questions.length === 1) {
-    return formatSingleYesNo(questions[0], startNum);
-  }
-
-  // Multi-question batch — compact checklist format
-  // All questions fit on one screen; 1=Yes / 2=No shown once at the top.
-  const allYesNo  = questions.every((q) => q.ANSWER_TYPE !== "number");
   const allNumber = questions.every((q) => q.ANSWER_TYPE === "number");
 
-  let header: string;
-  let footer: string;
-  let exampleReply: string;
-
-  if (allYesNo) {
-    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(1 = Yes   2 = No)_\n\n`;
-    exampleReply = questions.map(() => ["1", "2"][Math.floor(Math.random() * 2)]).join(" ");
-    footer = `\n\nReply with *${questions.length} numbers*, e.g. *"${exampleReply}"*`;
-  } else if (allNumber) {
-    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(Each answer: 1–10)_\n\n`;
-    footer = `\n\nReply with ${questions.length} numbers separated by spaces or commas.`;
-  } else {
-    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(Yes/No questions: 1=Yes, 2=No · Scale: 1–10)_\n\n`;
-    footer = `\n\nReply in order, e.g. *"1 7 2"*`;
+  // Single pain-scale question — keep the emoji 1–10 grid
+  if (questions.length === 1 && questions[0].ANSWER_TYPE === "number") {
+    return formatQuestionAsMenu(questions[0], `📋 Q${startNum}`);
   }
 
-  const body = questions
-    .map((q, i) => `*${i + 1}.* ${q.QUESTION_TEXT}`)
+  // Single yes/no — one-liner with slot
+  if (questions.length === 1) {
+    return (
+      `*1 = Yes · 2 = No*\n\n` +
+      `Q${startNum}. ${questions[0].QUESTION_TEXT}  ___\n\n` +
+      `Reply *1* or *2*`
+    );
+  }
+
+  // Multi-question form — compact grid, one row per question, answer slot inline
+  const legend = allNumber
+    ? `_(answer each 1–10)_`
+    : `_1 = Yes · 2 = No_`;
+
+  const rows = questions
+    .map((q, i) => {
+      const slot = q.ANSWER_TYPE === "number" ? `[  /10]` : `[1/2]`;
+      return `Q${startNum + i}. ${q.QUESTION_TEXT}  ${slot}`;
+    })
     .join("\n");
 
-  return header + body + footer;
+  const exampleNums = questions
+    .map((q) => q.ANSWER_TYPE === "number" ? "7" : "1")
+    .join(" ");
+
+  return (
+    `📋 *Quick check* ${legend}\n` +
+    `─────────────────────\n` +
+    rows + `\n` +
+    `─────────────────────\n` +
+    `Reply: *${exampleNums}*  _(one answer per question, in order)_`
+  );
 }
 
 function parseBatchReply(
