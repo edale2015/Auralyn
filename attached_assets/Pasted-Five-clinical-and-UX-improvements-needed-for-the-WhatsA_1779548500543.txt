@@ -1,0 +1,23 @@
+Five clinical and UX improvements needed for the WhatsApp dialogue engine. Please implement all of them.
+Fix 1 — Natural conversational language, not forms
+Replace all terse question strings like "Fever?" with natural conversational phrasing like "Have you had any fever?" Every question in CORE_QUESTIONS.csv and the question flow service needs to sound like a person talking, not a checkbox form. Go through every question for the cough, headache, URI, chest pain, and UTI complaint packs and rewrite them conversationally. Examples:
+
+"Fever?" → "Have you had any fever with this?"
+"Duration?" → "How long have you been coughing?"
+"SOB?" → "Have you felt short of breath at all?"
+
+Fix 2 — Free text parsing, not rigid yes/no
+The parser must handle natural patient language. When a patient says "it started with a fever but not today" that means fever=yes historically, fever=no currently. When they say "just started coughing yesterday" that means duration=1 day. Build a GPT-4o-mini extraction call that runs ASYNC after the patient responds — it extracts structured fields from free text and updates the session state. The next question should skip any field already answered in prior free text. This extraction call must never block the response — send the next question first, then extract in background.
+Fix 3 — Smarter cough clinical logic
+For cough complaint: duration threshold for ER concern should be weeks not days — urgent care sees coughs after 2-3 days. Shortness of breath alone with cough does NOT trigger ER. It requires at least ONE of: O2 sat below 94%, respiratory rate above 24, stridor, inability to speak in full sentences, or cyanosis. Rewrite the cough disposition rules in ruleExecutionEngine.ts to reflect this. Mild SOB with cough = urgent care workup, not ER.
+Fix 4 — Adaptive follow-up questions
+When a patient gives a complex answer that contains multiple pieces of clinical information, Auralyn should acknowledge what it heard and only ask about what it still needs. Example flow:
+Patient: "no it started with a fever, then my nose was stuffy and I was throwing up, and I just started coughing yesterday"
+Auralyn: "Got it — so the cough just started yesterday after a few days of fever and congestion. Are you having any trouble breathing or chest tightness?"
+This requires GPT-4o-mini to generate the acknowledgment + next question dynamically when the patient answer is longer than 6 words or contains multiple symptoms. Short yes/no answers use the pre-written question library directly.
+Fix 5 — Reduce perceived delay
+Send an immediate acknowledgment within 200ms of receiving the patient message, before processing. Something like "Got it..." or "Thanks..." — just one word. This makes the 1-2 second processing time feel invisible because the patient sees an immediate response. Then the actual question follows 1-2 seconds later as a second message.
+
+
+Fix 3 is the most important clinically — the ER over-triggering will destroy physician trust in the system immediately. Fix 4 is what makes it feel like a real conversation instead of a form. Fix 5 costs almost nothing to implement and eliminates the jerkiness completely.
+After Replit implements these, test with "I have a cough" and walk through a natural conversation. Tell me what you observe.

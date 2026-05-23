@@ -294,6 +294,39 @@ export async function executePipeline(
       : `Pipeline complete. ${totalFired} rules fired. Disposition: ${finalDisposition ?? "HOME_CARE"}`,
   });
 
+  // ── Fix 3: Cough SOB over-escalation guard ────────────────────────────────
+  // SOB alone with cough does NOT warrant ER. Requires at least one of:
+  // O2 sat < 94%, resp rate > 24, stridor, cyanosis, or inability to speak.
+  // If the ONLY hardStop trigger was an SOB rule and none of those are present,
+  // downgrade from ER_NOW → URGENT_CARE.
+  if (complaint_id === "cough" && hardStop && criticalFlagsHit.length > 0) {
+    const criticalRules = (rows as any[]).filter(r => criticalFlagsHit.includes(r.rule_id));
+    const allSobOnly = criticalRules.every(r => {
+      const desc = ((r.logic_description ?? "") + (r.rule_name ?? "")).toLowerCase();
+      return desc.includes("sob") || desc.includes("shortness") || desc.includes("breath");
+    });
+    const hasCriticalCriteria =
+      (typeof inputs["Q_C_O2_SAT"]      === "number" && (inputs["Q_C_O2_SAT"] as number) < 94) ||
+      (typeof inputs["Q_C_RESP_RATE"]    === "number" && (inputs["Q_C_RESP_RATE"] as number) > 24) ||
+      inputs["Q_C_STRIDOR"]             === "yes" || inputs["Q_C_STRIDOR"]    === true ||
+      inputs["Q_C_CYANOSIS"]            === "yes" || inputs["Q_C_CYANOSIS"]   === true ||
+      inputs["Q_C_SPEECH_IMPAIRED"]     === "yes" || inputs["Q_C_SPEECH_IMPAIRED"] === true ||
+      inputs["Q_C_UNABLE_TO_SPEAK"]     === "yes";
+
+    if (allSobOnly && !hasCriticalCriteria) {
+      hardStop         = false;
+      hardStopReason   = null;
+      finalDisposition = "URGENT_CARE";
+      const auditStep  = steps.find(s => s.step === 13);
+      if (auditStep) {
+        auditStep.outputs.hardStop          = false;
+        auditStep.outputs.hardStopReason    = null;
+        auditStep.outputs.finalDisposition  = "URGENT_CARE";
+        auditStep.summary = `Pipeline complete (SOB-only ER downgraded → URGENT_CARE). ${totalFired} rules fired.`;
+      }
+    }
+  }
+
   return {
     ok: true,
     complaint_id,
