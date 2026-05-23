@@ -7,12 +7,14 @@ import {
   setCaseState,
 } from "../services/caseService";
 import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
+import type { QRow } from "../services/questionFlowService";
 import {
-  type QRow,
-  isSafetyCriticalQuestion,
-  getNextRequiredQuestion,
-  getRequiredQuestions,
-} from "../services/questionFlowService";
+  extractClinicalFields,
+  generateResponse,
+  generateClosingMessage,
+  mapFieldsToQIds,
+  isComplete,
+} from "./conversationalEngine";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
@@ -37,11 +39,13 @@ import { sha256Hex } from "../services/hash";
 // is never gated on them.  On server restart, the Firestore fallback in
 // getActiveCaseId restores any in-progress sessions automatically.
 interface HotSession {
-  caseId:    string;
-  complaint: { slug: string; display: string };
-  answers:   Record<string, any>;
-  state:     string;
-  createdAt: number;   // ms epoch — used for 4-hour expiry
+  caseId:          string;
+  complaint:       { slug: string; display: string };
+  answers:         Record<string, any>;         // Q_ID → value (safety pipeline)
+  extractedFields: Record<string, any>;         // semantic goal fields
+  exchanges:       Array<{ role: string; text: string }>;  // last N turns
+  state:           string;
+  createdAt:       number;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -94,24 +98,6 @@ function mapMasterDisposition(disp: string | null): string | null {
   if (["URGENT_CARE", "UC"].includes(d))                     return "urgent_care";
   if (["PCP", "ROUTINE", "PRIMARY_CARE"].includes(d))        return "pcp";
   if (["HOME_CARE", "SELF_CARE", "TELEHEALTH"].includes(d))  return "self_care";
-  return null;
-}
-
-function formatQuestion(q: QRow): string {
-  if (q.ANSWER_TYPE === "number") {
-    return `${q.QUESTION_TEXT}\n\n1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣  6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟\n_Reply with a number_`;
-  }
-  return `${q.QUESTION_TEXT}\n\n_1 = Yes   2 = No_`;
-}
-
-function parseWhatsAppAnswer(text: string, answerType: string): string | number | null {
-  const t = text.trim().toLowerCase();
-  if (answerType === "number") {
-    const n = Number(t.replace(/[^0-9]/g, ""));
-    return isNaN(n) || n < 1 || n > 10 ? null : n;
-  }
-  if (t === "1" || ["yes", "y", "true", "yep", "yeah", "si"].includes(t)) return "yes";
-  if (t === "2" || ["no", "n", "false", "nope", "nah"].includes(t)) return "no";
   return null;
 }
 
@@ -404,7 +390,7 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Create session in memory immediately (instant) ──────────────────────
     const nowIso = new Date().toISOString();
     const caseId = `CASE_${nowIso.replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-    session = { caseId, complaint: match, answers: {}, state: "DRAFT", createdAt: Date.now() };
+    session = { caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [], state: "DRAFT", createdAt: Date.now() };
     hotSet(threadId, session);
 
     // ── Background: persist to Firestore + audit (never blocks patient) ──────
@@ -426,45 +412,82 @@ export async function handleWhatsAppKBIntake(params: {
       logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
     });
 
-    // ── Get first question (sync — ~0ms from warm cache) ───────────────────
-    const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
-    console.log('[T4] getNextRequiredQuestion done', Date.now());
+    // ── Extract from initial message + generate first conversational response ─
+    console.log('[T4] conversational engine: extracting from initial message', Date.now());
 
-    if (!firstQ) {
-      await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
-      await runTriageAndSend({ caseId, complaintSlug: match.slug, answers: {}, to: cleanFrom, threadId });
+    // Extract any clinical fields already mentioned in the initial complaint message
+    const initExtraction = await extractClinicalFields(rawText, {}, match.slug);
+    const initFields     = initExtraction.extracted;
+    const initAnswers    = mapFieldsToQIds(match.slug, initFields);
+
+    session.extractedFields = initFields;
+    session.answers         = initAnswers;
+    hotSet(threadId, session);
+
+    // Safety check on initial message (rare, but handles "I have chest pain and can't breathe")
+    const initEscalate = await checkEscalation(match.slug, initAnswers);
+    if (initEscalate) {
+      setImmediate(() => {
+        setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — initial message", rfTriggered: ["ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
+        endSession(caseId, "er_send" as any).catch(() => {});
+      });
+      await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
+      hotDel(threadId);
       return true;
     }
 
-    await sendWhatsAppMessage(
-      cleanFrom,
-      `Got it — *${match.display}*. A few quick questions:\n\n` + formatQuestion(firstQ)
-    );
+    const firstResponse = await generateResponse({
+      complaintDisplay:    match.display,
+      complaintSlug:       match.slug,
+      extractedFields:     initFields,
+      needsProbe:          initExtraction.needs_probe,
+      lastMessage:         rawText,
+      exchanges:           [],
+      isFirstMessage:      true,
+    });
+
+    session.exchanges = [
+      { role: "user",      text: rawText       },
+      { role: "assistant", text: firstResponse },
+    ];
+    hotSet(threadId, session);
+
+    await sendWhatsAppMessage(cleanFrom, firstResponse);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
 
-  // ── Existing session — answer handling ─────────────────────────────────────
+  // ── Existing session — conversational answer handling ──────────────────────
   const { caseId, complaint, answers } = session;
 
-  // Background audit writes
+  // Background audit writes (never block the patient)
   setImmediate(() => {
     incrementMessageCount(caseId).catch(() => {});
     appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText }).catch(() => {});
     logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
   });
 
-  // ── Get the current unanswered question ────────────────────────────────────
-  const nextQ = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers });
-  console.log('[T4] getNextRequiredQuestion done', Date.now());
-
-  if (!nextQ) {
-    await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers, to: cleanFrom, threadId });
-    return true;
+  // ── Fix 5: Immediate ack for longer messages ───────────────────────────────
+  const wordCount = rawText.trim().split(/\s+/).length;
+  if (wordCount > 4) {
+    await sendWhatsAppMessage(cleanFrom, "Got it…");
   }
 
-  // ── Helper: escalate and close session ────────────────────────────────────
-  async function doEscalation(updatedAns: Record<string, any>, trigger: string, qId: string) {
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function persistState(updatedAnswers: Record<string, any>) {
+    setImmediate(() => {
+      const answerHash = sha256Hex(JSON.stringify(updatedAnswers));
+      import("../firebase").then(({ getFirestore }) => {
+        getFirestore().collection("cases").doc(caseId).update({
+          updatedAt: new Date().toISOString(),
+          "answers.structured": updatedAnswers,
+          "answers.answerHash": answerHash,
+        }).catch(() => {});
+      }).catch(() => {});
+    });
+  }
+
+  async function doEscalation(updatedAns: Record<string, any>, trigger: string) {
     setImmediate(() => {
       const answerHash = sha256Hex(JSON.stringify(updatedAns));
       import("../firebase").then(({ getFirestore }) => {
@@ -476,127 +499,78 @@ export async function handleWhatsAppKBIntake(params: {
       }).catch(() => {});
       setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — auto-escalated", rfTriggered: ["ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
       endSession(caseId, "er_send" as any).catch(() => {});
-      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: EMERGENCY_MESSAGE, responseText: `escalated=true|trigger=${trigger}|q=${qId}` }).catch(() => {});
+      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: EMERGENCY_MESSAGE, responseText: `escalated=true|trigger=${trigger}` }).catch(() => {});
     });
     await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
     hotDel(threadId);
   }
 
-  // ── Helper: persist answers in background ─────────────────────────────────
-  function persistAnswers(ans: Record<string, any>) {
-    setImmediate(() => {
-      const answerHash = sha256Hex(JSON.stringify(ans));
-      import("../firebase").then(({ getFirestore }) => {
-        getFirestore().collection("cases").doc(caseId).update({
-          updatedAt: new Date().toISOString(),
-          "answers.structured": ans,
-          "answers.answerHash": answerHash,
-        }).catch(() => {});
-      }).catch(() => {});
-    });
+  // ── Step 1: Extract clinical fields from this message ─────────────────────
+  console.log('[T4] conversational engine: extracting fields', Date.now());
+  const extraction = await extractClinicalFields(
+    rawText,
+    session.extractedFields ?? {},
+    complaint.slug
+  );
+
+  // Merge new extracted fields into session
+  const updatedFields  = { ...(session.extractedFields ?? {}), ...extraction.extracted };
+  const updatedAnswers = { ...answers, ...mapFieldsToQIds(complaint.slug, extraction.extracted) };
+
+  session.extractedFields = updatedFields;
+  session.answers         = updatedAnswers;
+  persistState(updatedAnswers);
+
+  // ── Step 2: Safety check on extracted fields ───────────────────────────────
+  const shouldEscalate = await checkEscalation(complaint.slug, updatedAnswers);
+  if (shouldEscalate) {
+    console.log(`[WhatsApp] 🚨 Safety escalation triggered for ${complaint.slug}`);
+    await doEscalation(updatedAnswers, "engine");
+    return true;
   }
 
-  // ── Detect free-text vs structured answer ──────────────────────────────────
-  // Free-text = more than 4 words, or anything that isn't 1/2/yes/no/a number
-  const wordCount  = rawText.trim().split(/\s+/).length;
-  const isShortAns = wordCount <= 4 &&
-    (["1","2"].includes(rawText.trim()) ||
-     ["yes","no","y","n","yeah","yep","nope","nah","si"].includes(rawText.trim().toLowerCase()) ||
-     !isNaN(Number(rawText.trim())));
+  // Keyword-based safety for high-risk phrases in raw text
+  const CRITICAL_PHRASES = [
+    "can't breathe", "cannot breathe", "unable to breathe", "worst headache of my life",
+    "chest pain and can't", "coughing blood", "vomiting blood", "thunderclap",
+    "facial droop", "arm weakness", "slurred speech", "unconscious",
+  ];
+  if (CRITICAL_PHRASES.some(p => rawText.toLowerCase().includes(p))) {
+    console.log(`[WhatsApp] 🚨 Keyword escalation triggered`);
+    await doEscalation(updatedAnswers, "keyword");
+    return true;
+  }
 
-  if (!isShortAns) {
-    // Fix 5: Immediate ack before async GPT processing
-    await sendWhatsAppMessage(cleanFrom, "Got it…");
-
-    // Fix 2+4: Extract answers + generate adaptive follow-up
-    const { extractAndAdapt } = await import("./freeTextExtractor");
-    const allUnanswered = getRequiredQuestions(complaint.slug).filter(q => answers[q.Q_ID] === undefined);
-
-    const extraction = await extractAndAdapt({
-      patientText:          rawText,
-      complaintDisplay:     complaint.display,
-      unansweredQuestions:  allUnanswered.slice(0, 6),
-    });
-
-    // Apply extracted answers
-    let updatedAnswers: Record<string, any> = { ...answers };
-    for (const [qId, val] of Object.entries(extraction.extractedAnswers)) {
-      if (val !== undefined && val !== null) updatedAnswers[qId] = val;
-    }
-    // Direct parse of current question in case GPT missed it
-    const directParsed = parseWhatsAppAnswer(rawText, nextQ.ANSWER_TYPE);
-    if (directParsed !== null && updatedAnswers[nextQ.Q_ID] === undefined) {
-      updatedAnswers[nextQ.Q_ID] = directParsed;
-    }
-    session.answers = updatedAnswers;
-    persistAnswers(updatedAnswers);
-
-    // Safety check on extracted answers
-    const shouldEscalate = await checkEscalation(complaint.slug, updatedAnswers);
-    if (shouldEscalate) {
-      await doEscalation(updatedAnswers, "engine", nextQ.Q_ID);
-      return true;
-    }
-    if (isInstantKeywordEscalation(nextQ, updatedAnswers[nextQ.Q_ID])) {
-      await doEscalation(updatedAnswers, "keyword", nextQ.Q_ID);
-      return true;
-    }
-
-    // Next unanswered question after extraction
-    const nextAfterExtraction = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers: updatedAnswers });
-    if (!nextAfterExtraction) {
-      await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
-      return true;
-    }
-
-    // Build adaptive response: GPT ack + next question
-    const ackText  = extraction.acknowledgment ?? "";
-    const nextText = extraction.nextQuestionText || nextAfterExtraction.QUESTION_TEXT;
-    const hint     = nextAfterExtraction.ANSWER_TYPE === "number"
-      ? "\n\n_Reply with a number_"
-      : "\n\n_1 = Yes   2 = No_";
-
-    await sendWhatsAppMessage(
-      cleanFrom,
-      ackText ? `${ackText}\n\n${nextText}${hint}` : `${nextText}${hint}`
-    );
+  // ── Step 3: Check if we have enough information ────────────────────────────
+  if (isComplete(complaint.slug, updatedFields)) {
+    console.log('[T4] conversational engine: interview complete', Date.now());
+    const closing = await generateClosingMessage({ complaintDisplay: complaint.display });
+    await sendWhatsAppMessage(cleanFrom, closing);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
-    return true;
-  }
-
-  // ── Structured short answer (1, 2, yes, no, single number) ────────────────
-  const parsed = parseWhatsAppAnswer(rawText, nextQ.ANSWER_TYPE);
-
-  if (parsed === null) {
-    // Couldn't parse — re-ask the same question
-    await sendWhatsAppMessage(cleanFrom, formatQuestion(nextQ));
-    console.log('[T5] sendWhatsAppMessage done (re-ask)', Date.now());
-    return true;
-  }
-
-  const updatedAnswers = { ...answers, [nextQ.Q_ID]: parsed };
-  session.answers = updatedAnswers;
-
-  // Two-layer safety check: keyword (instant) + rule engine
-  const keywordHit = isInstantKeywordEscalation(nextQ, parsed);
-  const engineHit  = keywordHit ? false : await checkEscalation(complaint.slug, updatedAnswers);
-
-  if (keywordHit || engineHit) {
-    console.log(`[WhatsApp] 🚨 Safety escalation: ${keywordHit ? "keyword" : "engine"} hit on Q_ID=${nextQ.Q_ID}`);
-    await doEscalation(updatedAnswers, keywordHit ? "keyword" : "engine", nextQ.Q_ID);
-    return true;
-  }
-
-  persistAnswers(updatedAnswers);
-
-  // Ask next question or finish
-  const next = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers: updatedAnswers });
-  if (next) {
-    await sendWhatsAppMessage(cleanFrom, formatQuestion(next));
-  } else {
-    await sendWhatsAppMessage(cleanFrom, "Thanks — processing your assessment now…");
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
+    return true;
   }
+
+  // ── Step 4: Generate next conversational response ─────────────────────────
+  const exchanges = session.exchanges ?? [];
+
+  const nextResponse = await generateResponse({
+    complaintDisplay:    complaint.display,
+    complaintSlug:       complaint.slug,
+    extractedFields:     updatedFields,
+    needsProbe:          extraction.needs_probe,
+    lastMessage:         rawText,
+    exchanges,
+  });
+
+  // Update exchange history (keep last 10 turns)
+  session.exchanges = [
+    ...exchanges,
+    { role: "user",      text: rawText       },
+    { role: "assistant", text: nextResponse  },
+  ].slice(-10);
+
+  await sendWhatsAppMessage(cleanFrom, nextResponse);
   console.log('[T5] sendWhatsAppMessage done', Date.now());
   return true;
 }

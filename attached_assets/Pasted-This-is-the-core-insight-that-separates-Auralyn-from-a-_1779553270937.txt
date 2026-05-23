@@ -1,0 +1,100 @@
+This is the core insight that separates Auralyn from a symptom checker. What you're describing is adaptive clinical interviewing — the same skill that takes physicians years to develop. Here's how to build it.
+The fundamental architecture shift:
+Right now Auralyn is a form — it has a fixed list of questions and asks them in order. What you need is a conversation — it has clinical goals and finds the most natural path to each one.
+Send this to Replit agent:
+
+Complete architectural overhaul of the WhatsApp dialogue engine. The current question-by-question form approach must be replaced with a conversational clinical interviewing system. Here is the exact design:
+New architecture: Goal-directed conversation engine
+Each complaint pack defines CLINICAL GOALS — pieces of information the physician needs — not a fixed list of questions. For cough, the goals are:
+COUGH_GOALS = [
+  { field: "duration",        priority: 1, safety: false },
+  { field: "severity",        priority: 1, safety: false },
+  { field: "fever",           priority: 1, safety: false },
+  { field: "dyspnea",         priority: 2, safety: true  },
+  { field: "sputum",          priority: 2, safety: false },
+  { field: "age",             priority: 1, safety: false },
+  { field: "smoking",         priority: 2, safety: false },
+  { field: "comorbidities",   priority: 2, safety: false },
+  { field: "systemic",        priority: 2, safety: false },
+  { field: "other_symptoms",  priority: 3, safety: false },
+]
+Step 1 — Extract everything from each patient message
+After every patient message, run GPT-4o-mini with this system prompt to extract ALL clinical fields mentioned:
+You are extracting clinical information from a patient message.
+Patient said: "{message}"
+Current known fields: {session.extractedFields}
+Complaint: {complaint}
+
+Extract any clinical fields mentioned. Return JSON only:
+{
+  "extracted": {
+    "duration": "1 day" | null,
+    "fever": true | false | "historical" | null,
+    "fever_degree": "high" | "low" | "subjective" | null,
+    "dyspnea": true | false | "mild" | "severe" | null,
+    "sputum": "clear" | "yellow" | "green" | "blood" | null,
+    "smoking": true | false | null,
+    "comorbidities": ["asthma", "COPD"] | null,
+    "systemic": ["fatigue", "body aches", "chills", "sweats"] | null
+  },
+  "needs_probe": ["fever_degree"] | [],
+  "patient_tone": "clear" | "vague" | "anxious" | "detailed"
+}
+This extraction runs async and NEVER blocks sending the response.
+Step 2 — Generate the next message with GPT-4o-mini
+Use this system prompt to generate the actual conversational response:
+You are Auralyn, a clinical intake assistant for an urgent care clinic.
+You talk exactly like a caring, efficient medical assistant — warm but focused.
+You never sound like a form or a robot.
+
+Current clinical state:
+- Complaint: {complaint}
+- Known fields: {extractedFields}
+- Safety fields still needed: {missingSafetyFields}
+- All fields still needed: {missingFields}
+- Needs probe on: {needsProbe}
+- Patient's last message: "{lastMessage}"
+- Conversation so far: {last3Exchanges}
+
+Rules:
+1. If patient gave a complex answer, ACKNOWLEDGE what you heard in 1 sentence first
+2. Ask about the HIGHEST PRIORITY missing field next
+3. If needs_probe contains a field, probe it naturally before moving on
+4. Never ask more than 2 things in one message
+5. If a safety field (dyspnea, chest pain, altered mental status) is unanswered, prioritize it
+6. Sound exactly like this: "Got it — so the cough just started yesterday. Are you having any trouble breathing or tightness in your chest?"
+7. Never say "Question 1" or use numbered lists
+8. Never use medical abbreviations
+9. If patient is vague about fever, probe: "Did you feel feverish or have chills, even without checking your temperature?"
+10. Maximum response length: 2 sentences
+
+Generate only the response text. Nothing else.
+Step 3 — Probe logic
+The extractor flags needs_probe when an answer is vague or incomplete. Examples:
+
+Patient says "fever" → probe: ask when and how high
+Patient says "feverish" or "chills" or "sweating" → probe: "It sounds like you may have had a fever — did you check your temperature at all?"
+Patient says "a little short of breath" → probe: "Are you able to speak in full sentences, or does it feel harder than that?"
+Patient says "not really" to dyspnea → mark as mild_dyspnea, move on
+
+Step 4 — Know when you have enough
+Stop asking questions when either:
+a) All safety fields are answered AND 6+ total fields are known, OR
+b) A critical disposition is triggered (escalate immediately)
+Then generate the closing message:
+"Thanks — I have enough to brief the doctor. They'll be with you shortly. Please come in as soon as you can / Please go to the ER now / etc."
+Implementation:
+
+New file: server/whatsapp/conversationalEngine.ts
+Replace the current questionFlowService call in kbIntake.ts with a call to conversationalEngine.getNextResponse()
+GPT-4o-mini for both extraction and response generation — fast and cheap
+Keep the pre-warm and all latency fixes already in place
+Keep the ruleExecutionEngine safety check running after each extraction
+
+
+
+Why this works clinically
+The key insight is that you already know what information you need — you just described it perfectly. Duration, severity, fever, dyspnea, sputum, age, smoking, comorbidities, systemic symptoms. That's the goal list. The conversation is just the most natural path to fill those fields.
+GPT-4o-mini costs about $0.0002 per conversation turn — effectively free. At 20 questions per encounter that's less than half a cent per patient. The quality gain is enormous.
+The probe logic is what makes it feel human. When someone says "I had chills and was sweating" — a human doctor immediately maps that to probable fever and asks "did you check your temperature?" That one probe behavior, coded explicitly, is what separates clinical AI from a symptom checker.
+After Replit implements this, test it with the exact scenario you described — start with "I have a cough," then say "it started with a fever but not today," then say "I had chills and was sweating." Tell me how it responds.
