@@ -36,6 +36,7 @@ interface HotSession {
   complaint: { slug: string; display: string };
   answers:   Record<string, any>;
   state:     string;
+  createdAt: number;   // ms epoch — used for 4-hour expiry
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -70,6 +71,7 @@ async function firestoreLookup(threadId: string): Promise<HotSession | null> {
       complaint: { slug: doc.complaint.slug, display: doc.complaint.display },
       answers:   (doc.answers?.structured ?? {}) as Record<string, any>,
       state:     doc.state,
+      createdAt: Date.now(),
     };
     hotSet(threadId, session);        // warm the cache for future messages
     return session;
@@ -239,7 +241,7 @@ export async function handleWhatsAppKBIntake(params: {
   text: string;
   messageSid: string;
 }): Promise<boolean> {
-  console.log("[T2] handleWhatsAppKBIntake started", Date.now());
+  console.log("[T1] kbIntake started", Date.now());
   const { from, text } = params;
   const threadId  = from.replace(/^whatsapp:/, "").replace(/^\+/, "");
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
@@ -302,17 +304,34 @@ export async function handleWhatsAppKBIntake(params: {
     }
   }
 
+  console.log("[T2] after getSurveyState", Date.now());
+
   // ── Look up existing session ────────────────────────────────────────────────
   // 1. Hot cache (in-memory, instant)
-  // 2. Firestore fallback (only on first message after restart)
-  console.log("[T2a] session lookup started", Date.now());
+  // 2. Firestore fallback with 2s hard timeout (only on first message after restart)
   let session = hotGet(threadId);
-  // FIX 2: 2s hard timeout on Firestore fallback — cold-start never blocks patient
   if (!session) session = await Promise.race([
     firestoreLookup(threadId),
     new Promise<null>(r => setTimeout(() => r(null), 2000)),
   ]);
-  console.log("[T2a] session lookup finished", Date.now(), session ? `caseId=${session.caseId}` : "no session");
+  console.log("[T3] after firestoreLookup", Date.now(), session ? `caseId=${session.caseId}` : "no session");
+
+  // ── Bug 1 fix: expire stale sessions and detect new chief complaint ─────────
+  const SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
+  if (session) {
+    const isExpired = Date.now() - (session.createdAt ?? 0) > SESSION_MAX_AGE_MS;
+    const incomingMatch = matchComplaintFromText(rawText);
+    const complaintMismatch =
+      incomingMatch !== null &&
+      incomingMatch.slug !== session.complaint.slug;
+    if (isExpired || complaintMismatch) {
+      const reason = isExpired ? "expired (>4h)" : `complaint mismatch (was ${session.complaint.slug}, incoming ${incomingMatch!.slug})`;
+      console.log(`[Session] Closing stale session: ${reason}`);
+      setImmediate(() => setCaseState(session!.caseId, "CLOSED").catch(() => {}));
+      hotDel(threadId);
+      session = null;
+    }
+  }
 
   // ── New session — complaint selection ───────────────────────────────────────
   if (!session) {
@@ -336,7 +355,7 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Create session in memory immediately (instant) ──────────────────────
     const nowIso = new Date().toISOString();
     const caseId = `CASE_${nowIso.replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-    session = { caseId, complaint: match, answers: {}, state: "DRAFT" };
+    session = { caseId, complaint: match, answers: {}, state: "DRAFT", createdAt: Date.now() };
     hotSet(threadId, session);
 
     // ── Background: persist to Firestore + audit (never blocks patient) ──────
@@ -359,9 +378,8 @@ export async function handleWhatsAppKBIntake(params: {
     });
 
     // ── Get first question (sync — ~0ms) ────────────────────────────────────
-    console.log("[T3] getNextRequiredQuestion started", Date.now());
     const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
-    console.log("[T4] getNextRequiredQuestion finished", Date.now());
+    console.log("[T4] after getNextRequiredQuestion", Date.now());
 
     if (!firstQ) {
       await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
@@ -370,6 +388,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
 
     await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. I'll ask a few quick questions.\n\n` + formatQuestionAsMenu(firstQ, "📋 Question 1"));
+    console.log("[T5] after sendWhatsAppMessage", Date.now());
     return true;
   }
 
@@ -383,9 +402,8 @@ export async function handleWhatsAppKBIntake(params: {
     logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
   });
 
-  console.log("[T3] getNextRequiredQuestion started", Date.now());
   const nextQ = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers });
-  console.log("[T4] getNextRequiredQuestion finished", Date.now());
+  console.log("[T4] after getNextRequiredQuestion", Date.now());
 
   if (!nextQ) {
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers, to: cleanFrom, threadId });
@@ -396,6 +414,7 @@ export async function handleWhatsAppKBIntake(params: {
   if (parsed === null) {
     const answeredCount = Object.keys(answers).length;
     await sendWhatsAppMessage(cleanFrom, `Please reply with ${nextQ.ANSWER_TYPE === "number" ? "a number 1–10" : "1 for Yes or 2 for No"}.\n\n` + formatQuestionAsMenu(nextQ, `📋 Question ${answeredCount + 1}`));
+    console.log("[T5] after sendWhatsAppMessage", Date.now());
     return true;
   }
 
@@ -420,8 +439,10 @@ export async function handleWhatsAppKBIntake(params: {
 
   if (next2) {
     await sendWhatsAppMessage(cleanFrom, formatQuestionAsMenu(next2, `📋 Question ${answeredCount + 1}`));
+    console.log("[T5] after sendWhatsAppMessage", Date.now());
   } else {
     await sendWhatsAppMessage(cleanFrom, "Thanks — processing your assessment now…");
+    console.log("[T5] after sendWhatsAppMessage", Date.now());
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
   }
 
