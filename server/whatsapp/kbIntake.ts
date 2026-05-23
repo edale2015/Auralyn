@@ -521,15 +521,7 @@ export async function handleWhatsAppKBIntake(params: {
   session.answers         = updatedAnswers;
   persistState(updatedAnswers);
 
-  // ── Step 2: Safety check on extracted fields ───────────────────────────────
-  const shouldEscalate = await checkEscalation(complaint.slug, updatedAnswers);
-  if (shouldEscalate) {
-    console.log(`[WhatsApp] 🚨 Safety escalation triggered for ${complaint.slug}`);
-    await doEscalation(updatedAnswers, "engine");
-    return true;
-  }
-
-  // Keyword-based safety for high-risk phrases in raw text
+  // ── Fix 3: Keyword safety check (sync, no I/O) — can happen immediately ─────
   const CRITICAL_PHRASES = [
     "can't breathe", "cannot breathe", "unable to breathe", "worst headache of my life",
     "chest pain and can't", "coughing blood", "vomiting blood", "thunderclap",
@@ -541,27 +533,42 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
+  // ── Fix 3: Run safety check + response generation in parallel ─────────────
+  // checkEscalation is a DB/pipeline call (~50-100ms).
+  // generateResponse is a GPT call (~300ms).
+  // Neither depends on the other — launch both at the same time.
+  // If escalation triggers, we send the ER message and discard the response.
+  const exchanges = session.exchanges ?? [];
+  const complete   = isComplete(complaint.slug, updatedFields);
+
+  const [shouldEscalate, nextResponse] = await Promise.all([
+    checkEscalation(complaint.slug, updatedAnswers),
+    complete
+      ? generateClosingMessage({ complaintDisplay: complaint.display })
+      : generateResponse({
+          complaintDisplay: complaint.display,
+          complaintSlug:    complaint.slug,
+          extractedFields:  updatedFields,
+          needsProbe:       extraction.needs_probe,
+          lastMessage:      rawText,
+          exchanges,
+        }),
+  ]);
+
+  if (shouldEscalate) {
+    console.log(`[WhatsApp] 🚨 Safety escalation triggered for ${complaint.slug}`);
+    await doEscalation(updatedAnswers, "engine");
+    return true;
+  }
+
   // ── Step 3: Check if we have enough information ────────────────────────────
-  if (isComplete(complaint.slug, updatedFields)) {
+  if (complete) {
     console.log('[T4] conversational engine: interview complete', Date.now());
-    const closing = await generateClosingMessage({ complaintDisplay: complaint.display });
-    await sendWhatsAppMessage(cleanFrom, closing);
+    await sendWhatsAppMessage(cleanFrom, nextResponse);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
     return true;
   }
-
-  // ── Step 4: Generate next conversational response ─────────────────────────
-  const exchanges = session.exchanges ?? [];
-
-  const nextResponse = await generateResponse({
-    complaintDisplay:    complaint.display,
-    complaintSlug:       complaint.slug,
-    extractedFields:     updatedFields,
-    needsProbe:          extraction.needs_probe,
-    lastMessage:         rawText,
-    exchanges,
-  });
 
   // Update exchange history (keep last 10 turns)
   session.exchanges = [

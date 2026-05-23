@@ -324,6 +324,32 @@ export async function extractClinicalFields(
   }
 }
 
+// ── Fix 2 + Fix 1: Hard character limit enforcer ─────────────────────────────
+
+const MAX_CHARS = 160;
+
+async function enforceLimit(text: string, fallback: string): Promise<string> {
+  if (text.length <= MAX_CHARS) return text;
+  // Single retry: ask GPT to shorten to under 160 characters
+  try {
+    const resp = await ai().chat.completions.create({
+      model:       "gpt-4o-mini",
+      messages:    [{
+        role:    "user",
+        content: `Shorten this to under 160 characters, keeping only the single most important question: "${text}"`,
+      }],
+      temperature: 0.1,
+      max_tokens:  60,
+    });
+    const shortened = resp.choices[0]?.message?.content?.trim() ?? "";
+    return shortened.length > 0 && shortened.length <= MAX_CHARS ? shortened : fallback;
+  } catch {
+    // Last-resort: hard truncate at sentence boundary
+    const dot = text.lastIndexOf("?", MAX_CHARS);
+    return dot > 20 ? text.slice(0, dot + 1) : fallback;
+  }
+}
+
 // ── Step 2: Generate next conversational response ─────────────────────────────
 
 export async function generateResponse(params: {
@@ -337,6 +363,9 @@ export async function generateResponse(params: {
 }): Promise<string> {
   const { complaintDisplay, complaintSlug, extractedFields, needsProbe, lastMessage, exchanges, isFirstMessage } = params;
 
+  // Fix 3: Pre-compute all synchronous context BEFORE the async call so nothing
+  // serializes unnecessarily. All string building happens here, in parallel with
+  // any caller-side work, before the single await.
   const known = Object.entries(extractedFields)
     .filter(([, v]) => !isNull(v))
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
@@ -350,22 +379,22 @@ export async function generateResponse(params: {
     .map(e => `${e.role === "user" ? "Patient" : "Auralyn"}: ${e.text}`)
     .join("\n");
 
+  // Fix 1: "CRITICAL" constraint is the very first line of the system prompt.
   const system =
+    `CRITICAL: Your response must be 1 sentence only, under 160 characters. One question max. Never list multiple questions.\n\n` +
     `You are Auralyn, a clinical intake assistant for an urgent care clinic.\n` +
     `You talk exactly like a caring, efficient medical assistant — warm but focused.\n` +
     `You never sound like a form or a checklist. You never number questions.\n\n` +
     `Rules:\n` +
-    `1. If patient gave complex info, ACKNOWLEDGE it first in ≤1 sentence\n` +
-    `2. Ask about the HIGHEST PRIORITY missing field next\n` +
-    `3. If needs_probe has items, probe naturally before moving on\n` +
-    `4. Never ask more than 2 things in one message\n` +
-    `5. Safety fields (dyspnea, chest pain, altered mental status) always come first\n` +
-    `6. Example tone: "Got it — so the cough just started yesterday. Any trouble breathing?"\n` +
-    `7. No medical abbreviations. No numbered lists.\n` +
-    `8. For vague fever: "Did you feel feverish or have chills, even without checking your temperature?"\n` +
-    `9. For "a little short of breath": "Are you able to speak in full sentences, or does it feel harder?"\n` +
-    `10. Maximum 2 sentences total\n` +
-    (isFirstMessage ? `11. FIRST message — ask the single most important question warmly\n` : "");
+    `1. If patient gave complex info, you may acknowledge in the SAME sentence before your question\n` +
+    `2. Ask about the HIGHEST PRIORITY missing field only\n` +
+    `3. If needs_probe has items, probe that one thing naturally\n` +
+    `4. Safety fields (dyspnea, chest pain, altered mental status) always come first\n` +
+    `5. Example: "Got it — any trouble breathing with it?"\n` +
+    `6. No medical abbreviations. No numbered lists. No line breaks.\n` +
+    `7. For vague fever: "Any chills or feeling feverish?"\n` +
+    `8. For "a little short of breath": "Can you speak in full sentences?"\n` +
+    (isFirstMessage ? `9. FIRST message — one warm, direct question only\n` : "");
 
   const user =
     `Complaint: ${complaintDisplay}\n` +
@@ -375,23 +404,28 @@ export async function generateResponse(params: {
     `Needs probe: ${needsProbe.join(", ") || "none"}\n` +
     `Patient's last message: "${lastMessage}"\n` +
     (recent ? `\nRecent conversation:\n${recent}\n` : "") +
-    `\nGenerate ONLY the response text. Nothing else.`;
+    `\nGenerate ONLY the response text. Under 160 characters. Nothing else.`;
+
+  const fallback = (() => {
+    const field = getMissingSafetyFields(complaintSlug, extractedFields)[0]
+      ?? getMissingFields(complaintSlug, extractedFields)[0]
+      ?? "symptoms";
+    return `Any ${field}?`;
+  })();
 
   try {
     const resp = await ai().chat.completions.create({
       model:       "gpt-4o-mini",
       messages:    [{ role: "system", content: system }, { role: "user", content: user }],
       temperature: 0.35,
-      max_tokens:  120,
+      max_tokens:  60,
     });
-    return resp.choices[0]?.message?.content?.trim() ??
-      `Can you tell me a bit more about your ${complaintDisplay.toLowerCase()}?`;
+    const raw = resp.choices[0]?.message?.content?.trim() ?? fallback;
+    // Fix 2: Hard-enforce 160-char limit with retry
+    return await enforceLimit(raw, fallback);
   } catch (e: any) {
     console.warn("[ConversationalEngine] Response gen failed:", e?.message);
-    const missing = getMissingSafetyFields(complaintSlug, extractedFields)[0]
-      ?? getMissingFields(complaintSlug, extractedFields)[0]
-      ?? "symptoms";
-    return `Can you tell me about ${missing}?`;
+    return fallback;
   }
 }
 

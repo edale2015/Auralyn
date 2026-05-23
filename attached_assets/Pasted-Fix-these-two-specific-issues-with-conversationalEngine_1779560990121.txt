@@ -1,0 +1,18 @@
+Fix these two specific issues with conversationalEngine.ts:
+Fix 1 — One message, maximum 2 sentences, always
+The engine is sending batches of 5 questions. This must never happen. Hard limit: every single Auralyn response is 1-2 sentences maximum. One acknowledgment sentence if needed, one question. Never more. Add this validation before sending — if the generated response contains more than 2 sentences or more than 280 characters, truncate it to the first question only. Add this rule to the GPT-4o-mini system prompt as the very first line: "CRITICAL: Your response must be 1 sentence only. Maximum 35 words. One question per message. Never send a list."
+Fix 2 — iPhone SE screen limit
+iPhone SE 3rd gen screen width is 375px, showing approximately 30-35 characters per line and 8-10 lines per WhatsApp bubble before it requires scrolling. Every Auralyn message must fit in one bubble without scrolling. Maximum 160 characters total per message. Add a character truncation check after generation — if response exceeds 160 characters, call GPT-4o-mini again with: "Shorten this to under 160 characters, keeping the single most important question: {response}"
+Fix 3 — Latency: run extraction and generation in parallel
+Currently extraction runs, then generation runs sequentially. Run them in parallel using Promise.all — start the extraction AND pre-load the clinical goals simultaneously. The generation waits for extraction to complete but everything else runs in parallel. This should cut response time by 150-200ms.
+Target conversation format on iPhone SE:
+Patient: I have a cough
+Auralyn: How long have you been coughing?
+Patient: about 3 days
+Auralyn: Any fever with it?
+Patient: yes at first
+Auralyn: Trouble breathing at all?
+Short. One line. Flows like iMessage. Never wraps to a second screen.
+
+
+The 160 character limit is the key constraint. Test every question against it. "How long have you been coughing?" is 34 characters — perfect. "Are you experiencing any shortness of breath or chest tightness?" is 63 characters — fine. Anything over 160 gets shortened automatically.
