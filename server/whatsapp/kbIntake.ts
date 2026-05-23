@@ -196,18 +196,47 @@ async function checkEscalation(
 }
 
 // ── Batch question formatting ──────────────────────────────────────────────────
+// For a single question that is purely yes/no, use a compact inline format so
+// the whole thing fits on a small screen (iPhone SE) without scrolling.
+function formatSingleYesNo(q: QRow, num: number): string {
+  return `📋 *Question ${num}*\n_(1 = Yes, 2 = No)_\n\n${q.QUESTION_TEXT}\n\nReply *1* or *2*.`;
+}
+
 function formatBatchMessage(questions: QRow[], startNum: number): string {
-  if (questions.length === 1) {
+  // Single number-scale question — keep the full emoji grid
+  if (questions.length === 1 && questions[0].ANSWER_TYPE === "number") {
     return formatQuestionAsMenu(questions[0], `📋 Question ${startNum}`);
   }
-  const header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n\nPlease answer each:\n\n`;
+  // Single yes/no — compact inline
+  if (questions.length === 1) {
+    return formatSingleYesNo(questions[0], startNum);
+  }
+
+  // Multi-question batch — compact checklist format
+  // All questions fit on one screen; 1=Yes / 2=No shown once at the top.
+  const allYesNo  = questions.every((q) => q.ANSWER_TYPE !== "number");
+  const allNumber = questions.every((q) => q.ANSWER_TYPE === "number");
+
+  let header: string;
+  let footer: string;
+  let exampleReply: string;
+
+  if (allYesNo) {
+    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(1 = Yes   2 = No)_\n\n`;
+    exampleReply = questions.map(() => ["1", "2"][Math.floor(Math.random() * 2)]).join(" ");
+    footer = `\n\nReply with *${questions.length} numbers*, e.g. *"${exampleReply}"*`;
+  } else if (allNumber) {
+    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(Each answer: 1–10)_\n\n`;
+    footer = `\n\nReply with ${questions.length} numbers separated by spaces or commas.`;
+  } else {
+    header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n_(Yes/No questions: 1=Yes, 2=No · Scale: 1–10)_\n\n`;
+    footer = `\n\nReply in order, e.g. *"1 7 2"*`;
+  }
+
   const body = questions
-    .map((q, i) => {
-      const hint = q.ANSWER_TYPE === "number" ? "_(1–10)_" : "_(yes / no)_";
-      return `*${i + 1}.* ${q.QUESTION_TEXT} ${hint}`;
-    })
+    .map((q, i) => `*${i + 1}.* ${q.QUESTION_TEXT}`)
     .join("\n");
-  const footer = `\n\nReply with your answers separated by commas.\n_Example: "7, yes, no"_`;
+
   return header + body + footer;
 }
 
@@ -215,7 +244,11 @@ function parseBatchReply(
   rawText: string,
   batch: QRow[]
 ): Array<string | number | null> {
-  const parts = rawText.split(/[,\n;]+/).map((s) => s.trim()).filter(Boolean);
+  // Accept comma-separated, space-separated, newline-separated, or mixed
+  const parts = rawText
+    .split(/[\s,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   return batch.map((q, i) => parseWhatsAppAnswer(parts[i] ?? "", q.ANSWER_TYPE));
 }
 

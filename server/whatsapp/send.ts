@@ -78,16 +78,19 @@ function getTwilioClient() {
   return _twilioClient;
 }
 
+// Interval handle so we can clear it if needed (e.g. in tests)
+let _keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+
 /**
- * Pre-warm the Twilio SDK HTTP connection at server startup.
+ * Pre-warm the Twilio SDK HTTP connection at server startup AND keep it alive.
  *
- * The Twilio Node SDK uses its own HTTP client (axios-based), which has a
- * completely separate connection pool from Node's built-in fetch/http.
- * Without this, the FIRST call to sendWhatsAppMessage pays a 25-55s
- * cold TCP+TLS handshake to api.twilio.com.
+ * Root cause: Node's HTTP keep-alive closes idle TCP connections after ~5s.
+ * A one-time pre-warm at startup works for the first message, but if no
+ * patient messages arrive within ~5s the socket closes and the NEXT message
+ * pays a fresh 15-27s cold TCP+TLS handshake to api.twilio.com.
  *
- * Fix: make one real authenticated Twilio API call at startup so the SDK's
- * internal connection pool is warm before any patient message arrives.
+ * Fix: make a real Twilio SDK call immediately (warm the pool), then repeat
+ * every 25s so the connection is never idle long enough to be closed.
  */
 export function prewarmTwilioConnection(): void {
   try {
@@ -99,14 +102,20 @@ export function prewarmTwilioConnection(): void {
       _twilioClient = twilio(sid, token);
     }
 
-    // Make one real SDK call — this warms the actual Twilio HTTP connection pool.
-    // messages.list({ limit: 1 }) is the lightest authenticated call available.
-    _twilioClient.messages.list({ limit: 1 })
-      .then(() => console.log("[WhatsApp] Twilio connection pre-warmed ✅"))
-      .catch(() => {
-        // Credentials may be sandbox-only — ignore errors, connection is still warmed
-        console.log("[WhatsApp] Twilio pre-warm attempted (credentials may be sandbox)");
-      });
+    function ping() {
+      _twilioClient!.messages.list({ limit: 1 })
+        .then(() => {})
+        .catch(() => {});
+    }
+
+    // Immediate warm-up call
+    ping();
+    console.log("[WhatsApp] Twilio keep-alive heartbeat started (25s interval) ✅");
+
+    // Keep-alive heartbeat — prevents TCP connection from closing between messages
+    if (_keepAliveInterval) clearInterval(_keepAliveInterval);
+    _keepAliveInterval = setInterval(ping, 25_000);
+
   } catch {
     // Missing or invalid credentials — will surface properly on first send
   }
