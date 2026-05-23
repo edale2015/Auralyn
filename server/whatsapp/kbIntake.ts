@@ -7,7 +7,11 @@ import {
   setCaseState,
 } from "../services/caseService";
 import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
-import { getNextRequiredQuestion } from "../services/questionFlowService";
+import {
+  type QRow,
+  isSafetyCriticalQuestion,
+  getNextQuestionBatch,
+} from "../services/questionFlowService";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
@@ -32,11 +36,12 @@ import { sha256Hex } from "../services/hash";
 // is never gated on them.  On server restart, the Firestore fallback in
 // getActiveCaseId restores any in-progress sessions automatically.
 interface HotSession {
-  caseId:    string;
-  complaint: { slug: string; display: string };
-  answers:   Record<string, any>;
-  state:     string;
-  createdAt: number;   // ms epoch — used for 4-hour expiry
+  caseId:       string;
+  complaint:    { slug: string; display: string };
+  answers:      Record<string, any>;
+  state:        string;
+  createdAt:    number;        // ms epoch — used for 4-hour expiry
+  pendingBatch?: QRow[];       // questions we asked that still need answers
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -144,6 +149,74 @@ function formatTriageResult(triage: any, masterResult?: PipelineResult | null): 
 
   lines.push(``, `_AI-assisted decision support only. Not a substitute for physician evaluation._`);
   return lines.join("\n");
+}
+
+// ── Safety escalation ──────────────────────────────────────────────────────────
+// Sent and session closed the moment ANY answer triggers a critical disposition.
+const EMERGENCY_MESSAGE =
+  `🚨 *Based on your symptoms, you need emergency care immediately.*\n\n` +
+  `Please call 911 or go to your nearest emergency room right now.\n\n` +
+  `Do not wait. If you cannot get there safely, call 911 and they will come to you.\n\n` +
+  `_Stay safe — Auralyn_`;
+
+function isCriticalPipelineResult(result: PipelineResult): boolean {
+  if (result.hardStop) return true;
+  const d = (result.finalDisposition ?? "").toUpperCase();
+  return ["ER_NOW", "ED_NOW", "CALL_911", "911", "AMBULANCE_NOW", "AMBULANCE"].includes(d);
+}
+
+// Instant keyword-based fallback: if the rule engine has no rule for this
+// complaint/question, critical safety questions with a "yes" still escalate.
+function isInstantKeywordEscalation(q: QRow, answer: string | number): boolean {
+  if (answer !== "yes") return false;
+  const text = q.QUESTION_TEXT.toLowerCase();
+  const CRITICAL_KEYWORDS = [
+    "thunderclap", "worst headache", "worst pain of", "worst of your life",
+    "worst of his life", "worst of her life",
+    "facial droop", "arm weakness", "leg weakness", "slurred speech",
+    "cannot breathe", "can't breathe", "unable to breathe",
+    "coughing blood", "vomiting blood", "unconscious", "loss of consciousness",
+  ];
+  return CRITICAL_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+async function checkEscalation(
+  complaintSlug: string,
+  answers: Record<string, any>
+): Promise<boolean> {
+  try {
+    const result = await executePipeline(
+      complaintSlug,
+      answers as Record<string, string | number | boolean>
+    );
+    return isCriticalPipelineResult(result);
+  } catch {
+    return false; // never block a patient on engine error
+  }
+}
+
+// ── Batch question formatting ──────────────────────────────────────────────────
+function formatBatchMessage(questions: QRow[], startNum: number): string {
+  if (questions.length === 1) {
+    return formatQuestionAsMenu(questions[0], `📋 Question ${startNum}`);
+  }
+  const header = `📋 *Questions ${startNum}–${startNum + questions.length - 1}*\n\nPlease answer each:\n\n`;
+  const body = questions
+    .map((q, i) => {
+      const hint = q.ANSWER_TYPE === "number" ? "_(1–10)_" : "_(yes / no)_";
+      return `*${i + 1}.* ${q.QUESTION_TEXT} ${hint}`;
+    })
+    .join("\n");
+  const footer = `\n\nReply with your answers separated by commas.\n_Example: "7, yes, no"_`;
+  return header + body + footer;
+}
+
+function parseBatchReply(
+  rawText: string,
+  batch: QRow[]
+): Array<string | number | null> {
+  const parts = rawText.split(/[,\n;]+/).map((s) => s.trim()).filter(Boolean);
+  return batch.map((q, i) => parseWhatsAppAnswer(parts[i] ?? "", q.ANSWER_TYPE));
 }
 
 function buildComplaintMenu(): string {
@@ -377,17 +450,22 @@ export async function handleWhatsAppKBIntake(params: {
       logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
     });
 
-    // ── Get first question (sync — ~0ms) ────────────────────────────────────
-    const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
+    // ── Get first question batch (sync — ~0ms from warm cache) ─────────────
+    const firstBatch = getNextQuestionBatch({ complaintSlug: match.slug, answers: {} });
     console.log('[T4] getNextRequiredQuestion done', Date.now());
 
-    if (!firstQ) {
+    if (firstBatch.length === 0) {
       await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
       await runTriageAndSend({ caseId, complaintSlug: match.slug, answers: {}, to: cleanFrom, threadId });
       return true;
     }
 
-    await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. I'll ask a few quick questions.\n\n` + formatQuestionAsMenu(firstQ, "📋 Question 1"));
+    session.pendingBatch = firstBatch;
+    await sendWhatsAppMessage(
+      cleanFrom,
+      `Got it — *${match.display}*. I'll ask a few quick questions.\n\n` +
+      formatBatchMessage(firstBatch, 1)
+    );
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
@@ -402,48 +480,121 @@ export async function handleWhatsAppKBIntake(params: {
     logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
   });
 
-  const nextQ = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers });
   console.log('[T4] getNextRequiredQuestion done', Date.now());
 
-  if (!nextQ) {
+  // ── Recover pending batch (handles server-restart sessions with no pendingBatch) ──
+  const batch: QRow[] = session.pendingBatch?.length
+    ? session.pendingBatch
+    : getNextQuestionBatch({ complaintSlug: complaint.slug, answers });
+
+  if (batch.length === 0) {
+    // All questions already answered — run triage
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers, to: cleanFrom, threadId });
     return true;
   }
 
-  const parsed = parseWhatsAppAnswer(rawText, nextQ.ANSWER_TYPE);
-  if (parsed === null) {
-    const answeredCount = Object.keys(answers).length;
-    await sendWhatsAppMessage(cleanFrom, `Please reply with ${nextQ.ANSWER_TYPE === "number" ? "a number 1–10" : "1 for Yes or 2 for No"}.\n\n` + formatQuestionAsMenu(nextQ, `📋 Question ${answeredCount + 1}`));
+  // ── Parse patient reply against the outstanding batch ──────────────────────
+  const parsedAnswers = parseBatchReply(rawText, batch);
+
+  let updatedAnswers = { ...answers };
+  let answeredInBatch = 0;
+
+  for (let i = 0; i < batch.length; i++) {
+    const q      = batch[i];
+    const parsed = parsedAnswers[i];
+
+    if (parsed === null) {
+      // This answer didn't parse — stop processing here, re-ask remaining
+      break;
+    }
+
+    answeredInBatch++;
+    updatedAnswers = { ...updatedAnswers, [q.Q_ID]: parsed };
+    session.answers = updatedAnswers;
+
+    // ── 🚨 Safety check after EACH answer ───────────────────────────────────
+    // Two-layer: (1) instant keyword check — zero latency, catches well-known
+    // critical symptoms regardless of rule DB state.  (2) full pipeline check
+    // — catches anything the rule engine has been trained to escalate.
+    const keywordHit = isInstantKeywordEscalation(q, parsed);
+    const engineHit  = keywordHit ? false : await checkEscalation(complaint.slug, updatedAnswers);
+
+    if (keywordHit || engineHit) {
+      console.log(`[WhatsApp] 🚨 Safety escalation: ${keywordHit ? "keyword" : "engine"} hit on Q_ID=${q.Q_ID} answer=${parsed}`);
+
+      // Background: persist answers + close case before sending emergency msg
+      setImmediate(() => {
+        const answerHash = sha256Hex(JSON.stringify(updatedAnswers));
+        import("../firebase").then(({ getFirestore }) => {
+          getFirestore().collection("cases").doc(caseId).update({
+            updatedAt: new Date().toISOString(),
+            "answers.structured": updatedAnswers,
+            "answers.answerHash": answerHash,
+          }).catch(() => {});
+        }).catch(() => {});
+        setTriage(
+          caseId,
+          { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — auto-escalated", rfTriggered: ["ESCALATION"], consistencyFlags: [] } as any,
+          "CLOSED" as any
+        ).catch(() => {});
+        endSession(caseId, "er_send" as any).catch(() => {});
+        logInteraction({
+          sessionId: caseId, caseId, channel: "whatsapp",
+          direction: "outbound", skillName: "safety_escalation",
+          messageText: EMERGENCY_MESSAGE,
+          responseText: `escalated=true|trigger=${keywordHit ? "keyword" : "engine"}|q=${q.Q_ID}`,
+        }).catch(() => {});
+      });
+
+      await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
+      hotDel(threadId);
+      return true;
+    }
+  }
+
+  // ── Persist answers collected so far (background) ─────────────────────────
+  if (answeredInBatch > 0) {
+    setImmediate(() => {
+      const answerHash = sha256Hex(JSON.stringify(updatedAnswers));
+      import("../firebase").then(({ getFirestore }) => {
+        getFirestore().collection("cases").doc(caseId).update({
+          updatedAt: new Date().toISOString(),
+          "answers.structured": updatedAnswers,
+          "answers.answerHash": answerHash,
+        }).catch(() => {});
+      }).catch(() => {});
+    });
+  }
+
+  // ── Determine what to ask next ────────────────────────────────────────────
+  const remainingBatch = batch.slice(answeredInBatch);
+  const totalAnswered  = Object.keys(updatedAnswers).length;
+
+  if (remainingBatch.length > 0) {
+    // Patient gave partial answers — re-ask the unanswered remainder
+    session.pendingBatch = remainingBatch;
+    await sendWhatsAppMessage(
+      cleanFrom,
+      `Please answer the remaining question(s):\n\n` +
+      formatBatchMessage(remainingBatch, totalAnswered + 1)
+    );
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
 
-  // ── Merge answer in memory (instant) + background Firestore ─────────────────
-  const updatedAnswers = { ...answers, [nextQ.Q_ID]: parsed };
-  session.answers = updatedAnswers;    // mutate hot session in place
-  const answeredCount = Object.keys(updatedAnswers).length;
+  // Full batch answered — get the next batch
+  const nextBatch = getNextQuestionBatch({ complaintSlug: complaint.slug, answers: updatedAnswers });
 
-  setImmediate(() => {
-    // Firestore merge (background — patient already has next question)
-    const answerHash = sha256Hex(JSON.stringify(updatedAnswers));
-    import("../firebase").then(({ getFirestore }) => {
-      getFirestore().collection("cases").doc(caseId).update({
-        updatedAt: new Date().toISOString(),
-        "answers.structured": updatedAnswers,
-        "answers.answerHash": answerHash,
-      }).catch(() => {});
-    }).catch(() => {});
-  });
-
-  const next2 = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers: updatedAnswers });
-
-  if (next2) {
-    await sendWhatsAppMessage(cleanFrom, formatQuestionAsMenu(next2, `📋 Question ${answeredCount + 1}`));
-    console.log('[T5] sendWhatsAppMessage done', Date.now());
-  } else {
+  if (nextBatch.length === 0) {
+    // All done — run triage
+    session.pendingBatch = undefined;
     await sendWhatsAppMessage(cleanFrom, "Thanks — processing your assessment now…");
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
+  } else {
+    session.pendingBatch = nextBatch;
+    await sendWhatsAppMessage(cleanFrom, formatBatchMessage(nextBatch, totalAnswered + 1));
+    console.log('[T5] sendWhatsAppMessage done', Date.now());
   }
 
   return true;

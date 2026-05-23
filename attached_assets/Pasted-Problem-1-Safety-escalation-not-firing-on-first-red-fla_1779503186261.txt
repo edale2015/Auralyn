@@ -1,0 +1,26 @@
+Problem 1 — Safety escalation not firing on first red flag
+This is a patient safety issue. "Worst headache of your life" = ambulance now. No more questions. Send this to Replit:
+
+Critical patient safety bug. When a patient answers yes to a thunderclap headache question, Auralyn must immediately send an ambulance message and stop asking questions. It must not ask 5 more questions.
+Please find where WhatsApp responses are processed after the patient answers a question — likely in kbIntake.ts or questionFlowService.ts. After each answer is recorded, run the safety check BEFORE selecting the next question. The safety check should call ruleExecutionEngine.executePipeline() with the current answers. If the pipeline returns a CRITICAL red flag or a disposition of ambulance_now or er_now, immediately send this message via Twilio and close the session:
+"🚨 Based on your symptoms, you need emergency care immediately. Please call 911 or go to your nearest emergency room right now. Do not wait. If you cannot get there safely, call 911 and they will come to you."
+Then stop. Do not ask another question. This must fire on the FIRST answer that triggers a critical disposition — not after all questions are complete.
+Show me the specific code location where you will add this check before implementing.
+
+
+Problem 2 — Send multiple questions at once
+Instead of one question per text, send a grouped batch. Add this to the same Replit message:
+
+Also implement multi-question batching for WhatsApp. Instead of sending one question per message, group 2-3 related questions into a single WhatsApp message using numbered format. Example:
+"To better understand your headache, please answer:
+
+On a scale of 1-10, how severe is the pain?
+Did it come on suddenly like a thunderclap? (yes/no)
+Is this the worst headache of your life? (yes/no)"
+
+Patient replies: "8, yes, yes"
+Parse the reply by splitting on commas or newlines, map answer 1 to question 1, answer 2 to question 2, answer 3 to question 3. Run the safety check after parsing each answer in sequence — so if answer 2 is "yes" to thunderclap, escalate immediately without waiting for answer 3.
+Group questions by clinical category: onset/severity together, associated symptoms together, history together. Max 3 questions per message. Never group a safety-critical question (thunderclap, worst of life, neurological deficit) with non-critical questions — send those alone so the answer is unambiguous.
+
+
+This combination — immediate safety escalation + batched questions — is what makes Auralyn feel like it's ahead of you rather than behind you. A real physician gathers onset, severity, and quality simultaneously in the first 10 seconds. Auralyn should do the same.

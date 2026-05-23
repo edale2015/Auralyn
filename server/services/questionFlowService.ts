@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-type QRow = {
+export type QRow = {
   CC_ID: string;
   Q_ID: string;
   QUESTION_TEXT: string;
@@ -88,6 +88,65 @@ export function getNextRequiredQuestion(params: {
     if (params.answers[q.Q_ID] === undefined) return q;
   }
   return null;
+}
+
+// Keywords that mark a question as safety-critical — these are sent ALONE,
+// never batched with other questions, so the patient's answer is unambiguous.
+const SAFETY_CRITICAL_KEYWORDS = [
+  "thunderclap",
+  "worst headache",
+  "worst pain of",
+  "worst of your life",
+  "worst of his life",
+  "worst of her life",
+  "neurological",
+  "deficit",
+  "facial droop",
+  "arm weakness",
+  "leg weakness",
+  "slurred speech",
+  "cannot breathe",
+  "can't breathe",
+  "unable to breathe",
+  "chest pressure",
+  "chest tightness",
+  "coughing blood",
+  "vomiting blood",
+  "unconscious",
+  "passing out",
+  "loss of consciousness",
+];
+
+export function isSafetyCriticalQuestion(q: QRow): boolean {
+  const text = q.QUESTION_TEXT.toLowerCase();
+  return SAFETY_CRITICAL_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+/**
+ * Returns the next 1–3 unanswered required questions for batching.
+ * - If the next question is safety-critical it is always returned alone.
+ * - Otherwise up to `maxBatchSize` consecutive non-critical questions are returned.
+ */
+export function getNextQuestionBatch(params: {
+  complaintSlug: string;
+  answers: Record<string, any>;
+  maxBatchSize?: number;
+}): QRow[] {
+  const { complaintSlug, answers, maxBatchSize = 3 } = params;
+  const required  = getRequiredQuestions(complaintSlug);
+  const unanswered = required.filter((q) => answers[q.Q_ID] === undefined);
+  if (unanswered.length === 0) return [];
+
+  const first = unanswered[0];
+  if (isSafetyCriticalQuestion(first)) return [first];
+
+  const batch: QRow[] = [first];
+  for (let i = 1; i < unanswered.length && batch.length < maxBatchSize; i++) {
+    const q = unanswered[i];
+    if (isSafetyCriticalQuestion(q)) break;
+    batch.push(q);
+  }
+  return batch;
 }
 
 // Pre-warm: populate cache at module load so the first patient message
