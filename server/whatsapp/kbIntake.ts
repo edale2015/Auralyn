@@ -241,7 +241,7 @@ export async function handleWhatsAppKBIntake(params: {
   text: string;
   messageSid: string;
 }): Promise<boolean> {
-  console.log("[T1] kbIntake started", Date.now());
+  console.log('[T1] handleWhatsAppKBIntake started', Date.now());
   const { from, text } = params;
   const threadId  = from.replace(/^whatsapp:/, "").replace(/^\+/, "");
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
@@ -304,7 +304,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
   }
 
-  console.log("[T2] after getSurveyState", Date.now());
+  console.log('[T2] getSurveyState done', Date.now());
 
   // ── Look up existing session ────────────────────────────────────────────────
   // 1. Hot cache (in-memory, instant)
@@ -314,7 +314,7 @@ export async function handleWhatsAppKBIntake(params: {
     firestoreLookup(threadId),
     new Promise<null>(r => setTimeout(() => r(null), 2000)),
   ]);
-  console.log("[T3] after firestoreLookup", Date.now(), session ? `caseId=${session.caseId}` : "no session");
+  console.log('[T3] firestoreLookup done', Date.now(), session ? `caseId=${session.caseId}` : "no session");
 
   // ── Bug 1 fix: expire stale sessions and detect new chief complaint ─────────
   const SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -379,7 +379,7 @@ export async function handleWhatsAppKBIntake(params: {
 
     // ── Get first question (sync — ~0ms) ────────────────────────────────────
     const firstQ = getNextRequiredQuestion({ complaintSlug: match.slug, answers: {} });
-    console.log("[T4] after getNextRequiredQuestion", Date.now());
+    console.log('[T4] getNextRequiredQuestion done', Date.now());
 
     if (!firstQ) {
       await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. Processing…`);
@@ -388,7 +388,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
 
     await sendWhatsAppMessage(cleanFrom, `Got it — *${match.display}*. I'll ask a few quick questions.\n\n` + formatQuestionAsMenu(firstQ, "📋 Question 1"));
-    console.log("[T5] after sendWhatsAppMessage", Date.now());
+    console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
 
@@ -403,7 +403,7 @@ export async function handleWhatsAppKBIntake(params: {
   });
 
   const nextQ = getNextRequiredQuestion({ complaintSlug: complaint.slug, answers });
-  console.log("[T4] after getNextRequiredQuestion", Date.now());
+  console.log('[T4] getNextRequiredQuestion done', Date.now());
 
   if (!nextQ) {
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers, to: cleanFrom, threadId });
@@ -414,7 +414,7 @@ export async function handleWhatsAppKBIntake(params: {
   if (parsed === null) {
     const answeredCount = Object.keys(answers).length;
     await sendWhatsAppMessage(cleanFrom, `Please reply with ${nextQ.ANSWER_TYPE === "number" ? "a number 1–10" : "1 for Yes or 2 for No"}.\n\n` + formatQuestionAsMenu(nextQ, `📋 Question ${answeredCount + 1}`));
-    console.log("[T5] after sendWhatsAppMessage", Date.now());
+    console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
 
@@ -439,10 +439,10 @@ export async function handleWhatsAppKBIntake(params: {
 
   if (next2) {
     await sendWhatsAppMessage(cleanFrom, formatQuestionAsMenu(next2, `📋 Question ${answeredCount + 1}`));
-    console.log("[T5] after sendWhatsAppMessage", Date.now());
+    console.log('[T5] sendWhatsAppMessage done', Date.now());
   } else {
     await sendWhatsAppMessage(cleanFrom, "Thanks — processing your assessment now…");
-    console.log("[T5] after sendWhatsAppMessage", Date.now());
+    console.log('[T5] sendWhatsAppMessage done', Date.now());
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
   }
 
