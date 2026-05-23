@@ -89,3 +89,7 @@ export function getNextRequiredQuestion(params: {
   }
   return null;
 }
+
+// Pre-warm: populate cache at module load so the first patient message
+// never pays the synchronous file-read cost (~4s for 735 rows → 0ms hot path).
+loadQuestions();

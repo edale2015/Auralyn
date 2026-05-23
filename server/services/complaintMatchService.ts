@@ -98,3 +98,7 @@ export function listEnabledComplaints(): RegistryRow[] {
 export function resetComplaintMatchCache(): void {
   CACHE = null;
 }
+
+// Pre-warm: populate cache at module load so the first patient message
+// never pays the synchronous file-read cost (~50ms → 0ms hot path).
+loadRegistry();

@@ -1492,6 +1492,9 @@ app.use((req, res, next) => {
       // Warm KB runtime cache — loads diagnosis priors, red flag rules, and treatment rules
       // from Postgres into memory so all pipeline entry-points read from the KB.
       import("./kb/kbRuntime").then(({ warmKbCache }) => warmKbCache()).catch(() => {});
+      // Pre-warm WhatsApp hot path: CSV caches + Twilio SDK HTTP connection pool.
+      // Without this the first patient message pays ~4s (CSV reads) + ~27s (Twilio cold start).
+      import("./whatsapp/send").then(({ prewarmTwilioConnection }) => prewarmTwilioConnection()).catch(() => {});
       // Register the DB-backed per-complaint prior loader so loadComplaintPriors() works.
       // Without this, any call to loadComplaintPriors() throws "No registry adapter registered".
       import("./clinical/diagnosisPriorLoader").then(({ registerPriorLoader }) => {

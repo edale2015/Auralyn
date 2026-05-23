@@ -79,28 +79,36 @@ function getTwilioClient() {
 }
 
 /**
- * Pre-warm the HTTPS connection to api.twilio.com at server startup.
- * Without this, the FIRST call to sendWhatsAppMessage pays a 50-60s
- * cold TCP+TLS handshake to Twilio's API.  A HEAD request at startup
- * pins an open connection in Node's keep-alive pool so every patient
- * message is served from a warm socket (~1-2s Twilio REST latency).
+ * Pre-warm the Twilio SDK HTTP connection at server startup.
+ *
+ * The Twilio Node SDK uses its own HTTP client (axios-based), which has a
+ * completely separate connection pool from Node's built-in fetch/http.
+ * Without this, the FIRST call to sendWhatsAppMessage pays a 25-55s
+ * cold TCP+TLS handshake to api.twilio.com.
+ *
+ * Fix: make one real authenticated Twilio API call at startup so the SDK's
+ * internal connection pool is warm before any patient message arrives.
  */
 export function prewarmTwilioConnection(): void {
-  // Fire-and-forget — never blocks startup, never throws
-  fetch("https://api.twilio.com/", { method: "HEAD" })
-    .catch(() => {});
-
-  // Also eagerly initialise the SDK client if credentials are present
-  // so credential validation doesn't happen on the first patient message
   try {
     const sid   = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
-    if (sid && token && !_twilioClient) {
+    if (!sid || !token) return;
+
+    if (!_twilioClient) {
       _twilioClient = twilio(sid, token);
-      console.log("[WhatsApp] Twilio client pre-initialised ✅");
     }
+
+    // Make one real SDK call — this warms the actual Twilio HTTP connection pool.
+    // messages.list({ limit: 1 }) is the lightest authenticated call available.
+    _twilioClient.messages.list({ limit: 1 })
+      .then(() => console.log("[WhatsApp] Twilio connection pre-warmed ✅"))
+      .catch(() => {
+        // Credentials may be sandbox-only — ignore errors, connection is still warmed
+        console.log("[WhatsApp] Twilio pre-warm attempted (credentials may be sandbox)");
+      });
   } catch {
-    // Missing credentials — will surface properly on first send
+    // Missing or invalid credentials — will surface properly on first send
   }
 }
 
