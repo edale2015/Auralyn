@@ -272,7 +272,16 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   // ── Survey replies ──────────────────────────────────────────────────────────
-  const survey = await getSurveyState("whatsapp", threadId);
+  // FIX 1 + FIX 3: Only check survey state for numeric messages (CSAT 1-5, NPS 0-10).
+  // Symptom text ("chest pain", "yes", "no") skips the Redis fetch entirely — zero latency.
+  // Numeric replies get a 500ms hard timeout so a slow/unreachable Upstash never blocks.
+  const looksNumeric = /^\d+$/.test(rawText.trim());
+  const survey = looksNumeric
+    ? await Promise.race([
+        getSurveyState("whatsapp", threadId),
+        new Promise<null>(r => setTimeout(() => r(null), 500)),
+      ])
+    : null;
   if (survey) {
     const n = parseInt(rawText.trim());
     if (survey.phase === "csat" && !isNaN(n) && n >= 1 && n <= 5) {
@@ -298,7 +307,11 @@ export async function handleWhatsAppKBIntake(params: {
   // 2. Firestore fallback (only on first message after restart)
   console.log("[T2a] session lookup started", Date.now());
   let session = hotGet(threadId);
-  if (!session) session = await firestoreLookup(threadId);
+  // FIX 2: 2s hard timeout on Firestore fallback — cold-start never blocks patient
+  if (!session) session = await Promise.race([
+    firestoreLookup(threadId),
+    new Promise<null>(r => setTimeout(() => r(null), 2000)),
+  ]);
   console.log("[T2a] session lookup finished", Date.now(), session ? `caseId=${session.caseId}` : "no session");
 
   // ── New session — complaint selection ───────────────────────────────────────
