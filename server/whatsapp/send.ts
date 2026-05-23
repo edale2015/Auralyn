@@ -78,6 +78,32 @@ function getTwilioClient() {
   return _twilioClient;
 }
 
+/**
+ * Pre-warm the HTTPS connection to api.twilio.com at server startup.
+ * Without this, the FIRST call to sendWhatsAppMessage pays a 50-60s
+ * cold TCP+TLS handshake to Twilio's API.  A HEAD request at startup
+ * pins an open connection in Node's keep-alive pool so every patient
+ * message is served from a warm socket (~1-2s Twilio REST latency).
+ */
+export function prewarmTwilioConnection(): void {
+  // Fire-and-forget — never blocks startup, never throws
+  fetch("https://api.twilio.com/", { method: "HEAD" })
+    .catch(() => {});
+
+  // Also eagerly initialise the SDK client if credentials are present
+  // so credential validation doesn't happen on the first patient message
+  try {
+    const sid   = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    if (sid && token && !_twilioClient) {
+      _twilioClient = twilio(sid, token);
+      console.log("[WhatsApp] Twilio client pre-initialised ✅");
+    }
+  } catch {
+    // Missing credentials — will surface properly on first send
+  }
+}
+
 const _sendAuditLog: Array<{
   ts: string;
   to: string;
