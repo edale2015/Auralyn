@@ -172,16 +172,32 @@ export function getGoals(slug: string): ClinicalGoal[] {
   return COMPLAINT_GOALS[slug] ?? DEFAULT_GOALS;
 }
 
+/** Returns human-readable labels for missing safety fields (used in GPT prompts). */
 export function getMissingSafetyFields(slug: string, fields: Record<string, any>): string[] {
   return getGoals(slug)
     .filter(g => g.safety && isNull(fields[g.field]))
     .map(g => g.label);
 }
 
+/** Returns human-readable labels for missing non-safety fields (used in GPT prompts). */
 export function getMissingFields(slug: string, fields: Record<string, any>): string[] {
   return getGoals(slug)
     .filter(g => !g.safety && isNull(fields[g.field]))
     .map(g => g.label);
+}
+
+/** Returns field keys (not labels) for missing safety fields — for question library lookups. */
+function getMissingSafetyFieldKeys(slug: string, fields: Record<string, any>): string[] {
+  return getGoals(slug)
+    .filter(g => g.safety && isNull(fields[g.field]))
+    .map(g => g.field);
+}
+
+/** Returns field keys (not labels) for missing non-safety fields — for question library lookups. */
+function getMissingFieldKeys(slug: string, fields: Record<string, any>): string[] {
+  return getGoals(slug)
+    .filter(g => !g.safety && isNull(fields[g.field]))
+    .map(g => g.field);
 }
 
 export function isComplete(slug: string, fields: Record<string, any>): boolean {
@@ -348,6 +364,139 @@ export function mapFieldsToQIds(slug: string, fields: Record<string, any>): Reco
   return out;
 }
 
+// ── Pre-written question library (fallback when GPT times out) ────────────────
+//
+// Used by extractAndRespond() when the 2500 ms GPT deadline fires.
+// Each entry is the single best clinical question to ask for that field.
+// Falls back to `Any <field>?` for any key not listed here.
+
+export const QUESTION_LIBRARY: Record<string, Record<string, string>> = {
+  cough: {
+    duration:      "How long have you had this cough?",
+    severity:      "How bad is it on a scale of 1 to 10?",
+    fever:         "Do you have a fever with it?",
+    dyspnea:       "Are you having any trouble breathing?",
+    sputum:        "Are you bringing up any phlegm — and if so, what color?",
+    age:           "How old are you?",
+    smoking:       "Do you smoke or have a history of smoking?",
+    comorbidities: "Do you have any lung or heart conditions?",
+    systemic:      "Any chills, fatigue, or body aches alongside this?",
+  },
+  neuro_headache: {
+    onset:         "Did this headache come on suddenly or gradually?",
+    thunderclap:   "Was it the worst headache of your life, hitting in seconds?",
+    severity:      "How severe is it, 1 to 10?",
+    neuro_deficit: "Any weakness, numbness, or trouble speaking?",
+    fever:         "Do you have a fever or stiff neck with this?",
+    vision:        "Any vision changes or eye pain?",
+    trauma:        "Did you hit your head recently?",
+    age:           "How old are you?",
+    pattern:       "Have you had migraines or tension headaches before?",
+  },
+  chest_pain: {
+    onset:         "Did this chest pain come on suddenly or gradually?",
+    radiation:     "Does the pain spread to your arm, jaw, or neck?",
+    dyspnea:       "Are you short of breath with it?",
+    diaphoresis:   "Are you sweating or feeling clammy?",
+    severity:      "How severe is the pain, 1 to 10?",
+    exertional:    "Does it get worse with activity or exertion?",
+    pleuritic:     "Does it get worse when you take a deep breath?",
+    syncope:       "Have you fainted or felt like you might pass out?",
+    age:           "How old are you?",
+    cardiac_hx:    "Any prior heart problems or heart attacks?",
+  },
+  sore_throat: {
+    duration:      "How long have you had this sore throat?",
+    fever:         "Do you have a fever?",
+    exudate:       "Any white patches on your tonsils?",
+    swollen_nodes: "Are the glands in your neck swollen or tender?",
+    dysphagia:     "Are you having trouble swallowing even your saliva?",
+    dyspnea:       "Any trouble breathing?",
+    stridor:       "Any high-pitched or noisy breathing sounds?",
+    drooling:      "Are you drooling or unable to swallow?",
+    age:           "How old are you?",
+    recent_abx:    "Have you taken antibiotics recently?",
+  },
+  gu_uti_symptoms: {
+    dysuria:       "Is there burning or pain when you urinate?",
+    frequency:     "Are you urinating much more often than usual?",
+    urgency:       "Do you feel a sudden urgent need to go?",
+    fever:         "Do you have a fever?",
+    flank_pain:    "Any pain in your side or back around the kidney area?",
+    nausea:        "Any nausea or vomiting?",
+    hematuria:     "Any blood in your urine?",
+    pregnancy:     "Could you be pregnant?",
+    age:           "How old are you?",
+  },
+  ent_sinus_pressure: {
+    duration:       "How long have you had this sinus pressure?",
+    fever:          "Do you have a fever with it?",
+    purulent:       "Any thick, colored, or foul-smelling mucus?",
+    eye_swelling:   "Any swelling around the eye or eyelid?",
+    severe_headache:"How severe is your headache, 1 to 10?",
+    neck_stiff:     "Is your neck stiff or painful to move?",
+    vision_change:  "Any changes in your vision?",
+    age:            "How old are you?",
+  },
+  abdominal_pain: {
+    location:      "Where exactly is the pain — upper, lower, or all over?",
+    duration:      "How long have you had this pain?",
+    severity:      "How severe is it, 1 to 10?",
+    fever:         "Do you have a fever?",
+    vomiting:      "Any vomiting?",
+    diarrhea:      "Any diarrhea?",
+    blood_stool:   "Any blood in your stool?",
+    rigidity:      "Is your abdomen hard or board-like to the touch?",
+    age:           "How old are you?",
+  },
+  dizziness: {
+    type:          "Is it more of a spinning sensation or lightheadedness?",
+    duration:      "How long does each episode last?",
+    syncope:       "Have you actually fainted or lost consciousness?",
+    neuro_deficit: "Any weakness, numbness, or trouble speaking during an episode?",
+    hearing:       "Any ringing in your ears or hearing changes?",
+    nausea:        "Any nausea with the dizziness?",
+    age:           "How old are you?",
+  },
+  msk_back_pain: {
+    location:      "Where in your back — upper, middle, or lower?",
+    duration:      "How long have you had this back pain?",
+    severity:      "How severe is it, 1 to 10?",
+    radiation:     "Does the pain shoot down one or both legs?",
+    bowel_bladder: "Any changes in controlling urination or bowel movements?",
+    trauma:        "Did you injure your back recently?",
+    fever:         "Any fever?",
+    age:           "How old are you?",
+  },
+  id_fever: {
+    duration:      "How long have you had this fever?",
+    severity:      "Do you know your temperature?",
+    chills:        "Are you having chills or shaking?",
+    localizing:    "Any sore throat, cough, or other localizing symptoms?",
+    rash:          "Do you have any rash?",
+    altered_mental:"Any confusion or mental changes?",
+    immunocompromised: "Any immune system conditions or chemotherapy?",
+    age:           "How old are you?",
+  },
+  nausea: {
+    duration:          "How long have you been feeling this way?",
+    vomiting:          "Are you vomiting?",
+    unable_keep_fluids:"Are you unable to keep any fluids down at all?",
+    blood_in_vomit:    "Any blood or dark material in what you're bringing up?",
+    diarrhea:          "Any diarrhea?",
+    weakness:          "Are you feeling very weak or fatigued?",
+    oliguria:          "When did you last urinate?",
+    fever:             "Any fever?",
+    abdominal_pain:    "Any abdominal pain or cramping?",
+    age:               "How old are you?",
+  },
+};
+
+/** Look up a pre-written question for a complaint + field. Falls back to generic. */
+function _questionFor(slug: string, field: string): string {
+  return QUESTION_LIBRARY[slug]?.[field] ?? `Can you tell me more about your ${field.replace(/_/g, " ")}?`;
+}
+
 // ── Step 1: Extract clinical fields from patient message ─────────────────────
 
 export interface ExtractionResult {
@@ -443,8 +592,12 @@ async function extractAndRespond(
     .map(e => `${e.role === "user" ? "Patient" : "Auralyn"}: ${e.text}`)
     .join("\n");
 
-  const fallbackField = missingSafety[0] ?? missingOther[0] ?? "severity";
-  const fallbackText  = `Any ${fallbackField}?`;
+  // Use field KEYS (not labels) for the question library lookup.
+  // getMissingSafety/MissingFields return labels for GPT prompts; we need keys here.
+  const _safetyKeys  = getMissingSafetyFieldKeys(slug, existingFields);
+  const _otherKeys   = getMissingFieldKeys(slug, existingFields);
+  const fallbackField = _safetyKeys[0] ?? _otherKeys[0] ?? "severity";
+  const fallbackText  = _questionFor(slug, fallbackField);
 
   const system =
     `You are Auralyn, a clinical intake assistant. Return ONLY valid JSON.\n\n` +
@@ -480,7 +633,7 @@ async function extractAndRespond(
     `\nJSON: {"extracted":{${goals.map(g => `"${g.field}":null`).join(",")}},"needs_probe":[],"response":""}`;
 
   try {
-    // 4.5 s hard timeout — keeps max latency under the harness 5 s ceiling
+    // 2.5 s hard timeout — fallback to question library keeps latency well under 3 s
     const callPromise = ai().chat.completions.create({
       model:           "gpt-4o-mini",
       messages:        [{ role: "system", content: system }, { role: "user", content: user }],
@@ -489,7 +642,7 @@ async function extractAndRespond(
       response_format: { type: "json_object" },
     });
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("GPT timeout")), 4500)
+      setTimeout(() => reject(new Error("GPT timeout")), 2500)
     );
     const resp = await Promise.race([callPromise, timeoutPromise]);
     const parsed = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
@@ -531,9 +684,10 @@ async function extractAndRespond(
       response,
     };
   } catch (e: any) {
-    console.warn("[ConversationalEngine] CombinedCall failed:", e?.message);
-    // On timeout/failure, run a deterministic keyword extractor so safety-critical
-    // fields can still be found and trigger escalation even without GPT.
+    const isTimeout = (e?.message ?? "").includes("GPT timeout");
+    console.warn(`[ConversationalEngine] CombinedCall ${isTimeout ? "timed out (>2500ms)" : "failed"}: ${e?.message}`);
+    // On timeout/failure: deterministic keyword extractor for safety fields +
+    // pre-written question from the library for the next field.
     const keywordFields = _keywordExtract(slug, patientMessage);
     return { extracted: keywordFields, needs_probe: [], response: fallbackText };
   }
@@ -598,30 +752,16 @@ function _keywordExtract(slug: string, msg: string): Record<string, any> {
   return f;
 }
 
-// ── Fix 2 + Fix 1: Hard character limit enforcer ─────────────────────────────
+// ── Hard character limit enforcer ────────────────────────────────────────────
+// No second LLM call — GPT already caps at max_tokens:180 so overruns are rare.
+// Hard-truncate at the last '?' within 160 chars; fallback to the library question.
 
 const MAX_CHARS = 160;
 
-async function enforceLimit(text: string, fallback: string): Promise<string> {
+function enforceLimit(text: string, fallback: string): string {
   if (text.length <= MAX_CHARS) return text;
-  // Single retry: ask GPT to shorten to under 160 characters
-  try {
-    const resp = await ai().chat.completions.create({
-      model:       "gpt-4o-mini",
-      messages:    [{
-        role:    "user",
-        content: `Shorten this to under 160 characters, keeping only the single most important question: "${text}"`,
-      }],
-      temperature: 0.1,
-      max_tokens:  60,
-    });
-    const shortened = resp.choices[0]?.message?.content?.trim() ?? "";
-    return shortened.length > 0 && shortened.length <= MAX_CHARS ? shortened : fallback;
-  } catch {
-    // Last-resort: hard truncate at sentence boundary
-    const dot = text.lastIndexOf("?", MAX_CHARS);
-    return dot > 20 ? text.slice(0, dot + 1) : fallback;
-  }
+  const cut = text.lastIndexOf("?", MAX_CHARS - 1);
+  return cut > 20 ? text.slice(0, cut + 1) : fallback;
 }
 
 // ── Step 2: Generate next conversational response ─────────────────────────────
@@ -695,8 +835,7 @@ export async function generateResponse(params: {
       max_tokens:  60,
     });
     const raw = resp.choices[0]?.message?.content?.trim() ?? fallback;
-    // Fix 2: Hard-enforce 160-char limit with retry
-    return await enforceLimit(raw, fallback);
+    return enforceLimit(raw, fallback);
   } catch (e: any) {
     console.warn("[ConversationalEngine] Response gen failed:", e?.message);
     return fallback;

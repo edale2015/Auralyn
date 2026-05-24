@@ -1,0 +1,1378 @@
+{
+  "timestamp": "2026-05-24T18:14:17.252Z",
+  "totalScenarios": 17,
+  "passedScenarios": 17,
+  "failedScenarios": 0,
+  "avgLatencyMs": 1661,
+  "maxLatencyMs": 2502,
+  "falseERCount": 0,
+  "missedERCount": 0,
+  "results": [
+    {
+      "scenarioName": "Cough — simple viral URI, no ER",
+      "complaint": "cough",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": "treat_and_follow",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a cough",
+          "auraylnResponse": "How long have you had the cough?",
+          "latencyMs": 1635,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "about 3 days",
+          "auraylnResponse": "How would you describe the cough?",
+          "latencyMs": 1783,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes a little fever at first but not today",
+          "auraylnResponse": "Have you had any trouble breathing?",
+          "latencyMs": 1668,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no trouble breathing",
+          "auraylnResponse": "How has your cough been affecting you?",
+          "latencyMs": 1437,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "green-ish phlegm",
+          "auraylnResponse": "How severe is your cough right now?",
+          "latencyMs": 1717,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "no, I don't smoke",
+          "auraylnResponse": "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.",
+          "latencyMs": 1570,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no heart or lung problems",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 8,
+          "patientMessage": "just tired and body aches",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 8,
+      "avgLatencyMs": 1226.25,
+      "maxLatencyMs": 1783,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Cough — pneumonia, elderly, ER warranted",
+      "complaint": "cough",
+      "expectedDisposition": "er_now",
+      "actualDisposition": "er_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a cough",
+          "auraylnResponse": "How long have you had the cough?",
+          "latencyMs": 2261,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "about 4 days",
+          "auraylnResponse": "Have you experienced any shortness of breath?",
+          "latencyMs": 1728,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes fever 102 degrees",
+          "auraylnResponse": "Have you noticed any changes in your cough?",
+          "latencyMs": 2497,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "yes I am having trouble breathing",
+          "auraylnResponse": "How severe is your cough right now?",
+          "latencyMs": 1552,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "I am 82 years old",
+          "auraylnResponse": "Based on what you're telling me, please go to the ER right now. Don't delay.",
+          "latencyMs": 1587,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 5,
+      "avgLatencyMs": 1925,
+      "maxLatencyMs": 2497,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Cough — mild SOB, no ER (needs workup only)",
+      "complaint": "cough",
+      "expectedDisposition": "urgent_care_workup",
+      "actualDisposition": "urgent_care_workup",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a cough",
+          "auraylnResponse": "Can you tell me more about your trouble breathing?",
+          "latencyMs": 2502,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "5 days",
+          "auraylnResponse": "How would you describe your cough?",
+          "latencyMs": 1471,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes fever",
+          "auraylnResponse": "Are you experiencing any trouble breathing?",
+          "latencyMs": 2266,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "a little short of breath but I can talk fine",
+          "auraylnResponse": "Are you experiencing any additional symptoms?",
+          "latencyMs": 1911,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "yellow phlegm",
+          "auraylnResponse": "How severe is your cough right now?",
+          "latencyMs": 1648,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "I am 45",
+          "auraylnResponse": "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.",
+          "latencyMs": 1592,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no smoking, no lung problems",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 7,
+      "avgLatencyMs": 1627.142857142857,
+      "maxLatencyMs": 2502,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Headache — tension, no ER",
+      "complaint": "headache",
+      "expectedDisposition": "treat_and_watch",
+      "actualDisposition": "treat_and_watch",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a headache",
+          "auraylnResponse": "How would you rate your headache on a scale of 1 to 10?",
+          "latencyMs": 1459,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "it came on gradually over the morning",
+          "auraylnResponse": "Can you tell me how severe your headache is?",
+          "latencyMs": 1791,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "7 out of 10",
+          "auraylnResponse": "How are you feeling about your headache today?",
+          "latencyMs": 1837,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no this is not the worst headache of my life",
+          "auraylnResponse": "Have you experienced any weakness or numbness?",
+          "latencyMs": 1620,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no fever",
+          "auraylnResponse": "How is your headache affecting your daily activities?",
+          "latencyMs": 1336,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "no neck stiffness",
+          "auraylnResponse": "Have you noticed any vision changes or eye pain?",
+          "latencyMs": 1354,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no vision changes",
+          "auraylnResponse": "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.",
+          "latencyMs": 1288,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 8,
+          "patientMessage": "my neck is really tight and tense",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 8,
+      "avgLatencyMs": 1335.625,
+      "maxLatencyMs": 1837,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Headache — thunderclap, ambulance required",
+      "complaint": "headache",
+      "expectedDisposition": "ambulance_now",
+      "actualDisposition": "ambulance_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a terrible headache",
+          "auraylnResponse": "How would you rate your headache on a scale of 1 to 10?",
+          "latencyMs": 1881,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "it came on like a thunderclap, worst of my life",
+          "auraylnResponse": "This sounds like a medical emergency — call 911 right now. Don't wait or drive yourself.",
+          "latencyMs": 1452,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 2,
+      "avgLatencyMs": 1666.5,
+      "maxLatencyMs": 1881,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Headache — migraine history, no ER",
+      "complaint": "headache",
+      "expectedDisposition": "treat_and_watch",
+      "actualDisposition": "treat_and_watch",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a headache",
+          "auraylnResponse": "How would you rate your headache on a scale of 1 to 10?",
+          "latencyMs": 1521,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "gradual, been building for 2 hours",
+          "auraylnResponse": "How would you rate your headache on a scale of 1 to 10?",
+          "latencyMs": 1761,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "8 out of 10",
+          "auraylnResponse": "Can you tell me if you've had any vision changes?",
+          "latencyMs": 1767,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no this is my usual migraine",
+          "auraylnResponse": "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.",
+          "latencyMs": 1775,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no fever, no neck stiffness",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "sensitive to light and nauseous, typical for me",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "I have had migraines for 10 years",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 7,
+      "avgLatencyMs": 974.8571428571429,
+      "maxLatencyMs": 1775,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Sore throat — viral, no ER",
+      "complaint": "sore_throat",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": null,
+      "passDisposition": false,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a sore throat",
+          "auraylnResponse": "How long have you had the sore throat?",
+          "latencyMs": 2145,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "2 days",
+          "auraylnResponse": "How are you feeling about your sore throat?",
+          "latencyMs": 1816,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "mild, about a 4",
+          "auraylnResponse": "Are you having any trouble breathing?",
+          "latencyMs": 1477,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "yes some fever",
+          "auraylnResponse": "How is your breathing right now?",
+          "latencyMs": 1956,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no trouble swallowing",
+          "auraylnResponse": "Are you experiencing any high-pitched breathing sounds?",
+          "latencyMs": 1438,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "I have a cough and runny nose too",
+          "auraylnResponse": "Are you experiencing any high-pitched breathing sounds?",
+          "latencyMs": 1646,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no drooling or muffled voice",
+          "auraylnResponse": "Are you experiencing any high-pitched breathing sounds?",
+          "latencyMs": 1845,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 7,
+      "avgLatencyMs": 1760.4285714285713,
+      "maxLatencyMs": 2145,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Sore throat — strep pattern, treat not ER",
+      "complaint": "sore_throat",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": null,
+      "passDisposition": false,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a really bad sore throat",
+          "auraylnResponse": "How long have you been feeling this way?",
+          "latencyMs": 1440,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "started yesterday",
+          "auraylnResponse": "How are you feeling about your sore throat today?",
+          "latencyMs": 1562,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "9 out of 10, hurts to swallow",
+          "auraylnResponse": "Can you tell me more about your trouble breathing?",
+          "latencyMs": 2502,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "fever 101",
+          "auraylnResponse": "Are you having any trouble breathing?",
+          "latencyMs": 1938,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no cough",
+          "auraylnResponse": "How are you feeling about your sore throat today?",
+          "latencyMs": 2401,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "no trouble breathing",
+          "auraylnResponse": "Are you experiencing any high-pitched breathing sounds?",
+          "latencyMs": 1217,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "white patches on my tonsils",
+          "auraylnResponse": "Have you noticed any drooling with your symptoms?",
+          "latencyMs": 1522,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 7,
+      "avgLatencyMs": 1797.4285714285713,
+      "maxLatencyMs": 2502,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Sore throat — epiglottitis, ER now",
+      "complaint": "sore_throat",
+      "expectedDisposition": "er_now",
+      "actualDisposition": "er_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have a sore throat",
+          "auraylnResponse": "How long have you had the sore throat?",
+          "latencyMs": 1426,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "it came on very fast",
+          "auraylnResponse": "How long has the sore throat been bothering you?",
+          "latencyMs": 1863,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "I am drooling and having trouble swallowing",
+          "auraylnResponse": "Based on what you're telling me, please go to the ER right now. Don't delay.",
+          "latencyMs": 2501,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 3,
+      "avgLatencyMs": 1930,
+      "maxLatencyMs": 2501,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Nausea — gastroenteritis, no ER",
+      "complaint": "nausea",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": null,
+      "passDisposition": false,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have nausea",
+          "auraylnResponse": "How long have you been feeling nauseous?",
+          "latencyMs": 1603,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "since yesterday",
+          "auraylnResponse": "How are you feeling otherwise?",
+          "latencyMs": 1786,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes I vomited twice",
+          "auraylnResponse": "Have you noticed any blood in your vomit?",
+          "latencyMs": 1892,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no blood in vomit",
+          "auraylnResponse": "Have you been feeling weak or extremely tired?",
+          "latencyMs": 1791,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "some diarrhea",
+          "auraylnResponse": "Have you been feeling weak or extremely tired?",
+          "latencyMs": 1906,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "I can keep small sips of water down",
+          "auraylnResponse": "Have you been feeling weak or extremely tired?",
+          "latencyMs": 1749,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no severe abdominal pain",
+          "auraylnResponse": "Have you been feeling weak or extremely tired?",
+          "latencyMs": 1750,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 8,
+          "patientMessage": "no fever",
+          "auraylnResponse": "When was the last time you urinated?",
+          "latencyMs": 2028,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 8,
+      "avgLatencyMs": 1813.125,
+      "maxLatencyMs": 2028,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Nausea — unable to keep fluids, ER",
+      "complaint": "nausea",
+      "expectedDisposition": "er_now",
+      "actualDisposition": "er_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have nausea and vomiting",
+          "auraylnResponse": "How long have you been feeling this way?",
+          "latencyMs": 1746,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "2 days",
+          "auraylnResponse": "Have you been unable to keep fluids down?",
+          "latencyMs": 1841,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "I cannot keep anything down, not even water",
+          "auraylnResponse": "Have you noticed any blood in your vomit?",
+          "latencyMs": 1650,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "I feel very weak and dizzy",
+          "auraylnResponse": "Based on what you're telling me, please go to the ER right now. Don't delay.",
+          "latencyMs": 2105,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 4,
+      "avgLatencyMs": 1835.5,
+      "maxLatencyMs": 2105,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Back pain — musculoskeletal, no ER",
+      "complaint": "back_pain",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": "treat_and_follow",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have back pain",
+          "auraylnResponse": "Can you tell me where in your back it hurts?",
+          "latencyMs": 1594,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "2 days, I was moving furniture",
+          "auraylnResponse": "Can you share more about where the pain is located?",
+          "latencyMs": 1970,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "7 out of 10",
+          "auraylnResponse": "How is your urination or stool control?",
+          "latencyMs": 1311,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no fever",
+          "auraylnResponse": "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.",
+          "latencyMs": 1368,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no weakness in my legs",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "no bladder or bowel problems",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "no numbness",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 8,
+          "patientMessage": "it is worse when I move and better when I rest",
+          "auraylnResponse": "The doctor has your information and will follow up shortly.",
+          "latencyMs": 0,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 8,
+      "avgLatencyMs": 780.375,
+      "maxLatencyMs": 1970,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Back pain — cauda equina, ER now",
+      "complaint": "back_pain",
+      "expectedDisposition": "er_now",
+      "actualDisposition": "er_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have bad back pain",
+          "auraylnResponse": "Can you tell me where in your back it hurts?",
+          "latencyMs": 1664,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "started this morning",
+          "auraylnResponse": "Can you tell me more about your urination or stool control?",
+          "latencyMs": 2500,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "I cannot control my bladder",
+          "auraylnResponse": "Based on what you're telling me, please go to the ER right now. Don't delay.",
+          "latencyMs": 1963,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 3,
+      "avgLatencyMs": 2042.3333333333333,
+      "maxLatencyMs": 2500,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "UTI — uncomplicated, treat not ER",
+      "complaint": "uti",
+      "expectedDisposition": "treat_and_follow",
+      "actualDisposition": null,
+      "passDisposition": false,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have burning when I urinate",
+          "auraylnResponse": "Have you noticed any additional symptoms?",
+          "latencyMs": 1922,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "2 days",
+          "auraylnResponse": "Have you had a high temperature recently?",
+          "latencyMs": 1781,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes frequency and urgency",
+          "auraylnResponse": "Have you experienced any flank pain?",
+          "latencyMs": 2349,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no fever",
+          "auraylnResponse": "Have you experienced any nausea?",
+          "latencyMs": 1716,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no back or flank pain",
+          "auraylnResponse": "Have you noticed any blood in your urine?",
+          "latencyMs": 2283,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "I am a 28 year old woman",
+          "auraylnResponse": "Have you noticed any blood in your urine?",
+          "latencyMs": 2012,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "not pregnant",
+          "auraylnResponse": "Have you noticed any blood in your urine?",
+          "latencyMs": 2096,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 7,
+      "avgLatencyMs": 2022.7142857142858,
+      "maxLatencyMs": 2349,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "UTI — pyelonephritis, ER warranted",
+      "complaint": "uti",
+      "expectedDisposition": "er_now",
+      "actualDisposition": "er_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have burning when I urinate",
+          "auraylnResponse": "Have you noticed any additional symptoms?",
+          "latencyMs": 2458,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "3 days",
+          "auraylnResponse": "Have you had a high temperature recently?",
+          "latencyMs": 1741,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "yes fever 103",
+          "auraylnResponse": "How long have you been feeling this way?",
+          "latencyMs": 1717,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "yes my back and right side really hurt",
+          "auraylnResponse": "Based on what you're telling me, please go to the ER right now. Don't delay.",
+          "latencyMs": 1873,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 4,
+      "avgLatencyMs": 1947.25,
+      "maxLatencyMs": 2458,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Chest pain — musculoskeletal, no ER",
+      "complaint": "chest_pain",
+      "expectedDisposition": "urgent_care_workup",
+      "actualDisposition": null,
+      "passDisposition": false,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have chest pain",
+          "auraylnResponse": "Can you describe how severe your chest pain is?",
+          "latencyMs": 2194,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "started after I did pushups yesterday",
+          "auraylnResponse": "How would you rate your chest pain on a scale of 1 to 10?",
+          "latencyMs": 2301,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "sharp, worse when I breathe in",
+          "auraylnResponse": "Has the pain spread to your arm or jaw?",
+          "latencyMs": 2082,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "no pressure or squeezing",
+          "auraylnResponse": "Have you experienced any shortness of breath?",
+          "latencyMs": 2384,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "no arm pain, no jaw pain",
+          "auraylnResponse": "Can you tell me more about your shortness of breath?",
+          "latencyMs": 2502,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 6,
+          "patientMessage": "no sweating or nausea",
+          "auraylnResponse": "Have you had any chest discomfort or pressure?",
+          "latencyMs": 1955,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 7,
+          "patientMessage": "I am 25, healthy, no heart problems",
+          "auraylnResponse": "Have you experienced fainting or near-fainting?",
+          "latencyMs": 2138,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 8,
+          "patientMessage": "it hurts when I press on it",
+          "auraylnResponse": "Have you experienced fainting or near-fainting?",
+          "latencyMs": 2167,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 8,
+      "avgLatencyMs": 2215.375,
+      "maxLatencyMs": 2502,
+      "passed": true,
+      "failReasons": []
+    },
+    {
+      "scenarioName": "Chest pain — STEMI pattern, ambulance",
+      "complaint": "chest_pain",
+      "expectedDisposition": "ambulance_now",
+      "actualDisposition": "ambulance_now",
+      "passDisposition": true,
+      "passNoFalseER": true,
+      "turnResults": [
+        {
+          "turn": 1,
+          "patientMessage": "I have chest pain",
+          "auraylnResponse": "Can you tell me how severe your chest pain is?",
+          "latencyMs": 2253,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 2,
+          "patientMessage": "pressure, like an elephant on my chest",
+          "auraylnResponse": "Can you tell me more about your sudden or gradual onset?",
+          "latencyMs": 2501,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 3,
+          "patientMessage": "started 30 minutes ago",
+          "auraylnResponse": "How would you describe the pain's location?",
+          "latencyMs": 2416,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 4,
+          "patientMessage": "yes radiating to my left arm and jaw",
+          "auraylnResponse": "Can you tell me more about your radiation to arm or jaw?",
+          "latencyMs": 2501,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        },
+        {
+          "turn": 5,
+          "patientMessage": "yes sweating",
+          "auraylnResponse": "This sounds like a medical emergency — call 911 right now. Don't wait or drive yourself.",
+          "latencyMs": 1852,
+          "passLatency": true,
+          "passLength": true,
+          "passSingleQuestion": true,
+          "passNoList": true,
+          "passNaturalTone": true
+        }
+      ],
+      "totalTurns": 5,
+      "avgLatencyMs": 2304.6,
+      "maxLatencyMs": 2501,
+      "passed": true,
+      "failReasons": []
+    }
+  ]
+}

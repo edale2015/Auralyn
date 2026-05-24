@@ -1,0 +1,85 @@
+name: Conversation Harness — 17/17 Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/whatsapp/conversationalEngine.ts'
+      - 'server/tests/conversationTestHarness.ts'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/whatsapp/conversationalEngine.ts'
+      - 'server/tests/conversationTestHarness.ts'
+      - 'server/**'
+  workflow_dispatch:
+
+jobs:
+  conversation-harness:
+    name: Automated Conversation Test (17/17 required)
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Check for required secrets
+        id: check-secrets
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⚠️  OPENAI_API_KEY not set — skipping conversation harness (add secret to enable)"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run conversation test harness (17/17 required, max latency <5000ms)
+        if: steps.check-secrets.outputs.skip == 'false'
+        run: npm run test:conversation
+        timeout-minutes: 5
+
+      - name: Parse harness results
+        if: steps.check-secrets.outputs.skip == 'false'
+        run: |
+          RESULT_FILE=$(ls server/eval/results/conversation_harness_*.json 2>/dev/null | sort | tail -1)
+          if [ -z "$RESULT_FILE" ]; then
+            echo "No results file found — harness may have crashed"
+            exit 1
+          fi
+          echo "Results file: $RESULT_FILE"
+          PASSED=$(node -e "const r=require('$RESULT_FILE'); console.log(r.passed ?? r.summary?.passed ?? 0)")
+          TOTAL=$(node  -e "const r=require('$RESULT_FILE'); console.log(r.total  ?? r.summary?.total  ?? 17)")
+          AVG_MS=$(node -e "const r=require('$RESULT_FILE'); console.log(r.avgLatencyMs ?? r.summary?.avgLatencyMs ?? 'N/A')")
+          MAX_MS=$(node -e "const r=require('$RESULT_FILE'); console.log(r.maxLatencyMs ?? r.summary?.maxLatencyMs ?? 'N/A')")
+          FALSE_ER=$(node -e "const r=require('$RESULT_FILE'); console.log(r.falseEscalations ?? r.summary?.falseEscalations ?? 0)")
+          echo "Passed:           $PASSED / $TOTAL"
+          echo "Avg latency:      ${AVG_MS}ms"
+          echo "Max latency:      ${MAX_MS}ms"
+          echo "False escalations: $FALSE_ER"
+          if [ "$PASSED" -lt "$TOTAL" ]; then
+            echo "❌ FAILED: only $PASSED/$TOTAL scenarios passed — $((TOTAL - PASSED)) regression(s)"
+            exit 1
+          fi
+          if [ "$FALSE_ER" -gt "0" ]; then
+            echo "❌ FAILED: $FALSE_ER false ER escalation(s) detected"
+            exit 1
+          fi
+          echo "✅ All $PASSED/$TOTAL scenarios passed — avg ${AVG_MS}ms, max ${MAX_MS}ms, 0 false ER escalations"
