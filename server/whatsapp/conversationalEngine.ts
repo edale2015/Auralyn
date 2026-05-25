@@ -190,6 +190,74 @@ export function getGoals(slug: string): ClinicalGoal[] {
   return COMPLAINT_GOALS[slug] ?? DEFAULT_GOALS;
 }
 
+/**
+ * Safety fields can only be set in response to a direct question about that specific
+ * field. The initial complaint ("My head and neck hurt") may mention symptom words,
+ * but the LLM must NOT infer safety fields from prose — those values gate ER/ambulance
+ * escalations and demand an explicit patient confirmation to a targeted question.
+ */
+export function isSafetyField(slug: string, field: string): boolean {
+  return getGoals(slug).some(g => g.safety && g.field === field);
+}
+
+/**
+ * Boolean safety fields require a clean yes/no/true/false answer — never an
+ * inferred value derived from prose. Used to block "stiff_neck: \"head and neck hurt\""
+ * style LLM hallucinations from passing the safety-field gate.
+ */
+const BOOLEAN_SAFETY_FIELDS = new Set([
+  "stiff_neck", "thunderclap", "neuro_deficit", "vision_threatening",
+  "dyspnea", "diaphoresis", "syncope", "stridor", "drooling",
+  "bowel_bladder", "blood_stool", "rigidity", "altered_mental",
+  "unable_keep_fluids", "weakness", "oliguria", "hematuria",
+  "flank_pain", "fever", "rash", "immunocompromised", "eye_swelling",
+  "severe_headache", "neck_stiff", "vision_change", "pregnancy",
+]);
+
+/**
+ * Strict yes/no/boolean check. Returns true ONLY for literal booleans or the
+ * strings "yes"/"no"/"true"/"false". Anything else (prose, numbers, vague
+ * descriptors) returns false so the safety-field gate drops it.
+ */
+function isStrictYesNo(v: any): boolean {
+  if (typeof v === "boolean") return true;
+  if (typeof v !== "string") return false;
+  const s = v.toLowerCase().trim();
+  return s === "yes" || s === "no" || s === "true" || s === "false";
+}
+
+/**
+ * Safety-field gate: returns true iff this field may be set from the current
+ * patient message. The rule (enforced fail-closed):
+ *
+ *   1. Non-safety fields always pass.
+ *   2. On the first message (initial complaint), NO safety field can be set —
+ *      no question has been asked yet, so no answer can exist.
+ *   3. On later turns, a safety field can be set only if it matches the
+ *      specific safety question the assistant just asked (`pendingSafetyAsk`).
+ *   4. For boolean safety fields, the value must be a clean yes/no/true/false —
+ *      this blocks the LLM from extracting stiff_neck:"head and neck hurt".
+ */
+export function canExtractSafetyField(
+  slug: string,
+  field: string,
+  value: any,
+  isFirstMessage: boolean,
+  pendingSafetyAsk: string | null,
+): boolean {
+  if (!isSafetyField(slug, field)) return true;
+  if (isFirstMessage) return false;
+  if (!pendingSafetyAsk || field !== pendingSafetyAsk) return false;
+  if (BOOLEAN_SAFETY_FIELDS.has(field) && !isStrictYesNo(value)) return false;
+  return true;
+}
+
+/** Returns the next safety field that is still missing from `fields`, or null. */
+export function nextSafetyFieldKey(slug: string, fields: Record<string, any>): string | null {
+  const missing = getGoals(slug).filter(g => g.safety && isNull(fields[g.field]));
+  return missing[0]?.field ?? null;
+}
+
 /** Returns human-readable labels for missing safety fields (used in GPT prompts). */
 export function getMissingSafetyFields(slug: string, fields: Record<string, any>): string[] {
   return getGoals(slug)
@@ -552,7 +620,8 @@ export interface ExtractionResult {
 export async function extractClinicalFields(
   patientMessage: string,
   existingFields:  Record<string, any>,
-  slug:            string
+  slug:            string,
+  pendingSafetyAsk: string | null = null,
 ): Promise<ExtractionResult> {
   const goals = getGoals(slug);
   const fieldList = goals.map(g => g.field).join(", ");
@@ -588,10 +657,16 @@ export async function extractClinicalFields(
       response_format: { type: "json_object" },
     });
     const parsed = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
-    // Filter out null values — only keep newly confirmed fields
+    // Filter out null values — only keep newly confirmed fields.
+    // Safety fields are gated by canExtractSafetyField: never inferred from
+    // prose like "my head and neck hurt". Caller-controlled isFirstMessage is
+    // not modeled here (this entrypoint is unused in production), but the
+    // pendingSafetyAsk + boolean-value checks still apply.
     const extracted: Record<string, any> = {};
     for (const [k, v] of Object.entries(parsed.extracted ?? {})) {
-      if (!isNull(v)) extracted[k] = v;
+      if (isNull(v)) continue;
+      if (!canExtractSafetyField(slug, k, v, false, pendingSafetyAsk)) continue;
+      extracted[k] = v;
     }
     return {
       extracted,
@@ -610,9 +685,13 @@ export async function extractClinicalFields(
 // Used by conversationalEngine.getNextResponse to stay under the 3 s per-turn SLA.
 
 interface CombinedResult {
-  extracted:    Record<string, any>;
-  needs_probe:  string[];
-  response:     string;
+  extracted:     Record<string, any>;
+  needs_probe:   string[];
+  response:      string;
+  // The safety field this response asks about, or null. Caller stores this on
+  // the session and passes it back on the NEXT turn as `pendingSafetyAsk` so
+  // safety-field extraction is gated to "the question we actually just asked".
+  nextSafetyAsk: string | null;
 }
 
 export async function extractAndRespond(
@@ -621,6 +700,7 @@ export async function extractAndRespond(
   slug:           string,
   exchanges:      Array<{ role: string; text: string }>,
   isFirstMessage: boolean,
+  pendingSafetyAsk: string | null = null,
 ): Promise<CombinedResult> {
   const goals        = getGoals(slug);
   const fieldList    = goals.map(g => g.field).join(", ");
@@ -643,10 +723,23 @@ export async function extractAndRespond(
   const fallbackField = _safetyKeys[0] ?? _otherKeys[0] ?? "severity";
   const fallbackText  = _questionFor(slug, fallbackField);
 
+  // Safety fields gate ER/ambulance escalations — they MUST come from a direct
+  // yes/no answer to a targeted question. Even if the patient writes "my head
+  // and neck hurt", the LLM must not infer stiff_neck:true from prose.
+  const safetyFieldList = getGoals(slug).filter(g => g.safety).map(g => g.field).join(", ") || "(none)";
+  const safetyAskClause = isFirstMessage
+    ? `THIS IS THE FIRST MESSAGE — no safety question has been asked yet, so NO safety field can possibly have been answered. Set EVERY safety field to null without exception, even if the complaint text mentions body parts (e.g., "my head and neck hurt" must NOT set stiff_neck).`
+    : pendingSafetyAsk
+      ? `The ONLY safety field you may set this turn is "${pendingSafetyAsk}" — and only if the patient just answered the targeted question with an explicit yes/no. Set every other safety field to null.`
+      : `Set ALL safety fields to null. No safety question is pending; the patient cannot have answered one.`;
+
   const system =
     `You are Auralyn, a clinical intake assistant. Return ONLY valid JSON.\n\n` +
     `EXTRACTION RULE — CRITICAL: Set a field to true/false/value ONLY if the patient EXPLICITLY mentioned it. ` +
     `If not mentioned, set to null. NEVER guess or default to false/no for unstated fields.\n\n` +
+    `SAFETY-FIELD RULE — CRITICAL: Safety fields (${safetyFieldList}) trigger emergency escalation. ` +
+    `They may ONLY be set when the patient is directly answering the specific question we asked about that field. ` +
+    `NEVER infer a safety field from the initial complaint, chat history, or any prose mention. ${safetyAskClause}\n\n` +
     `RULES:\n` +
     `1. Extract clinical fields from the patient message (boolean fields: true=yes, false=no, null=not mentioned).\n` +
     `2. Write "response": ONE short question, under 80 characters, warm tone.\n` +
@@ -664,9 +757,15 @@ export async function extractAndRespond(
   const nonSafetyAnswered = goals
     .filter(g => !g.safety && !isNull(existingFields[g.field]))
     .length;
+  // askNext is the human-readable LABEL used in the prompt. askNextField is the
+  // matching field KEY — used downstream to record which safety field this
+  // response queries (so the next turn can gate extraction to it).
   const askNext = (nonSafetyAnswered === 0 && missingOther.length > 0)
     ? missingOther[0]
     : (missingSafety[0] ?? missingOther[0] ?? "(complete)");
+  const askNextField = (nonSafetyAnswered === 0 && _otherKeys.length > 0)
+    ? _otherKeys[0]
+    : (_safetyKeys[0] ?? _otherKeys[0] ?? "");
 
   const user =
     `Complaint: ${slug.replace(/_/g, " ")}\n` +
@@ -691,9 +790,17 @@ export async function extractAndRespond(
     const resp = await Promise.race([callPromise, timeoutPromise]);
     const parsed = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
 
+    // Filter extraction via the canonical safety-field gate. The gate enforces:
+    //   - first message → drop every safety field (no question has been asked)
+    //   - later turns → drop unless the field matches `pendingSafetyAsk`
+    //   - boolean safety fields → require a strict yes/no/true/false value
+    // This is the deterministic block that prevents "my head and neck hurt"
+    // from being re-emitted as stiff_neck:true.
     const extracted: Record<string, any> = {};
     for (const [k, v] of Object.entries(parsed.extracted ?? {})) {
-      if (!isNull(v)) extracted[k] = v;
+      if (isNull(v)) continue;
+      if (!canExtractSafetyField(slug, k, v, isFirstMessage, pendingSafetyAsk)) continue;
+      extracted[k] = v;
     }
 
     // Boolean field guard: reject numbers > 1 assigned to yes/no fields.
@@ -722,24 +829,41 @@ export async function extractAndRespond(
     // Scrub any "er " substring that would trigger the false-ER detector
     response = scrubResponse(response);
 
+    // The fallback path uses askNextField as the question; the LLM is prompted
+    // to ask the same field. Whichever wording wins, the safety field being
+    // queried is askNextField if askNextField is itself a safety field.
+    const nextSafetyAsk = isSafetyField(slug, askNextField) ? askNextField : null;
+
     return {
       extracted,
       needs_probe: Array.isArray(parsed.needs_probe) ? parsed.needs_probe : [],
       response,
+      nextSafetyAsk,
     };
   } catch (e: any) {
     const isTimeout = (e?.message ?? "").includes("GPT timeout");
     console.warn(`[ConversationalEngine] CombinedCall ${isTimeout ? "timed out (>2500ms)" : "failed"}: ${e?.message}`);
     // On timeout/failure: deterministic keyword extractor for safety fields +
-    // pre-written question from the library for the next field.
-    const keywordFields = _keywordExtract(slug, patientMessage);
-    return { extracted: keywordFields, needs_probe: [], response: fallbackText };
+    // pre-written question from the library for the next field. The keyword
+    // extractor honors the same first-message + pendingSafetyAsk gate.
+    const keywordFields = _keywordExtract(slug, patientMessage, pendingSafetyAsk, isFirstMessage);
+    const nextSafetyAsk = isSafetyField(slug, fallbackField) ? fallbackField : null;
+    return { extracted: keywordFields, needs_probe: [], response: fallbackText, nextSafetyAsk };
   }
 }
 
 // ── Keyword-based fallback extractor (no LLM required) ────────────────────────
 // Used when the combined GPT call times out so safety checks still fire.
-function _keywordExtract(slug: string, msg: string): Record<string, any> {
+// Safety fields are gated by canExtractSafetyField — regex pattern matches on
+// prose like "my head and neck hurt" must NOT set stiff_neck:true; that field
+// can only be set in response to the targeted question "Is your neck stiff or
+// painful to move?".
+function _keywordExtract(
+  slug: string,
+  msg: string,
+  pendingSafetyAsk: string | null = null,
+  isFirstMessage: boolean = false,
+): Record<string, any> {
   const m = msg.toLowerCase();
   const f: Record<string, any> = {};
 
@@ -841,6 +965,17 @@ function _keywordExtract(slug: string, msg: string): Record<string, any> {
   // Rhinorrhea / nasal congestion
   if (/\b(runny\s+nose|stuffy\s+nose|nasal\s+congestion|sinus\s+(congestion|pressure|drainage)|rhinorrhea|post.?nasal\s+drip|sneezing)\b/.test(m) && !isNegated) f.rhinorrhea = true;
   if (/\bno\s+(runny|stuffy)\s+nose\b/.test(m)) f.rhinorrhea = false;
+
+  // Safety-field gate: keyword regexes scan prose and would set stiff_neck:true
+  // on "my head and neck hurt" — that is exactly the inference the user has
+  // forbidden. Run every match through the canonical gate so it drops on first
+  // message, drops when the field isn't the one we just asked about, and drops
+  // when the value isn't a clean yes/no for boolean safety fields.
+  for (const k of Object.keys(f)) {
+    if (!canExtractSafetyField(slug, k, f[k], isFirstMessage, pendingSafetyAsk)) {
+      delete f[k];
+    }
+  }
 
   return f;
 }
@@ -1220,6 +1355,7 @@ interface _Session {
   closed:                boolean;
   questionIndex:         number;   // how many sequence questions have been asked
   awaitingPhysicianReview: boolean; // R005: set before any disposition fires
+  pendingSafetyAsk:      string | null; // safety field the assistant just asked about; null until a safety question has been posed
 }
 
 const _sessions = new Map<string, _Session>();
@@ -1408,6 +1544,7 @@ export const conversationalEngine = {
         closed:                false,
         questionIndex:         0,
         awaitingPhysicianReview: false,
+        pendingSafetyAsk:      null,
       };
       _sessions.set(threadId, session);
 
@@ -1438,8 +1575,10 @@ export const conversationalEngine = {
 
     session.exchanges.push({ role: "user", text: message });
 
-    // Always run keyword extract + safety check synchronously (0ms, R006)
-    const quickFields = _keywordExtract(session.slug, message);
+    // Always run keyword extract + safety check synchronously (0ms, R006).
+    // Safety fields are gated to the pending direct question — keyword regex on
+    // prose like "my head and neck hurt" must not set stiff_neck:true.
+    const quickFields = _keywordExtract(session.slug, message, session.pendingSafetyAsk);
     Object.assign(session.fields, quickFields);
 
     const quickSafety = _checkSafety(session.slug, session.fields);
@@ -1471,9 +1610,13 @@ export const conversationalEngine = {
       session.slug,
       session.exchanges,
       false,
+      session.pendingSafetyAsk,
     );
     Object.assign(session.fields, combined.extracted);
     session.questionIndex = Math.max(session.questionIndex + 1, MIN_QUESTIONS_BEFORE_DISPOSITION);
+    // Whatever safety field this response asks about becomes the only safety
+    // field the patient can answer on the next turn.
+    session.pendingSafetyAsk = combined.nextSafetyAsk;
 
     // Post-GPT safety check
     const safety = _checkSafety(session.slug, session.fields);

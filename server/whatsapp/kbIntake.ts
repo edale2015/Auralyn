@@ -45,6 +45,10 @@ interface HotSession {
   exchanges:       Array<{ role: string; text: string }>;  // last N turns
   state:           string;
   createdAt:       number;
+  // The safety field the LAST assistant response asked about. The next patient
+  // message can only set THAT safety field — nothing else. Null on the very
+  // first turn (no safety question has been posed yet).
+  pendingSafetyAsk?: string | null;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -428,7 +432,7 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Create session in memory immediately (instant) ──────────────────────
     const nowIso = new Date().toISOString();
     const caseId = `CASE_${nowIso.replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-    session = { caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [], state: "DRAFT", createdAt: Date.now() };
+    session = { caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [], state: "DRAFT", createdAt: Date.now(), pendingSafetyAsk: null };
     hotSet(threadId, session);
 
     // ── Background: persist to Firestore + audit (never blocks patient) ──────
@@ -468,15 +472,22 @@ export async function handleWhatsAppKBIntake(params: {
     // keyword-extraction + question-library fallback. Extracted fields drive
     // conversational continuity only — session.answers stays {} so LLM-extracted
     // safety fields can never fire a red-flag rule on this or any subsequent message.
+    //
+    // pendingSafetyAsk is null here: no safety question has been posed yet, so
+    // extractAndRespond will reject every safety-field guess (e.g. stiff_neck
+    // inferred from "my head and neck hurt").
     console.log('[T4] extractAndRespond from initial message', Date.now());
-    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true);
+    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true, null);
 
-    session.extractedFields = initCombined.extracted;
-    session.answers         = {};
+    session.extractedFields  = initCombined.extracted;
+    session.answers          = {};
     session.exchanges = [
       { role: "user",      text: rawText              },
       { role: "assistant", text: initCombined.response },
     ];
+    // Whatever safety field this first response asked about becomes the only
+    // safety field the patient can answer on their next message.
+    session.pendingSafetyAsk = initCombined.nextSafetyAsk;
     hotSet(threadId, session);
 
     await sendWhatsAppMessage(cleanFrom, initCombined.response);
@@ -545,6 +556,10 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   // ── Step 2: Single combined LLM call (extract + next question, 2.5s timeout) ─
+  // session.pendingSafetyAsk is the safety field the previous assistant
+  // response asked about (or null). extractAndRespond will drop any safety
+  // field extraction that doesn't match — so chat-history phrases like
+  // "my head and neck hurt" can't get re-emitted as stiff_neck:true.
   console.log('[T4] extractAndRespond', Date.now());
   const exchanges = session.exchanges ?? [];
   const combined  = await extractAndRespond(
@@ -553,14 +568,16 @@ export async function handleWhatsAppKBIntake(params: {
     complaint.slug,
     exchanges,
     false,
+    session.pendingSafetyAsk ?? null,
   );
 
   // Merge extracted fields into session
   const updatedFields  = { ...(session.extractedFields ?? {}), ...combined.extracted };
   const updatedAnswers = { ...answers, ...mapFieldsToQIds(complaint.slug, combined.extracted) };
 
-  session.extractedFields = updatedFields;
-  session.answers         = updatedAnswers;
+  session.extractedFields  = updatedFields;
+  session.answers          = updatedAnswers;
+  session.pendingSafetyAsk = combined.nextSafetyAsk;
   persistState(updatedAnswers);
 
   // ── Step 3: Rule-pipeline safety check on the updated answers (~50-100ms) ──
