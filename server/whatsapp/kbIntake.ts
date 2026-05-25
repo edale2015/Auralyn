@@ -14,6 +14,13 @@ import {
   mapFieldsToQIds,
   isComplete,
 } from "./conversationalEngine";
+import { hasSystemPrompt } from "./agent/prompts/registry";
+import {
+  startAgentSession,
+  nextReply as agentNextReply,
+  type AgentSession,
+} from "./agent/streamingAgent";
+import { buildPhysicianPacket, formatPhysicianPacket } from "./agent/physicianPacket";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
@@ -49,6 +56,12 @@ interface HotSession {
   // message can only set THAT safety field — nothing else. Null on the very
   // first turn (no safety question has been posed yet).
   pendingSafetyAsk?: string | null;
+  // Streaming-agent session. Present when the matched complaint slug has a
+  // registered system prompt; every patient message is forwarded to Claude
+  // Sonnet with the system prompt + full history (ONE LLM call per turn, no
+  // per-turn database calls). Null on slugs without a system prompt, which
+  // fall back to the legacy extract-and-respond path until they get one.
+  agent?:          AgentSession | null;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -247,6 +260,55 @@ function buildTriageFromPipeline(p: PipelineResult): Record<string, any> {
   };
 }
 
+// ── Streaming-agent close: ONE database read, then physician-queue handoff ───
+//
+// Called once per agent-driven conversation, immediately after the model has
+// emitted the fixed handoff message (already sent to the patient by the
+// caller). Pulls the clinical-knowledge entry for the matched complaint and
+// writes a single physician-review record. NEVER tells the patient anything
+// about disposition — that's the physician's call.
+async function deliverAgentClose(params: {
+  session:   AgentSession;
+  caseId:    string;
+  cleanFrom: string;
+  threadId:  string;
+}): Promise<void> {
+  const { session, caseId, threadId } = params;
+  const packet = buildPhysicianPacket({ caseId, session });
+  if (!packet) {
+    console.warn(`[WhatsApp] no physician packet built for slug ${session.slug} (no knowledge registered)`);
+    hotDel(threadId);
+    return;
+  }
+
+  const reviewText = formatPhysicianPacket(packet);
+
+  setImmediate(() => {
+    // Triage row: status NEEDS_REVIEW (physician decides), no AI-named
+    // disposition. The transcript + clinical reference live in the review
+    // packet attached below.
+    setTriage(caseId, {
+      disposition:      "needs_review",
+      confidence:       "PENDING_PHYSICIAN",
+      topCluster:       packet.display,
+      rfTriggered:      [],
+      consistencyFlags: [],
+      physicianPacket:  reviewText,
+    } as any, "NEEDS_REVIEW" as any).catch(() => {});
+
+    endSession(caseId, "needs_review" as any).catch(() => {});
+
+    logInteraction({
+      sessionId: caseId, caseId, channel: "whatsapp",
+      direction: "outbound", skillName: "agent_close",
+      messageText:  "[handoff message sent to patient]",
+      responseText: `slug=${packet.slug}|closeReason=${packet.closeReason ?? "unknown"}|durationMs=${packet.durationMs}`,
+    }).catch(() => {});
+  });
+
+  hotDel(threadId);
+}
+
 // ── Triage runner (zero LLM — pure rule engine) ────────────────────────────────
 async function runTriageAndSend(params: {
   caseId: string;
@@ -432,7 +494,17 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Create session in memory immediately (instant) ──────────────────────
     const nowIso = new Date().toISOString();
     const caseId = `CASE_${nowIso.replace(/[-:.TZ]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-    session = { caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [], state: "DRAFT", createdAt: Date.now(), pendingSafetyAsk: null };
+    // Streaming-agent slugs (currently neuro_headache; the rest will register
+    // their system prompts in agent/prompts/registry.ts as they're written).
+    // For agent-driven slugs every patient turn is a single LLM call; there
+    // is no per-turn DB call and no rule engine. For non-agent slugs we fall
+    // through to the legacy extract-and-respond path below.
+    const agentSession = hasSystemPrompt(match.slug) ? startAgentSession(match.slug) : null;
+    session = {
+      caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [],
+      state: "DRAFT", createdAt: Date.now(), pendingSafetyAsk: null,
+      agent: agentSession,
+    };
     hotSet(threadId, session);
 
     // ── Background: persist to Firestore + audit (never blocks patient) ──────
@@ -454,9 +526,8 @@ export async function handleWhatsAppKBIntake(params: {
       logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
     });
 
-    // First-message hard stop: deterministic keyword scan. Runs BEFORE the LLM
-    // call so an explicit emergency phrase short-circuits the 2.5s round-trip.
-    // The LLM is NEVER trusted to trigger a hard stop on the initial complaint.
+    // First-message hard stop: deterministic keyword scan. Runs BEFORE any
+    // engine work so an explicit emergency phrase short-circuits immediately.
     if (hasInstantEscalationInText(rawText)) {
       setImmediate(() => {
         setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — initial message keyword", rfTriggered: ["KEYWORD_ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
@@ -467,15 +538,31 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
-    // ── Single combined LLM call: extract + generate first question (2.5s timeout) ─
-    // extractAndRespond has a hard 2.5s timeout and a deterministic
-    // keyword-extraction + question-library fallback. Extracted fields drive
-    // conversational continuity only — session.answers stays {} so LLM-extracted
-    // safety fields can never fire a red-flag rule on this or any subsequent message.
-    //
-    // pendingSafetyAsk is null here: no safety question has been posed yet, so
-    // extractAndRespond will reject every safety-field guess (e.g. stiff_neck
-    // inferred from "my head and neck hurt").
+    // ── Streaming-agent path: ONE LLM call to generate the first question ───
+    // The initial complaint message is the first patient turn. We feed it to
+    // Claude Sonnet with the loaded system prompt; the assistant's reply is
+    // its first triage question (usually age + sex per the protocol).
+    if (agentSession) {
+      const reply = await agentNextReply(agentSession, rawText);
+      session.exchanges = [
+        { role: "user",      text: rawText    },
+        { role: "assistant", text: reply.text },
+      ];
+      hotSet(threadId, session);
+      await sendWhatsAppMessage(cleanFrom, reply.text);
+      console.log('[T5] sendWhatsAppMessage done', Date.now(), `agent latency=${reply.latencyMs}ms`);
+
+      // It is extraordinarily unlikely for the model to close on turn 1, but
+      // if it ever did (e.g. a forced handoff), drain the packet so we never
+      // leave the patient mid-air.
+      if (reply.closed) {
+        await deliverAgentClose({ session: agentSession, caseId, cleanFrom, threadId });
+      }
+      return true;
+    }
+
+    // ── Legacy path (slugs without a registered protocol): one LLM call to
+    // extract + generate the first question.
     console.log('[T4] extractAndRespond from initial message', Date.now());
     const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true, null);
 
@@ -485,8 +572,6 @@ export async function handleWhatsAppKBIntake(params: {
       { role: "user",      text: rawText              },
       { role: "assistant", text: initCombined.response },
     ];
-    // Whatever safety field this first response asked about becomes the only
-    // safety field the patient can answer on their next message.
     session.pendingSafetyAsk = initCombined.nextSafetyAsk;
     hotSet(threadId, session);
 
@@ -552,6 +637,29 @@ export async function handleWhatsAppKBIntake(params: {
   if (CRITICAL_PHRASES.some(p => rawText.toLowerCase().includes(p))) {
     console.log(`[WhatsApp] 🚨 Keyword escalation triggered`);
     await doEscalation(answers, "keyword");
+    return true;
+  }
+
+  // ── Streaming-agent branch: ONE LLM call per turn, NO per-turn DB ─────────
+  //
+  // The agent owns the conversation. It returns the next assistant reply
+  // (already sent to the patient verbatim) and a `closed` flag. The single
+  // database read in the entire conversation lifecycle is buildPhysicianPacket
+  // at close, fired from deliverAgentClose.
+  if (session.agent) {
+    const reply = await agentNextReply(session.agent, rawText);
+    session.exchanges = [
+      ...(session.exchanges ?? []),
+      { role: "user",      text: rawText    },
+      { role: "assistant", text: reply.text },
+    ].slice(-40);
+    hotSet(threadId, session);
+    await sendWhatsAppMessage(cleanFrom, reply.text);
+    console.log('[T5] sendWhatsAppMessage done', Date.now(), `agent latency=${reply.latencyMs}ms closed=${reply.closed}`);
+
+    if (reply.closed) {
+      await deliverAgentClose({ session: session.agent, caseId, cleanFrom, threadId });
+    }
     return true;
   }
 
