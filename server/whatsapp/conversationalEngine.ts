@@ -29,6 +29,7 @@ import {
   getQuestionCount,
   MIN_QUESTIONS_BEFORE_DISPOSITION,
 } from "../conversation/questionSequences";
+import { addPhysicianCase } from "../physician/physicianController";
 
 // Use Replit AI integration key if available, fall back to OPENAI_API_KEY
 const _apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
@@ -801,7 +802,271 @@ function _keywordExtract(slug: string, msg: string): Record<string, any> {
     if (/\b(no|without)\s+(back|flank|side)\s+(pain|hurt)\b/.test(m)) f.flank_pain = false;
   }
 
+  // ── ILI / viral syndrome markers ─────────────────────────────────────────
+  // Myalgia / body aches
+  if (/\b(body\s+aches?|muscle\s+(aches?|pain)|myalgia|aching\s+all\s+over|achy|sore\s+muscles?|sore\s+all\s+over|everything\s+hurts?)\b/.test(m) && !isNegated) f.myalgia = true;
+  if (/\bno\s+(body\s+ach|muscle\s+ach|myalgia)\b/.test(m)) f.myalgia = false;
+
+  // Fatigue
+  if (/\b(very\s+tired|so\s+tired|fatigued?|exhausted?|worn\s+out|run\s*down|no\s+energy|wiped\s+out)\b/.test(m) && !isNegated) f.fatigue = true;
+  if (/\bno\s+(fatigue|tiredness)\b/.test(m)) f.fatigue = false;
+
+  // Rhinorrhea / nasal congestion
+  if (/\b(runny\s+nose|stuffy\s+nose|nasal\s+congestion|sinus\s+(congestion|pressure|drainage)|rhinorrhea|post.?nasal\s+drip|sneezing)\b/.test(m) && !isNegated) f.rhinorrhea = true;
+  if (/\bno\s+(runny|stuffy)\s+nose\b/.test(m)) f.rhinorrhea = false;
+
   return f;
+}
+
+// ── Differential diagnosis engine ────────────────────────────────────────────
+//
+// Produces a ranked list of up to 5 candidate diagnoses based on the
+// complaint slug and extracted fields. No LLM required — pure rule logic.
+// Exported so the physician dashboard and other consumers can reuse it.
+
+export interface DiffDx {
+  dx:         string;
+  likelihood: "high" | "moderate" | "low";
+  reasoning:  string;
+}
+
+export function computeDifferential(slug: string, fields: Record<string, any>): DiffDx[] {
+  const diffs: DiffDx[] = [];
+  const iliCount = [fields.fever, fields.myalgia, fields.fatigue, fields.rhinorrhea].filter(v => isTruthy(v)).length;
+  const hasILI   = iliCount >= 2;
+  const fullILI  = iliCount >= 3;
+
+  if (slug === "neuro_headache") {
+    if (isTruthy(fields.thunderclap))
+      diffs.push({ dx: "Subarachnoid hemorrhage", likelihood: "high",
+        reasoning: "Thunderclap / sudden worst headache of life — EMERGENCY." });
+    if (isTruthy(fields.stiff_neck))
+      diffs.push({ dx: "Bacterial meningitis", likelihood: "high",
+        reasoning: "Neck stiffness with headache — urgent LP evaluation required." });
+    if (fullILI || (hasILI && !isTruthy(fields.stiff_neck) && !isTruthy(fields.thunderclap)))
+      diffs.push({ dx: "Influenza / Viral syndrome", likelihood: fullILI ? "high" : "moderate",
+        reasoning: `Headache with ${iliCount} systemic ILI features (fever, myalgia, fatigue, rhinorrhea). Most likely viral — NOT meningitis unless stiff neck is present.` });
+    if (isTruthy(fields.light_sensitivity) && !isTruthy(fields.stiff_neck))
+      diffs.push({ dx: "Migraine", likelihood: "high",
+        reasoning: "Photophobia without meningeal signs — classic migraine pattern." });
+    if (!isTruthy(fields.fever) && !isTruthy(fields.thunderclap) && !hasILI)
+      diffs.push({ dx: "Tension-type headache", likelihood: "high",
+        reasoning: "Gradual onset, no fever, no systemic or meningeal features." });
+    if (isTruthy(fields.fever) && !hasILI)
+      diffs.push({ dx: "Sinusitis / Viral pharyngitis headache", likelihood: "moderate",
+        reasoning: "Fever with headache but <2 ILI markers — consider sinusitis or early viral illness." });
+    diffs.push({ dx: "Dehydration headache", likelihood: "low",
+      reasoning: "Consider if poor oral intake without other features." });
+  }
+
+  if (slug === "cough") {
+    if (fullILI)
+      diffs.push({ dx: "Influenza", likelihood: "high",
+        reasoning: "Cough + fever + body aches + fatigue — classic influenza pattern." });
+    else if (hasILI)
+      diffs.push({ dx: "Viral upper respiratory infection", likelihood: "high",
+        reasoning: "Cough with systemic ILI features." });
+    if (isTruthy(fields.fever) && isTruthy(fields.dyspnea))
+      diffs.push({ dx: "Community-acquired pneumonia", likelihood: "high",
+        reasoning: "Cough + fever + dyspnea — chest X-ray indicated." });
+    if (!isTruthy(fields.fever) && isTruthy(fields.rhinorrhea))
+      diffs.push({ dx: "Allergic rhinitis / post-nasal drip", likelihood: "moderate",
+        reasoning: "Afebrile cough with nasal congestion." });
+    if (!isTruthy(fields.fever) && !hasILI)
+      diffs.push({ dx: "Viral bronchitis", likelihood: "moderate",
+        reasoning: "Cough without systemic features." });
+    diffs.push({ dx: "COVID-19", likelihood: "moderate",
+      reasoning: "Consider in any respiratory illness with cough and systemic symptoms." });
+  }
+
+  if (slug === "sore_throat") {
+    if (isTruthy(fields.unable_to_swallow) || isTruthy(fields.dysphagia))
+      diffs.push({ dx: "Peritonsillar abscess", likelihood: "high",
+        reasoning: "Inability to swallow saliva — airway risk, urgent ENT evaluation." });
+    if (isTruthy(fields.fever) && isTruthy(fields.white_patches))
+      diffs.push({ dx: "Streptococcal pharyngitis", likelihood: "high",
+        reasoning: "Fever + tonsillar exudates — rapid strep test indicated." });
+    else if (isTruthy(fields.fever) && !isTruthy(fields.rhinorrhea))
+      diffs.push({ dx: "Strep pharyngitis vs viral pharyngitis", likelihood: "moderate",
+        reasoning: "Fever without cough/rhinorrhea — Centor criteria suggest bacterial cause." });
+    if (!isTruthy(fields.fever) && isTruthy(fields.rhinorrhea))
+      diffs.push({ dx: "Viral pharyngitis (common cold)", likelihood: "high",
+        reasoning: "Afebrile sore throat with rhinorrhea — viral etiology." });
+    if (hasILI)
+      diffs.push({ dx: "Influenza", likelihood: "moderate",
+        reasoning: "Sore throat with systemic ILI markers." });
+    diffs.push({ dx: "Infectious mononucleosis (EBV)", likelihood: "low",
+      reasoning: "Consider in young adults with prolonged pharyngitis, fatigue, adenopathy." });
+  }
+
+  if (slug === "nausea" || slug === "abdominal_pain") {
+    if (isTruthy(fields.fever) && isTruthy(fields.diarrhea))
+      diffs.push({ dx: "Gastroenteritis (viral or bacterial)", likelihood: "high",
+        reasoning: "Nausea/vomiting + fever + diarrhea — viral most common." });
+    else if (isTruthy(fields.diarrhea))
+      diffs.push({ dx: "Viral gastroenteritis (Norovirus)", likelihood: "high",
+        reasoning: "Nausea with diarrhea — likely norovirus." });
+    if (isTruthy(fields.unable_keep_fluids))
+      diffs.push({ dx: "Dehydration / Severe gastroenteritis", likelihood: "high",
+        reasoning: "Inability to keep fluids — may require IV hydration." });
+    if (hasILI)
+      diffs.push({ dx: "Influenza (GI variant)", likelihood: "moderate",
+        reasoning: "Nausea with systemic ILI features." });
+    diffs.push({ dx: "Peptic ulcer disease / Gastritis", likelihood: "low",
+      reasoning: "Consider if recurring or associated with epigastric pain." });
+  }
+
+  if (slug === "msk_back_pain") {
+    diffs.push({ dx: "Acute musculoskeletal strain / sprain", likelihood: "high",
+      reasoning: "Most common cause of acute back pain — especially after activity or lifting." });
+    if (isTruthy(fields.bowel_bladder))
+      diffs.push({ dx: "Cauda equina syndrome", likelihood: "high",
+        reasoning: "Bowel/bladder dysfunction with back pain — SURGICAL EMERGENCY." });
+    if (isTruthy(fields.fever))
+      diffs.push({ dx: "Vertebral osteomyelitis / Diskitis", likelihood: "moderate",
+        reasoning: "Fever with back pain — requires ESR/CRP and MRI." });
+    diffs.push({ dx: "Herniated disc / Lumbar radiculopathy", likelihood: "moderate",
+      reasoning: "Consider if pain radiates down the leg (sciatica pattern)." });
+    diffs.push({ dx: "Kidney stone / Pyelonephritis", likelihood: "low",
+      reasoning: "Consider if flank pain, costovertebral angle tenderness, or hematuria." });
+  }
+
+  if (slug === "gu_uti_symptoms") {
+    if (isTruthy(fields.fever) && isTruthy(fields.flank_pain))
+      diffs.push({ dx: "Pyelonephritis (kidney infection)", likelihood: "high",
+        reasoning: "Fever + flank pain + dysuria — requires IV antibiotics, ER evaluation." });
+    else if (isTruthy(fields.fever))
+      diffs.push({ dx: "Complicated UTI / Early pyelonephritis", likelihood: "moderate",
+        reasoning: "Fever without confirmed flank pain — close monitoring warranted." });
+    diffs.push({ dx: "Uncomplicated UTI / Cystitis", likelihood: "high",
+      reasoning: "Classic dysuria and frequency — typically responds to oral antibiotics." });
+    diffs.push({ dx: "Urethritis / STI (Chlamydia, Gonorrhea)", likelihood: "low",
+      reasoning: "Consider in sexually active patients with urinary symptoms." });
+  }
+
+  if (slug === "chest_pain") {
+    if (isTruthy(fields.radiation) && isTruthy(fields.diaphoresis))
+      diffs.push({ dx: "Acute STEMI / NSTEMI", likelihood: "high",
+        reasoning: "Radiation + diaphoresis — classic ACS, call 911 immediately." });
+    else if (isTruthy(fields.radiation))
+      diffs.push({ dx: "Acute coronary syndrome (ACS)", likelihood: "high",
+        reasoning: "Radiation to arm, jaw, or back — urgent EKG and troponin." });
+    if (isTruthy(fields.pleuritic))
+      diffs.push({ dx: "Pleuritis / Pericarditis", likelihood: "moderate",
+        reasoning: "Pain worsens with breathing or position — EKG and echo." });
+    diffs.push({ dx: "Musculoskeletal chest wall pain", likelihood: "moderate",
+      reasoning: "Reproducible on palpation, no radiation — common after activity." });
+    diffs.push({ dx: "GERD / Esophageal spasm", likelihood: "low",
+      reasoning: "Burning quality, relief with antacids, no radiation." });
+  }
+
+  if (slug === "id_fever") {
+    const fIliCount = [fields.myalgia, fields.fatigue, fields.rhinorrhea].filter(v => isTruthy(v)).length;
+    if (isTruthy(fields.fever) && fIliCount >= 2)
+      diffs.push({ dx: "Influenza", likelihood: "high",
+        reasoning: "Fever + body aches + fatigue — classic influenza syndrome." });
+    else if (isTruthy(fields.fever) && fIliCount >= 1)
+      diffs.push({ dx: "Viral syndrome / URI", likelihood: "high",
+        reasoning: "Fever with ILI features — likely viral." });
+    diffs.push({ dx: "COVID-19", likelihood: "moderate",
+      reasoning: "Fever with respiratory/systemic symptoms." });
+    if (!hasILI)
+      diffs.push({ dx: "Occult bacterial infection", likelihood: "moderate",
+        reasoning: "Isolated fever without clear source — workup warranted." });
+    diffs.push({ dx: "Urinary tract infection", likelihood: "low",
+      reasoning: "Consider if urinary symptoms present." });
+  }
+
+  // Default for unrecognised slugs
+  if (diffs.length === 0)
+    diffs.push({ dx: "Undifferentiated illness", likelihood: "moderate",
+      reasoning: "Insufficient data for differential — physician review required." });
+
+  return diffs.slice(0, 5);
+}
+
+// ── Workup recommendation engine ─────────────────────────────────────────────
+//
+// Returns an ordered list of recommended workup steps for the working (top)
+// differential diagnosis. No LLM required — pure rule logic.
+// Exported for use by the physician dashboard.
+
+export function computeWorkup(slug: string, fields: Record<string, any>, differential: DiffDx[]): string[] {
+  const topDx  = differential[0]?.dx ?? "";
+  const workup: string[] = [];
+
+  if (slug === "neuro_headache") {
+    if (isTruthy(fields.thunderclap) || isTruthy(fields.stiff_neck)) {
+      workup.push("STAT non-contrast head CT", "Lumbar puncture (if CT negative for SAH/blood)", "CBC, BMP, blood cultures x2", "Empirical antibiotics if bacterial meningitis suspected");
+    } else if (topDx.includes("Influenza") || topDx.includes("Viral")) {
+      workup.push("Rapid influenza PCR/antigen test", "Clinical evaluation — no imaging needed if no red flags", "Vital signs and hydration status");
+    } else if (topDx.includes("Migraine")) {
+      workup.push("Clinical diagnosis — no imaging needed for classic presentation", "Neurological exam", "NSAIDs or triptan per clinic protocol");
+    } else {
+      workup.push("Neurological exam", "Vital signs", "Consider CT head if atypical or first severe headache");
+    }
+  }
+
+  if (slug === "cough") {
+    if (topDx.includes("pneumonia") || topDx.includes("Pneumonia")) {
+      workup.push("Chest X-ray (PA and lateral)", "CBC with differential", "CRP / ESR", "BMP", "Sputum culture if productive cough");
+    } else if (topDx.includes("Influenza") || topDx.includes("flu")) {
+      workup.push("Rapid influenza PCR/antigen test", "O2 saturation monitoring", "Consider oseltamivir if within 48 hrs of symptom onset");
+    } else {
+      workup.push("O2 saturation", "Clinical evaluation", "Consider CXR if symptoms persist >7 days or worsen");
+    }
+  }
+
+  if (slug === "sore_throat") {
+    if (topDx.includes("abscess") || topDx.includes("Peritonsillar")) {
+      workup.push("ENT consultation STAT", "CT neck with contrast", "Oropharynx exam under direct visualization", "Blood cultures", "CBC with differential");
+    } else if (topDx.includes("Strep") || topDx.includes("strep")) {
+      workup.push("Rapid strep antigen test", "Throat culture if rapid test negative", "CBC if systemic illness suspected");
+    } else if (topDx.includes("mononucleosis") || topDx.includes("EBV")) {
+      workup.push("Monospot test (heterophile antibody)", "EBV IgM/IgG panel", "CBC with differential", "LFTs");
+    } else {
+      workup.push("Rapid strep test", "Throat and oral cavity exam", "Vital signs");
+    }
+  }
+
+  if (slug === "nausea" || slug === "abdominal_pain") {
+    if (isTruthy(fields.unable_keep_fluids) || isTruthy(fields.weakness) || isTruthy(fields.oliguria)) {
+      workup.push("BMP (electrolytes, BUN, Creatinine)", "CBC with differential", "IV access for hydration assessment", "Urinalysis");
+    } else {
+      workup.push("Clinical evaluation and vital signs", "Urinalysis if abdominal pain", "Orthostatic vitals if dizziness");
+    }
+  }
+
+  if (slug === "msk_back_pain") {
+    if (isTruthy(fields.bowel_bladder)) {
+      workup.push("STAT MRI lumbar spine (without contrast)", "Neurosurgery / orthopedics STAT consult", "CBC, CMP");
+    } else if (isTruthy(fields.fever)) {
+      workup.push("CBC with differential", "ESR, CRP", "Blood cultures x2", "MRI lumbar spine with contrast");
+    } else {
+      workup.push("Clinical and neurological exam", "No imaging needed for acute uncomplicated back pain (<6 weeks)", "NSAIDs + muscle relaxants if no contraindications", "Activity modification and follow-up in 2–4 weeks");
+    }
+  }
+
+  if (slug === "gu_uti_symptoms") {
+    workup.push("Urinalysis with microscopy", "Urine culture and sensitivity (mid-stream clean catch)");
+    if (isTruthy(fields.fever)) workup.push("CBC", "BMP", "Blood cultures x2 (before antibiotics)", "Renal ultrasound if pyelonephritis suspected");
+  }
+
+  if (slug === "chest_pain") {
+    workup.push("12-lead EKG (STAT)", "Serial troponin I or T (0h and 3h)", "Chest X-ray (PA)");
+    workup.push("BMP", "CBC with differential");
+    if (isTruthy(fields.dyspnea)) workup.push("O2 saturation", "BNP / NT-proBNP");
+  }
+
+  if (slug === "id_fever") {
+    workup.push("Rapid influenza PCR/antigen test", "Vital signs (temperature, HR, O2 saturation)");
+    const filiCount = [fields.myalgia, fields.fatigue, fields.rhinorrhea].filter(v => isTruthy(v)).length;
+    if (filiCount < 2) workup.push("CBC with differential", "CRP / ESR", "Urinalysis");
+  }
+
+  if (workup.length === 0) workup.push("Clinical evaluation", "Vital signs", "History and physical examination");
+
+  return workup;
 }
 
 // ── Hard character limit enforcer ────────────────────────────────────────────
@@ -1205,24 +1470,39 @@ export const conversationalEngine = {
       (isComplete(session.slug, session.fields) || allQuestionsAsked);
 
     if (readyForDisposition) {
-      // R005: physician review gate — set flag BEFORE sending disposition
+      // Physician review gate — set flag BEFORE sending disposition
       session.awaitingPhysicianReview = true;
 
       const { disposition, reason } = _computeDisposition(session.slug, session.fields);
       session.disposition = disposition;
       session.closed      = true;
 
-      // R005: disposition message must contain "based on" or "because"
+      // Compute differential + workup for physician review
+      const differential = computeDifferential(session.slug, session.fields);
+      const workup       = computeWorkup(session.slug, session.fields, differential);
+
+      // Submit to physician queue for all non-immediate-ER dispositions
       const isER = disposition === "er_now" || disposition === "ambulance_now";
-      const isUrgent = disposition.includes("urgent");
+      if (!isER) {
+        addPhysicianCase({
+          slug:                session.slug,
+          fields:              session.fields,
+          differential,
+          workup,
+          proposedDisposition: disposition,
+          dispositionReason:   reason,
+        });
+      }
+
+      // Patient-facing response
+      // ER/ambulance: direct safety message (bypasses physician gate)
+      // All other dispositions: physician-review holding message (no disposition named to patient)
       const cleanReason = reason.replace(/^based\s+on\s+/i, "").replace(/^because\s+/i, "");
       let response: string;
       if (isER) {
         response = `Based on ${cleanReason}, please go to the ER right now.`;
-      } else if (isUrgent) {
-        response = `Your symptoms sound like something we can help with at urgent care — based on ${cleanReason}. The doctor will follow up shortly.`;
       } else {
-        response = `Based on ${cleanReason}. The doctor will review and follow up with you shortly.`;
+        response = "Thank you — your intake is complete. A physician will review your case and follow up with your care plan shortly.";
       }
       session.exchanges.push({ role: "assistant", text: response });
       return { response, disposition };

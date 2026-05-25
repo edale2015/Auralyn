@@ -93,12 +93,56 @@ function CaseCard({ c, onApprove, onOverride }: { c: any; onApprove: () => void;
           </div>
 
           {expanded && (
-            <div className="mt-2 space-y-1 text-xs text-gray-600 border-t pt-2">
+            <div className="mt-2 space-y-2 text-xs text-gray-600 border-t pt-2">
               {c.riskScore !== undefined && (
-                <div>Risk Score: <span className="font-medium">{(c.riskScore * 100).toFixed(0)}%</span></div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Risk Score</span>
+                  <span className="font-medium">{(c.riskScore * 100).toFixed(0)}%</span>
+                </div>
               )}
-              {c.patientAge && <div>Age: <span className="font-medium">{c.patientAge}</span></div>}
-              {c.aiDiagnosis && <div>AI Dx: <span className="font-medium">{c.aiDiagnosis}</span></div>}
+              {c.proposedDisposition && (
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Proposed</span>
+                  <span className="font-medium capitalize">{c.proposedDisposition.replace(/_/g, " ")}</span>
+                </div>
+              )}
+              {c.dispositionReason && (
+                <div className="italic text-gray-400 text-[11px]">{c.dispositionReason}</div>
+              )}
+
+              {/* Differential diagnoses */}
+              {Array.isArray(c.differential) && c.differential.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-gray-400 font-semibold uppercase tracking-wide mb-1">Differential</div>
+                  <div className="space-y-1">
+                    {c.differential.map((d: any, i: number) => (
+                      <div key={i} className="flex items-start gap-1" data-testid={`diff-${c.id}-${i}`}>
+                        <span className={`flex-shrink-0 rounded px-1 text-[10px] font-bold ${
+                          d.likelihood === "high"     ? "bg-red-100 text-red-700"
+                          : d.likelihood === "moderate" ? "bg-amber-100 text-amber-700"
+                          : "bg-gray-100 text-gray-500"
+                        }`}>{d.likelihood.toUpperCase()}</span>
+                        <div>
+                          <div className="font-medium text-gray-800">{d.dx}</div>
+                          <div className="text-gray-400 text-[10px]">{d.reasoning}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recommended workup */}
+              {Array.isArray(c.workup) && c.workup.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-gray-400 font-semibold uppercase tracking-wide mb-1">Workup</div>
+                  <ul className="space-y-0.5 list-disc list-inside text-[11px] text-gray-700">
+                    {c.workup.map((w: string, i: number) => (
+                      <li key={i} data-testid={`workup-${c.id}-${i}`}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
 

@@ -2,17 +2,29 @@ import { logDecisionTrace, getAuditLog, getAuditStats, seedDemoAudit } from "./a
 import { getGraphSummary, findSimilarCases, getDecisionsByTriage } from "../memory/memoryQuery";
 import { logClinicalCase } from "../memory/memoryIngest";
 
+export interface DiffDx {
+  dx:         string;
+  likelihood: "high" | "moderate" | "low";
+  reasoning:  string;
+}
+
 export interface PendingCase {
-  id: string;
-  patientId: string;
-  triage: "immediate" | "urgent" | "routine" | "non-urgent";
-  riskScore: number;
-  complaints: string[];
-  agentDecision: string;
-  status: "pending_review" | "approved" | "overridden" | "escalated";
-  submittedAt: string;
-  reviewedBy?: string;
-  notes?: string;
+  id:                  string;
+  patientId:           string;
+  triage:              "immediate" | "urgent" | "routine" | "non-urgent";
+  riskScore:           number;
+  complaints:          string[];
+  agentDecision:       string;
+  status:              "pending_review" | "approved" | "overridden" | "escalated";
+  submittedAt:         string;
+  reviewedBy?:         string;
+  notes?:              string;
+  // Enhanced clinical data — populated by conversationalEngine when intake completes
+  differential?:        DiffDx[];
+  workup?:              string[];
+  proposedDisposition?: string;
+  dispositionReason?:   string;
+  extractedFields?:     Record<string, any>;
 }
 
 const pendingCases: PendingCase[] = [];
@@ -74,6 +86,52 @@ export function reviewCase(id: string, decision: "approved" | "overridden" | "es
   });
 
   return c;
+}
+
+// ── Add a new case from the conversational intake engine ─────────────────────
+export function addPhysicianCase(params: {
+  slug:                string;
+  fields:              Record<string, any>;
+  differential:        DiffDx[];
+  workup:              string[];
+  proposedDisposition: string;
+  dispositionReason:   string;
+}): PendingCase {
+  seedCases();
+
+  const dispToTriage: Record<string, PendingCase["triage"]> = {
+    er_now:             "immediate",
+    ambulance_now:      "immediate",
+    urgent_care_workup: "urgent",
+    treat_and_follow:   "routine",
+    treat_and_watch:    "routine",
+  };
+
+  const riskScore =
+    params.proposedDisposition === "er_now" || params.proposedDisposition === "ambulance_now" ? 0.9
+    : params.proposedDisposition === "urgent_care_workup" ? 0.55
+    : 0.25;
+
+  const topDx = params.differential[0]?.dx ?? "Unknown";
+
+  const newCase: PendingCase = {
+    id:                  `case-${Date.now()}`,
+    patientId:           `pt-${Math.floor(Math.random() * 9000 + 1000)}`,
+    triage:              dispToTriage[params.proposedDisposition] ?? "routine",
+    riskScore,
+    complaints:          [params.slug],
+    agentDecision:       topDx,
+    status:              "pending_review",
+    submittedAt:         new Date().toISOString(),
+    differential:        params.differential,
+    workup:              params.workup,
+    proposedDisposition: params.proposedDisposition,
+    dispositionReason:   params.dispositionReason,
+    extractedFields:     params.fields,
+  };
+
+  pendingCases.push(newCase);
+  return newCase;
 }
 
 export function getDashboardStats() {

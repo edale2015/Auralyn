@@ -25,7 +25,7 @@ const SEQUENCES: Record<string, readonly string[]> = {
     "On a scale of 1–10, how bad is the pain?",
     "Is this the worst headache of your life?",
     "Any stiff neck or sensitivity to light?",
-    "Any fever, vision changes, or weakness in your face or arms?",
+    "Any fever, body aches, or runny nose with it?",
   ],
 
   // ── Nausea / Vomiting ─────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ const SEQUENCES: Record<string, readonly string[]> = {
     "Have you vomited, and if so how many times?",
     "Any blood in the vomit?",
     "Any abdominal pain with it?",
-    "Any fever?",
+    "Any fever, chills, or body aches?",
     "Are you able to keep fluids down?",
     "Any dizziness or feeling faint?",
   ],
@@ -78,14 +78,14 @@ const SEQUENCES: Record<string, readonly string[]> = {
     "Any fever?",
     "Any white patches or pus on your tonsils?",
     "Any trouble swallowing your own saliva?",
-    "Any cough or runny nose?",
+    "Any body aches, cough, or runny nose?",
     "Any trouble breathing?",
   ],
 
   // ── Cough ─────────────────────────────────────────────────────────────────
   cough: [
     "How long have you had the cough?",
-    "Any fever?",
+    "Any fever, body aches, or fatigue?",
     "Any trouble breathing or shortness of breath?",
     "What does the phlegm look like — clear, yellow, or green?",
     "Any smoking history or lung conditions?",
@@ -127,8 +127,8 @@ const SEQUENCES: Record<string, readonly string[]> = {
   fever: [
     "How long have you had the fever?",
     "What is your temperature, if you know it?",
-    "Any chills or sweating?",
-    "Any sore throat, cough, or other symptoms?",
+    "Any chills, body aches, or muscle pain?",
+    "Any sore throat, cough, or runny nose?",
     "Any rash?",
     "Any confusion or unusual mental changes?",
   ],
