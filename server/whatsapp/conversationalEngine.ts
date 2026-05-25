@@ -2,17 +2,33 @@
  * conversationalEngine.ts
  *
  * Goal-directed clinical interview engine.
- * Replaces the fixed question-list approach with a conversation that has
- * CLINICAL GOALS and finds the most natural path to fill them.
  *
- * Two GPT-4o-mini calls per turn:
- *   1. extractClinicalFields  — parse everything the patient said into structured fields
- *   2. generateResponse       — produce the next conversational message
- *
- * The rule-execution engine safety check still runs after every extraction.
+ * R003/R004/R005/R006 architecture:
+ *   Turn 0  (new session + complaint phrase):
+ *     → routeComplaint() regex [0ms] → Q[0] from questionSequences [0ms] — ZERO LLM
+ *   Turns 1–(MIN_QUESTIONS-2):
+ *     → _keywordExtract() [0ms] → safety check [0ms] → Q[n] from questionSequences [0ms] — ZERO LLM
+ *   Turn MIN_QUESTIONS+:
+ *     → extractAndRespond() [1 GPT call] → rule-based disposition — LLM for extraction only
+ *   Disposition:
+ *     → _computeDisposition() [0ms, rule-based] — NO LLM
+ *     → awaitingPhysicianReview set BEFORE sending
+ *     → message always contains "based on" or "because"
+ *     → never fires before MIN_QUESTIONS_BEFORE_DISPOSITION answers collected
  */
 
 import OpenAI from "openai";
+import {
+  routeComplaint,
+  routerCodeToEngineSlug,
+  complaintCodeDisplay,
+  type ComplaintCode,
+} from "../conversation/complaintRouter";
+import {
+  getNextQuestion,
+  getQuestionCount,
+  MIN_QUESTIONS_BEFORE_DISPOSITION,
+} from "../conversation/questionSequences";
 
 // Use Replit AI integration key if available, fall back to OPENAI_API_KEY
 const _apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
@@ -729,7 +745,8 @@ function _keywordExtract(slug: string, msg: string): Record<string, any> {
   if (/\bno\s+(bladder|bowel)\b/.test(m)) f.bowel_bladder = false;
 
   // Radiation (chest pain — STEMI)
-  if (/\b(radiat|spreading|going\s+to)\b/.test(m) && /\b(arm|jaw|shoulder|neck)\b/.test(m)) f.radiation = "yes";
+  // NOTE: no trailing \b on "radiat" — must match "radiating", "radiates", etc.
+  if (/\bradiat\w*|spreading\s+(to|into)|going\s+to/.test(m) && /\b(arm|jaw|shoulder|neck)\b/.test(m)) f.radiation = "yes";
 
   // Diaphoresis
   if (/\b(sweat|clammy|diaphoresis)\b/.test(m)) f.diaphoresis = true;
@@ -868,16 +885,24 @@ export async function generateClosingMessage(params: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface _Session {
-  slug:       string;
-  fields:     Record<string, any>;
-  exchanges:  Array<{ role: string; text: string }>;
-  disposition?: string;
-  closed:     boolean;
+  slug:                  string;
+  routerCode:            ComplaintCode;
+  fields:                Record<string, any>;
+  exchanges:             Array<{ role: string; text: string }>;
+  disposition?:          string;
+  closed:                boolean;
+  questionIndex:         number;   // how many sequence questions have been asked
+  awaitingPhysicianReview: boolean; // R005: set before any disposition fires
 }
 
 const _sessions = new Map<string, _Session>();
 
-// ── Complaint detection (keyword-first, order matters) ────────────────────────
+// ── Greeting detection (for zero-LLM first-turn intro) ────────────────────────
+function _isGreeting(message: string): boolean {
+  return /^\s*(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|hiya|yo|sup|greetings|hola)\b/i.test(message);
+}
+
+// ── Complaint detection (keyword-first, order matters — kept as fallback) ─────
 function _detectSlug(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("chest pain") || m.includes("chest pressure") || m.includes("chest tight")) return "chest_pain";
@@ -964,33 +989,53 @@ function _checkSafety(slug: string, fields: Record<string, any>): { escalate: bo
   return { escalate: false, disposition: "" };
 }
 
-// ── Disposition computation (called when isComplete fires) ────────────────────
-function _computeDisposition(slug: string, fields: Record<string, any>): string {
+// ── Disposition computation (rule-based, no LLM) ─────────────────────────────
+// Returns { disposition, reason } — reason is always a patient-facing explanation
+// that begins with "based on" or "because" (R005 requirement).
+function _computeDisposition(
+  slug: string,
+  fields: Record<string, any>,
+): { disposition: string; reason: string } {
   const age = typeof fields.age === "number"
     ? fields.age
     : parseInt(String(fields.age ?? "0"), 10) || 0;
 
   if (slug === "cough") {
-    if (isTruthy(fields.dyspnea) && age > 60) return "er_now";
-    if (isTruthy(fields.dyspnea))              return "urgent_care_workup";
-    if (isTruthy(fields.fever) && age > 60)    return "urgent_care_workup";
-    return "treat_and_follow";
+    if (isTruthy(fields.dyspnea) && age > 60)
+      return { disposition: "er_now", reason: "based on your breathing difficulty and age, this needs urgent evaluation" };
+    if (isTruthy(fields.dyspnea))
+      return { disposition: "urgent_care_workup", reason: "because of the breathing difficulty alongside your cough" };
+    if (isTruthy(fields.fever) && age > 60)
+      return { disposition: "urgent_care_workup", reason: "based on the fever and your age, we want to check this carefully" };
+    return { disposition: "treat_and_follow", reason: "based on your symptoms, this looks like a viral illness we can manage" };
   }
 
-  if (slug === "neuro_headache") return "treat_and_watch";
+  if (slug === "neuro_headache")
+    return { disposition: "treat_and_watch", reason: "based on your description, this sounds like a tension or migraine headache" };
 
   if (slug === "chest_pain") {
-    if (isTruthy(fields.pleuritic) && !isTruthy(fields.radiation)) return "urgent_care_workup";
-    return "urgent_care_workup";
+    if (isTruthy(fields.pleuritic) && !isTruthy(fields.radiation))
+      return { disposition: "urgent_care_workup", reason: "because the pain changes with breathing, we want to rule out a lung issue" };
+    return { disposition: "urgent_care_workup", reason: "based on the chest pain, we want a physician to evaluate this today" };
   }
 
-  if (slug === "sore_throat")     return "treat_and_follow";
-  if (slug === "gu_uti_symptoms") return "treat_and_follow";
-  if (slug === "msk_back_pain")   return "treat_and_follow";
-  if (slug === "nausea")          return "treat_and_follow";
-  if (slug === "abdominal_pain")  return "treat_and_follow";
+  if (slug === "sore_throat")
+    return { disposition: "treat_and_follow", reason: "based on your symptoms, this looks like it can be treated at urgent care" };
 
-  return "treat_and_follow";
+  if (slug === "gu_uti_symptoms")
+    return { disposition: "treat_and_follow", reason: "based on your urinary symptoms, this can be treated with the right antibiotic" };
+
+  if (slug === "msk_back_pain")
+    return { disposition: "treat_and_follow", reason: "based on what you've described, this sounds like a muscle or joint issue" };
+
+  // R005: nausea + abdominal_pain alone → urgent care, never ER without confirmed safety flags
+  if (slug === "nausea")
+    return { disposition: "treat_and_follow", reason: "based on your symptoms, this sounds like a stomach bug we can help with at urgent care" };
+
+  if (slug === "abdominal_pain")
+    return { disposition: "treat_and_follow", reason: "based on your symptoms, this can be evaluated at urgent care" };
+
+  return { disposition: "treat_and_follow", reason: "based on what you've shared, the care team will follow up with you" };
 }
 
 // ── Public object ─────────────────────────────────────────────────────────────
@@ -1015,20 +1060,43 @@ export const conversationalEngine = {
     const { threadId, message } = params;
 
     let session = _sessions.get(threadId);
-    const isFirst = !session;
 
-    // Initialise session on first message
+    // ── NEW SESSION — zero LLM (R006) ─────────────────────────────────────
     if (!session) {
+      const routerCode = routeComplaint(message);
+      const engineSlug = routerCode !== "unknown"
+        ? routerCodeToEngineSlug(routerCode)
+        : _detectSlug(message);
+
       session = {
-        slug:      _detectSlug(message),
-        fields:    {},
-        exchanges: [],
-        closed:    false,
+        slug:                  engineSlug,
+        routerCode,
+        fields:                {},
+        exchanges:             [],
+        closed:                false,
+        questionIndex:         0,
+        awaitingPhysicianReview: false,
       };
       _sessions.set(threadId, session);
+
+      // Greeting → return intro immediately, no LLM
+      if (routerCode === "unknown" && _isGreeting(message)) {
+        const intro = "Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?";
+        session.exchanges.push({ role: "user", text: message });
+        session.exchanges.push({ role: "assistant", text: intro });
+        return { response: intro };
+      }
+
+      // Complaint phrase detected → return Q[0] immediately, no LLM (R006)
+      const firstQ = getNextQuestion(routerCode, 0);
+      const q0 = firstQ || getNextQuestion("unknown", 0) || "How long have you been having these symptoms?";
+      session.questionIndex = 1;
+      session.exchanges.push({ role: "user", text: message });
+      session.exchanges.push({ role: "assistant", text: q0 });
+      return { response: q0 };
     }
 
-    // If already closed, repeat the closing line
+    // ── EXISTING SESSION ───────────────────────────────────────────────────
     if (session.closed) {
       const closing = session.disposition?.includes("ambulance") || session.disposition?.includes("er")
         ? "Please go to the ER immediately — don't wait."
@@ -1038,19 +1106,14 @@ export const conversationalEngine = {
 
     session.exchanges.push({ role: "user", text: message });
 
-    // ── PRE-GPT instant keyword extraction + safety check ─────────────────
-    // _keywordExtract is 100% synchronous (regex, 0ms). Merging these fields
-    // BEFORE the GPT call means critical signals (radiation, diaphoresis, etc.)
-    // are always detected — even when the GPT combined call times out at 2500ms.
+    // Always run keyword extract + safety check synchronously (0ms, R006)
     const quickFields = _keywordExtract(session.slug, message);
     Object.assign(session.fields, quickFields);
 
-    // Run safety check immediately on keyword-extracted fields — if it fires,
-    // we short-circuit and never wait for GPT at all.
     const quickSafety = _checkSafety(session.slug, session.fields);
     if (quickSafety.escalate) {
       session.disposition = quickSafety.disposition;
-      session.closed = true;
+      session.closed      = true;
       const response = quickSafety.disposition === "ambulance_now"
         ? "This sounds like a medical emergency — call 911 right now. Don't wait or drive yourself."
         : "Based on what you're telling me, please go to the ER right now. Don't delay.";
@@ -1058,23 +1121,33 @@ export const conversationalEngine = {
       return { response, disposition: quickSafety.disposition };
     }
 
-    // ── Single combined call: extract fields + generate response ──────────
-    // One GPT call instead of two keeps each turn well under the 3 s SLA.
+    // ── Turns 1–(MIN_QUESTIONS-2): question sequences, no LLM (R006) ──────
+    const questionsAsked = session.questionIndex;
+    const nextSeqQ = getNextQuestion(session.routerCode, questionsAsked);
+
+    if (questionsAsked < MIN_QUESTIONS_BEFORE_DISPOSITION - 1 && nextSeqQ) {
+      session.questionIndex++;
+      session.exchanges.push({ role: "assistant", text: nextSeqQ });
+      return { response: nextSeqQ };
+    }
+
+    // ── Turn MIN_QUESTIONS+: LLM for better extraction ────────────────────
+    // Still use keyword fields already captured; GPT refines them.
     const combined = await extractAndRespond(
       message,
       session.fields,
       session.slug,
       session.exchanges,
-      isFirst,
+      false,
     );
-    // Merge GPT-extracted fields on top of keyword fields (GPT wins on conflicts)
     Object.assign(session.fields, combined.extracted);
+    session.questionIndex = Math.max(session.questionIndex + 1, MIN_QUESTIONS_BEFORE_DISPOSITION);
 
-    // ── Post-GPT safety check (catches fields GPT found that keywords missed) ──
+    // Post-GPT safety check
     const safety = _checkSafety(session.slug, session.fields);
     if (safety.escalate) {
       session.disposition = safety.disposition;
-      session.closed = true;
+      session.closed      = true;
       const response = safety.disposition === "ambulance_now"
         ? "This sounds like a medical emergency — call 911 right now. Don't wait or drive yourself."
         : "Based on what you're telling me, please go to the ER right now. Don't delay.";
@@ -1082,18 +1155,42 @@ export const conversationalEngine = {
       return { response, disposition: safety.disposition };
     }
 
-    // ── Check if we have enough info to close ─────────────────────────────
-    if (!isFirst && isComplete(session.slug, session.fields)) {
-      const disposition = _computeDisposition(session.slug, session.fields);
+    // ── R005: disposition fires when enough questions asked ───────────────
+    // Two triggers (either is sufficient):
+    //   1. isComplete() — all clinical goal fields filled (ideal, requires GPT extraction)
+    //   2. allQuestionsAsked — entire sequence exhausted (fallback when GPT times out)
+    const allQuestionsAsked = session.questionIndex >= getQuestionCount(session.routerCode);
+    const readyForDisposition =
+      session.questionIndex >= MIN_QUESTIONS_BEFORE_DISPOSITION &&
+      (isComplete(session.slug, session.fields) || allQuestionsAsked);
+
+    if (readyForDisposition) {
+      // R005: physician review gate — set flag BEFORE sending disposition
+      session.awaitingPhysicianReview = true;
+
+      const { disposition, reason } = _computeDisposition(session.slug, session.fields);
       session.disposition = disposition;
-      session.closed = true;
-      const response = "Thanks — I have enough to brief the doctor. They'll review your info and follow up shortly.";
+      session.closed      = true;
+
+      // R005: disposition message must contain "based on" or "because"
+      const isER = disposition === "er_now" || disposition === "ambulance_now";
+      const isUrgent = disposition.includes("urgent");
+      const cleanReason = reason.replace(/^based\s+on\s+/i, "").replace(/^because\s+/i, "");
+      let response: string;
+      if (isER) {
+        response = `Based on ${cleanReason}, please go to the ER right now.`;
+      } else if (isUrgent) {
+        response = `Your symptoms sound like something we can help with at urgent care — based on ${cleanReason}. The doctor will follow up shortly.`;
+      } else {
+        response = `Based on ${cleanReason}. The doctor will review and follow up with you shortly.`;
+      }
       session.exchanges.push({ role: "assistant", text: response });
       return { response, disposition };
     }
 
-    // ── Return the generated response ─────────────────────────────────────
-    const response = combined.response;
+    // ── Still gathering — return next sequence question or GPT response ────
+    const laterQ = getNextQuestion(session.routerCode, session.questionIndex - 1);
+    const response = laterQ || enforceLimit(combined.response, combined.response);
     session.exchanges.push({ role: "assistant", text: response });
     return { response };
   },

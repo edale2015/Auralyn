@@ -1,0 +1,221 @@
+R001 — Audit what exists vs. what was working
+Status: ⏳ Not started
+Do this before touching a single line of code.
+Files to find:
+bash# Find the conversation engine
+find . -name "*.ts" | xargs grep -l "handleIncoming\|processWhatsApp\|twilioWebhook\|conversationEngine" 2>/dev/null
+
+# Find the complaint router
+find . -name "*.ts" | xargs grep -l "COMPLAINT_PATTERNS\|complaintRouter\|mapComplaint" 2>/dev/null
+
+# Find the test harness that was passing 17/17
+find . -name "*.ts" | xargs grep -l "conversationTestHarness\|17.*passing\|testScenarios" 2>/dev/null
+
+# Find what's actually being called on incoming WhatsApp message
+find . -name "*.ts" | xargs grep -l "Body.*From.*whatsapp\|twilio.*webhook" 2>/dev/null
+Acceptance criteria:
+
+Every file path printed — no guessing
+The test harness file server/tests/conversationTestHarness.ts is located or reported missing
+The complaint pattern router is located or reported missing
+Report: is the conversation engine using the KB, or calling LLM directly with a raw prompt?
+
+Required output: A list of file paths. The word MISSING next to any file not found. Do not edit anything.
+Dependencies: None
+
+R002 — Lock the file that handles incoming WhatsApp messages
+Status: ⏳ Not started
+Files to find first: From R001
+Read the file. Report exactly:
+
+When a message comes in, what is the first thing it does?
+Does it look up a session? How?
+Does it call the complaint router? Or does it call an LLM directly?
+How many LLM calls happen before the first reply is sent?
+Where does the question sequence come from — hardcoded, KB lookup, or LLM generation?
+Where does disposition come from — rule engine or LLM?
+
+Verification:
+bash# Print the full incoming message handler — no editing
+cat [FILE_FOUND_IN_R001] | head -200
+Required output: Answers to all 6 questions above, with line numbers from the file. Do not fix anything yet.
+Dependencies: R001
+
+R003 — Restore complaint pattern router
+Status: ⏳ Not started
+Context: The working system had COMPLAINT_PATTERNS with 18 clusters including exact regex patterns for headache, nausea/abdominal pain, chest pain, UTI, etc. If this file is missing or bypassed, restore it.
+Files to create if missing: server/conversation/complaintRouter.ts
+The router must:
+
+Accept raw patient free-text as input
+Match against 18 complaint clusters using the regex patterns
+Return a complaintCode (e.g., headache, nausea_vomiting, abdominal_pain, chest_pain)
+If no match: return unknown — NOT a numbered list
+Run in under 50ms (pure regex, no LLM)
+
+The 18 clusters and their primary trigger phrases:
+CodeKey phrasesheadachehead hurts, headache, head pain, migrainenausea_vomitingnausea, nauseated, vomiting, throwing up, sick to stomachabdominal_painstomach hurts, belly pain, abdominal pain, crampschest_painchest pain, chest tight, chest pressure, heart racingshortness_of_breathhard to breathe, short of breath, can't breathe, SOBuri_sinusrunny nose, congestion, sinus, cold symptomssore_throatsore throat, throat hurts, strepcoughcough, coughingutiburning when I pee, UTI, frequency, urgencyback_painback hurts, back pain, lower backrashrash, hives, skin, itchyfeverfever, temperature, chillsear_painear pain, earache, ear infectioneye_complaintred eye, pink eye, eye painlacerationcut, laceration, wound, bleedingmusculoskeletaljoint pain, sprain, muscle pain, twistedhypertensionblood pressure, BP highmedication_refillrefill, prescription, medication
+Acceptance criteria:
+
+"my head hurts" → returns headache
+"I am nauseated" → returns nausea_vomiting
+"no but my stomach hurts" → returns abdominal_pain
+"6" (a number) → returns unknown
+No LLM is called
+
+Verification:
+bashnpx ts-node -e "
+import { routeComplaint } from './server/conversation/complaintRouter';
+console.log(routeComplaint('my head hurts'));
+console.log(routeComplaint('I am nauseated'));
+console.log(routeComplaint('no but my stomach hurts'));
+console.log(routeComplaint('6'));
+"
+Required output:
+headache
+nausea_vomiting
+abdominal_pain
+unknown
+Dependencies: R001, R002
+
+R004 — Restore clinical question sequences per complaint
+Status: ⏳ Not started
+Context: Each complaint needs a structured question sequence — not LLM improvisation. These must come from the KB or a hardcoded clinical sequence. LLM is only called for the final synthesis, not for generating questions.
+Files to create if missing: server/conversation/questionSequences.ts
+Minimum question sequences required (in clinical order):
+Headache:
+
+How long have you had the headache?
+On a scale of 1–10, how bad is the pain?
+Is this the worst headache of your life?
+Any fever, stiff neck, or sensitivity to light?
+Any vision changes or weakness?
+Any nausea or vomiting with it?
+
+Nausea/Vomiting:
+
+How long have you been nauseated?
+Have you vomited? If so, how many times?
+Any blood in the vomit?
+Any abdominal pain with it?
+Any fever?
+Are you able to keep fluids down?
+Any dizziness or feeling faint?
+
+Abdominal Pain:
+
+Where exactly is the pain?
+How long have you had it?
+On a scale of 1–10, how bad?
+Any fever?
+Any nausea or vomiting?
+Any blood in stool or black tarry stools?
+Any pain with urination?
+
+Acceptance criteria:
+
+getNextQuestion('headache', 0) returns the first headache question
+Questions advance in order with each patient answer
+No LLM is called to generate questions
+All 18 complaint clusters have at least 4 questions defined
+
+Verification:
+bashnpx ts-node -e "
+import { getNextQuestion } from './server/conversation/questionSequences';
+console.log(getNextQuestion('headache', 0));
+console.log(getNextQuestion('headache', 1));
+console.log(getNextQuestion('nausea_vomiting', 0));
+console.log(getNextQuestion('abdominal_pain', 3));
+"
+Required output: Four distinct clinical questions printed, one per line.
+Dependencies: R003
+
+R005 — Fix disposition: rule-based only, no LLM disposition, physician review gate enforced
+Status: ⏳ Not started
+Files to find first: Disposition logic from R001/R002
+The disposition engine must:
+
+Never fire before 4 questions answered — hard stop
+Never send ER for nausea + stomach pain alone — those are urgent care
+ER triggers (must be confirmed by a direct follow-up question, not assumed):
+
+Worst headache of life (confirmed yes)
+Chest pain + shortness of breath (both confirmed)
+Blood in vomit (confirmed)
+Unable to stay conscious / altered mental status
+Signs of stroke (facial droop, arm weakness, speech change)
+
+
+Every disposition message must include a reason:
+
+ER: "Based on [symptom], this needs emergency evaluation right away."
+Urgent care: "Your symptoms sound like something we can help with at urgent care."
+
+
+Physician review gate: Before sending ANY disposition, set awaitingPhysicianReview = true and hold. The physician queue receives the case summary. Only after physician confirmation (or a 3-minute timeout with urgent care default) does disposition send.
+
+Acceptance criteria:
+
+Nausea + stomach pain → urgent care, NOT ER
+"Worst headache of my life" confirmed → ER with explanation
+Disposition sent only after ≥4 questions answered
+Disposition message always contains "based on" or "because"
+Physician review flag is set before disposition sends
+
+Verification:
+bash# Nausea scenario — must NOT be ER
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=I am nauseated&From=whatsapp:+15550001111"
+# Walk through 5 answers
+for msg in "yes vomiting" "no blood" "stomach hurts" "no fever" "yes keeping fluids"; do
+  curl -s -X POST localhost:3000/api/twilio/webhook \
+    -d "Body=$msg&From=whatsapp:+15550001111"
+done
+# Final disposition
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=no other symptoms&From=whatsapp:+15550001111" \
+  | grep -i "urgent care\|emergency\|based on\|because"
+Required output: Response contains "urgent care" and contains "based on" or "because". Does NOT contain "emergency care immediately".
+Dependencies: R004
+
+R006 — Fix latency: first response must be under 2 seconds
+Status: ⏳ Not started
+Root cause to find: Count LLM calls that happen before first response. Every LLM call adds 1–4 seconds. The first response (introduction + complaint routing) must make ZERO LLM calls.
+Required architecture for first response:
+Patient message arrives
+→ Is this a new session? (Redis lookup — <10ms)
+→ YES: Send introduction immediately (no LLM)
+  "Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?"
+→ NO: Run complaintRouter (regex — <50ms)
+→ Send first clinical question (from questionSequences — no LLM)
+LLM is called only for: final case summary generation for physician queue. Never for routing, never for question selection, never for the first reply.
+Verification:
+bashtime curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15550009999" \
+  --max-time 5
+Required output: Command completes in under 2.0 seconds real time. Response is not empty.
+Dependencies: R003, R004
+
+Summary Checklist
+
+ R001 — Audit what exists (DO THIS FIRST, touch nothing)
+ R002 — Lock and read the incoming message handler
+ R003 — Restore complaint pattern router (18 clusters, regex only)
+ R004 — Restore clinical question sequences (structured, no LLM)
+ R005 — Fix disposition (rule-based, physician gate, explanations)
+ R006 — Fix latency (zero LLM calls before first response)
+
+
+Hard Rules
+
+R001 and R002 are read-only. Do not edit a single line until both are done and reported.
+If the test harness server/tests/conversationTestHarness.ts is found, run it immediately and report which of the 17 scenarios are now failing. That tells us exactly what broke.
+Do NOT call an LLM to generate triage questions. Questions come from questionSequences.ts.
+Do NOT call an LLM for disposition decisions. Disposition comes from the rule engine.
+If conversationTestHarness.ts is MISSING, report that — it means someone deleted the test infrastructure.
+Every task must paste verification output verbatim before marking done.
+
+
+Start order
+Start with R001. Run the four bash commands. Paste every file path found. Then R002 — read the handler and answer the 6 questions. Only then begin fixing.
+The most important question R002 will answer: is the system calling an LLM to decide what question to ask next? If yes, that single architectural mistake explains every symptom you're seeing — the slowness, the random questions, the wrong disposition. Fix that one thing and 80% of the problems go away.
