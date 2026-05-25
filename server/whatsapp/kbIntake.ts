@@ -159,19 +159,28 @@ function isCriticalPipelineResult(result: PipelineResult): boolean {
   return ["ER_NOW", "ED_NOW", "CALL_911", "911", "AMBULANCE_NOW", "AMBULANCE"].includes(d);
 }
 
+const CRITICAL_KEYWORDS = [
+  "thunderclap", "worst headache", "worst pain of", "worst of your life",
+  "worst of his life", "worst of her life",
+  "facial droop", "arm weakness", "leg weakness", "slurred speech",
+  "cannot breathe", "can't breathe", "unable to breathe",
+  "coughing blood", "vomiting blood", "unconscious", "loss of consciousness",
+];
+
 // Instant keyword-based fallback: if the rule engine has no rule for this
 // complaint/question, critical safety questions with a "yes" still escalate.
 function isInstantKeywordEscalation(q: QRow, answer: string | number): boolean {
   if (answer !== "yes") return false;
   const text = q.QUESTION_TEXT.toLowerCase();
-  const CRITICAL_KEYWORDS = [
-    "thunderclap", "worst headache", "worst pain of", "worst of your life",
-    "worst of his life", "worst of her life",
-    "facial droop", "arm weakness", "leg weakness", "slurred speech",
-    "cannot breathe", "can't breathe", "unable to breathe",
-    "coughing blood", "vomiting blood", "unconscious", "loss of consciousness",
-  ];
   return CRITICAL_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+// First-message safety net: deterministic scan of raw patient text. The LLM
+// is NOT trusted to trigger a hard stop on the initial complaint — only an
+// explicit critical phrase from the patient does.
+function hasInstantEscalationInText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return CRITICAL_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 async function checkEscalation(
@@ -445,20 +454,25 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Extract from initial message + generate first conversational response ─
     console.log('[T4] conversational engine: extracting from initial message', Date.now());
 
-    // Extract any clinical fields already mentioned in the initial complaint message
+    // LLM extraction guides conversational continuity (don't re-ask things the
+    // patient volunteered), but its output is NEVER seeded into session.answers.
+    // The rule pipeline only accepts explicit patient yes/no responses to safety
+    // questions — see hasInstantEscalationInText below for the only first-message
+    // hard-stop pathway.
     const initExtraction = await extractClinicalFields(rawText, {}, match.slug);
     const initFields     = initExtraction.extracted;
-    const initAnswers    = mapFieldsToQIds(match.slug, initFields);
 
     session.extractedFields = initFields;
-    session.answers         = initAnswers;
+    session.answers         = {};
     hotSet(threadId, session);
 
-    // Safety check on initial message (rare, but handles "I have chest pain and can't breathe")
-    const initEscalate = await checkEscalation(match.slug, initAnswers);
-    if (initEscalate) {
+    // First-message hard stop fires only on deterministic critical phrases
+    // ("worst headache of my life", "can't breathe", etc.) — never on LLM
+    // extraction. Subsequent messages route through the question flow where
+    // the patient explicitly answers safety questions.
+    if (hasInstantEscalationInText(rawText)) {
       setImmediate(() => {
-        setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — initial message", rfTriggered: ["ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
+        setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — initial message keyword", rfTriggered: ["KEYWORD_ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
         endSession(caseId, "er_send" as any).catch(() => {});
       });
       await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
