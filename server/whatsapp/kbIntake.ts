@@ -93,11 +93,19 @@ async function firestoreLookup(threadId: string): Promise<HotSession | null> {
 
 function mapMasterDisposition(disp: string | null): string | null {
   if (!disp) return null;
-  const d = disp.toUpperCase();
-  if (["ER_NOW", "ED_NOW", "CALL_911", "911"].includes(d)) return "er_send";
-  if (["URGENT_CARE", "UC"].includes(d))                     return "urgent_care";
-  if (["PCP", "ROUTINE", "PRIMARY_CARE"].includes(d))        return "pcp";
-  if (["HOME_CARE", "SELF_CARE", "TELEHEALTH"].includes(d))  return "self_care";
+  const d = disp.toUpperCase().trim();
+  // ── ER / Emergency (F005 fix: cover all emergency variant names) ──────────
+  if (["ER_NOW","ED_NOW","CALL_911","911","ER","ED",
+       "AMBULANCE","AMBULANCE_NOW","EMERGENCY","EMERGENT",
+       "GO_TO_ER","GO_TO_ED","911_NOW"].includes(d))       return "er_send";
+  // ── Urgent Care ───────────────────────────────────────────────────────────
+  if (["URGENT_CARE","UC","URGENT","SAME_DAY"].includes(d)) return "urgent_care";
+  // ── PCP / Routine ─────────────────────────────────────────────────────────
+  if (["PCP","ROUTINE","ROUTINE_CARE","PRIMARY_CARE",
+       "SEE_DOCTOR","SCHEDULE","FOLLOW_UP"].includes(d))    return "pcp";
+  // ── Self-Care / Telehealth ────────────────────────────────────────────────
+  if (["HOME_CARE","SELF_CARE","TELEHEALTH","HOME",
+       "WATCHFUL_WAITING","MONITOR","OTC"].includes(d))     return "self_care";
   return null;
 }
 
@@ -181,10 +189,44 @@ async function checkEscalation(
   }
 }
 
+// F004 fix: full self-introduction sent on first contact (hi / hello / /start)
+function buildIntroMessage(): string {
+  return [
+    `👋 *Hi, I'm Auralyn* — your AI medical triage assistant.`,
+    ``,
+    `I'll ask you a few quick questions about your symptoms and give you a clinical recommendation in under 2 minutes — completely free.`,
+    ``,
+    `🩺 *What's your main symptom today?*`,
+    ``,
+    `Just type it in plain words — for example:`,
+    `• "chest pain"`,
+    `• "sore throat"`,
+    `• "stomach ache"`,
+    `• "I have a fever and cough"`,
+    ``,
+    `_AI-assisted decision support only. Not a substitute for a doctor._`,
+  ].join("\n");
+}
+
+// F003 fix: conversational "didn't catch" prompt — no numbered list
+function buildNoMatchMessage(tonePrefix: string): string {
+  return tonePrefix + [
+    `I didn't quite catch that — no worries! 😊`,
+    ``,
+    `Could you describe your *main symptom* in a few words?`,
+    ``,
+    `For example:`,
+    `• "chest pain"`,
+    `• "sore throat with fever"`,
+    `• "bad headache for 3 days"`,
+    ``,
+    `Just type what you're feeling and I'll take it from there.`,
+  ].join("\n");
+}
+
+// buildComplaintMenu kept for backward compat (used nowhere except legacy paths)
 function buildComplaintMenu(): string {
-  const complaints = (listEnabledComplaints() as any[]).slice(0, 20);
-  const numbered = complaints.map((c, i) => `${i + 1}. ${c.LABEL}`).join("\n");
-  return `👋 Welcome to Auralyn Triage.\n\nWhat's your main symptom? Type it or reply with a number:\n\n${numbered}\n\n_Or just describe your symptom in your own words._`;
+  return buildIntroMessage();
 }
 
 function buildTriageFromPipeline(p: PipelineResult): Record<string, any> {
@@ -292,7 +334,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
     hotDel(threadId);
     clearSurveyState("whatsapp", threadId).catch(() => {});
-    await sendWhatsAppMessage(cleanFrom, buildComplaintMenu());
+    await sendWhatsAppMessage(cleanFrom, buildIntroMessage());
     return true;
   }
 
@@ -383,7 +425,7 @@ export async function handleWhatsAppKBIntake(params: {
 
     if (!match) {
       const tonePrefix = buildTonePrefix(mood.mood);
-      await sendWhatsAppMessage(cleanFrom, tonePrefix + buildComplaintMenu());
+      await sendWhatsAppMessage(cleanFrom, buildNoMatchMessage(tonePrefix));
       return true;
     }
 

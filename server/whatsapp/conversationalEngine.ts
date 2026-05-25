@@ -1038,6 +1038,26 @@ export const conversationalEngine = {
 
     session.exchanges.push({ role: "user", text: message });
 
+    // ── PRE-GPT instant keyword extraction + safety check ─────────────────
+    // _keywordExtract is 100% synchronous (regex, 0ms). Merging these fields
+    // BEFORE the GPT call means critical signals (radiation, diaphoresis, etc.)
+    // are always detected — even when the GPT combined call times out at 2500ms.
+    const quickFields = _keywordExtract(session.slug, message);
+    Object.assign(session.fields, quickFields);
+
+    // Run safety check immediately on keyword-extracted fields — if it fires,
+    // we short-circuit and never wait for GPT at all.
+    const quickSafety = _checkSafety(session.slug, session.fields);
+    if (quickSafety.escalate) {
+      session.disposition = quickSafety.disposition;
+      session.closed = true;
+      const response = quickSafety.disposition === "ambulance_now"
+        ? "This sounds like a medical emergency — call 911 right now. Don't wait or drive yourself."
+        : "Based on what you're telling me, please go to the ER right now. Don't delay.";
+      session.exchanges.push({ role: "assistant", text: response });
+      return { response, disposition: quickSafety.disposition };
+    }
+
     // ── Single combined call: extract fields + generate response ──────────
     // One GPT call instead of two keeps each turn well under the 3 s SLA.
     const combined = await extractAndRespond(
@@ -1047,9 +1067,10 @@ export const conversationalEngine = {
       session.exchanges,
       isFirst,
     );
+    // Merge GPT-extracted fields on top of keyword fields (GPT wins on conflicts)
     Object.assign(session.fields, combined.extracted);
 
-    // ── Safety check (runs after every extraction) ────────────────────────
+    // ── Post-GPT safety check (catches fields GPT found that keywords missed) ──
     const safety = _checkSafety(session.slug, session.fields);
     if (safety.escalate) {
       session.disposition = safety.disposition;

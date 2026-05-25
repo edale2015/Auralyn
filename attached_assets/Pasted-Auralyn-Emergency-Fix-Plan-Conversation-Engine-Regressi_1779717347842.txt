@@ -1,0 +1,173 @@
+Auralyn Emergency Fix Plan — Conversation Engine Regression
+Session goal: Restore natural, low-latency, clinically logical WhatsApp triage conversation. Fix all 5 broken behaviors observed in the screenshot.
+
+The 5 Confirmed Failures
+
+5-second latency — unacceptable; feels broken
+Ignored free-text input — "my head hurts" triggered a generic symptom list instead of headache triage
+No self-introduction — Auralyn never identified herself
+Numbered symptom list — anti-clinical, anti-conversational; a doctor doesn't hand patients a form
+Insane disposition — "Go to ER immediately" after just "fever: Y" with no differential, no diagnosis, no physician review gate
+
+
+F001 — Find and read the actual conversation engine file before touching anything
+Status: ⏳ Not started
+Files to find first:
+Search the project for files containing "conversationEngine", "whatsapp", "handleIncoming", "twilioWebhook". List every file path found. Do not edit anything yet.
+Acceptance criteria:
+
+The exact file handling incoming WhatsApp messages is identified
+The symptom-list generation code is located
+The disposition trigger logic is located
+
+Verification:
+bashgrep -r "symptom list\|numbered list\|1\. Head\|complaint_list\|sendSymptomMenu" server/ --include="*.ts" -l
+grep -r "emergency care\|ER immediately\|disposition" server/ --include="*.ts" -l
+grep -r "twilioWebhook\|handleIncoming\|processMessage" server/ --include="*.ts" -l
+Required output: File paths printed — at least 2 files identified. If zero results, widen search to src/ and root.
+Dependencies: None — start here
+
+F002 — Fix latency: Remove or bypass whatever is causing 5-second delay on first response
+Status: ⏳ Not started
+Files to find first: Identified in F001
+Acceptance criteria:
+
+First response to any WhatsApp message arrives in under 2 seconds
+No blocking synchronous calls (DB queries, LLM calls, Google Sheets) before the first reply is sent
+If LLM is called for the first response, it must be called with a minimal prompt only
+
+Verification:
+bash# Time the first response
+time curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15055551234&To=whatsapp:+14155551234" \
+  --max-time 10
+Required output: Command completes in under 2.0 seconds real time. Response body is not empty.
+Dependencies: F001
+
+F003 — Fix free-text intake: "my head hurts" must map to headache complaint cluster, not show a list
+Status: ⏳ Not started
+Files to modify: Conversation engine file identified in F001
+What to change:
+
+When a user sends free text on first message, run NLP/keyword match against the 18 complaint clusters
+"head hurts", "headache", "head pain" → map to headache complaint cluster immediately
+Delete or disable the numbered symptom list entirely. It must never be sent.
+If free-text doesn't match any cluster (genuinely ambiguous), ask ONE clarifying question: "Can you describe where it hurts or what's bothering you most?"
+
+Acceptance criteria:
+
+Sending "my head hurts" starts headache-specific follow-up questions (not a list)
+The numbered symptom list (1. Fever, 2. Cough...) is never sent under any condition
+Ambiguous input gets a single open question, not a menu
+
+Verification:
+bashcurl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15055551234" | grep -i "headache\|head\|pain\|list"
+Required output: Response contains headache-related follow-up. Response does NOT contain "1." or "2." or numbered items.
+Dependencies: F002
+
+F004 — Add Auralyn self-introduction on first contact
+Status: ⏳ Not started
+Files to modify: Conversation engine, session initialization logic
+What to change:
+
+On the very first message from a new number (no prior session), Auralyn responds:
+
+
+"Hi, I'm Auralyn, your urgent care assistant. I'm here to help get you seen faster. What's bringing you in today?"
+
+
+This must be the FIRST thing sent, before any triage question
+Must NOT be sent on subsequent messages in the same session
+
+Acceptance criteria:
+
+Brand new number → first response includes "Auralyn" and asks what's wrong
+Same number second message → no re-introduction
+Introduction is under 2 seconds (covered by F002)
+
+Verification:
+bash# First contact
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=hello&From=whatsapp:+19991112222" | grep -i "auralyn"
+
+# Second message same number  
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my back hurts&From=whatsapp:+19991112222" | grep -i "auralyn"
+Required output: First call → "auralyn" appears in response. Second call → "auralyn" does NOT appear.
+Dependencies: F003
+
+F005 — Fix disposition logic: No ER recommendation without clinical reasoning chain
+Status: ⏳ Not started
+Files to modify: Disposition trigger logic identified in F001
+What to change — this is the most critical fix:
+Current broken behavior: 2 questions answered → "Go to ER immediately" sent.
+Required behavior:
+
+Triage conversation must ask minimum 4–6 clinically relevant questions before any disposition
+Disposition must be based on a reasoning summary — not a single symptom flag
+ER disposition requires at least ONE of: chest pain + shortness of breath, altered consciousness, stroke symptoms, severe trauma, active bleeding, or SpO2 concern — confirmed by follow-up question, not assumed
+The disposition message must include a brief plain-English explanation: "Based on your symptoms [X and Y], you should be seen in the ER right away."
+Urgent care disposition (the most common correct answer) must be available and used appropriately
+No disposition is sent until the physician review gate is checked — if physicianReviewRequired flag exists in the codebase, it must be respected
+
+Acceptance criteria:
+
+Headache + fever alone → disposition is urgent care, NOT ER
+Chest pain + shortness of breath → ER, with explanation
+Every disposition message contains the word "because" or "based on" explaining why
+Fewer than 4 questions answered → no disposition sent, conversation continues
+
+Verification:
+bash# Headache scenario — should NOT go to ER
+SESSION=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15551110001" | jq -r '.sessionId // empty')
+
+# Walk through 3 quick answers
+curl -s -X POST localhost:3000/api/twilio/webhook -d "Body=Y&From=whatsapp:+15551110001"
+curl -s -X POST localhost:3000/api/twilio/webhook -d "Body=no chest pain&From=whatsapp:+15551110001"
+curl -s -X POST localhost:3000/api/twilio/webhook -d "Body=mild&From=whatsapp:+15551110001"
+
+# Check final disposition
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=no other symptoms&From=whatsapp:+15551110001" | grep -i "emergency\|urgent care\|ER\|because\|based on"
+Required output: Response contains "urgent care" — NOT "emergency" or "ER immediately". Response contains an explanation.
+Dependencies: F004
+
+Summary Checklist
+
+ F001 — Locate all relevant files (do this FIRST, touch nothing yet)
+ F002 — Fix latency (under 2 seconds)
+ F003 — Fix free-text intake, delete symptom list
+ F004 — Add Auralyn self-introduction
+ F005 — Fix disposition logic with clinical reasoning
+
+
+Hard Rules
+
+Do NOT declare any task done without running its verification command and pasting the output verbatim
+Do NOT modify test fixtures to make verifications pass
+If F001 finds that a file was recently rewritten or replaced, REPORT that — it likely explains the regression
+Do NOT touch clinical_brain model selection
+If the symptom list is coming from a database or config (not hardcoded), disable the DB/config path — do not just hide it in code
+
+
+Order
+Start with F001 — you cannot fix what you haven't located. Once files are confirmed, execute F002 → F003 → F004 → F005 in order. Do not skip ahead.
+
+Gap Closure Verification
+Run this after all 5 tasks are complete:
+bashecho "=== LATENCY ===" && \
+time curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15550000099" && \
+echo "" && \
+echo "=== NO SYMPTOM LIST ===" && \
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=my head hurts&From=whatsapp:+15550000099" | grep -c "1\." && \
+echo "=== INTRODUCTION ===" && \
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=hi&From=whatsapp:+15550000098" | grep -i "auralyn" && \
+echo "AURALYN CONVERSATION ENGINE VERIFIED"
+Required output: Latency under 2s, grep -c "1\." returns 0, "auralyn" found, final line reads AURALYN CONVERSATION ENGINE VERIFIED.
+
+Copy this entire plan into Replit's agent. Tell it: "Execute F001 first. Show me the file paths before doing anything else." 

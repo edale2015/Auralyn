@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db } from "../db";
+import { db, query as pgQuery } from "../db";
 import { sql } from "drizzle-orm";
 import { requireRole } from "../middleware/requireRole";
 import { requireReviewAuth } from "../middleware/reviewAuth";
@@ -358,29 +358,56 @@ router.post("/export-to-sheets", ...auth, async (_req, res) => {
   }
 });
 
-// Create rule
+// Helper: ensure value is a proper JS array (for native pg TEXT[] binding)
+function toArr(v: any): string[] {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === "string" && v.length > 0) return [v];
+  return [];
+}
+
+// Create rule — uses raw pgQuery so node-postgres handles TEXT[] and JSONB natively
 router.post("/", requireReviewAuth, requireRole(["admin"]), async (req, res) => {
   try {
     const b = req.body;
-    await db.execute(sql`
-      INSERT INTO kb_master_rules (rule_id, rule_name, rule_type, priority, complaint_id, cluster_id,
+    await pgQuery(
+      `INSERT INTO kb_master_rules (
+        rule_id, rule_name, rule_type, priority, complaint_id, cluster_id,
         diagnosis_id, modifier_dependencies, question_dependencies, red_flag_dependencies,
         input_fields, logic_description, logic_type, source_tab, target_tabs, outputs,
         disposition_impact, medication_impact, workup_impact, safety_level, override_rules,
-        confidence_weight, active, version, last_updated, owner, notes)
-      VALUES (${b.rule_id}, ${b.rule_name}, ${b.rule_type}, ${b.priority ?? 5},
-        ${b.complaint_id ?? "ALL"}, ${b.cluster_id ?? null}, ${b.diagnosis_id ?? null},
-        ${b.modifier_dependencies ?? []}, ${b.question_dependencies ?? []},
-        ${b.red_flag_dependencies ?? []}, ${b.input_fields ?? []},
-        ${b.logic_description ?? null}, ${b.logic_type ?? "boolean"},
-        ${b.source_tab ?? null}, ${b.target_tabs ?? []},
-        ${b.outputs ? JSON.stringify(b.outputs) : null},
-        ${b.disposition_impact ?? null}, ${b.medication_impact ?? null},
-        ${b.workup_impact ?? null}, ${b.safety_level ?? "MODERATE"},
-        ${b.override_rules ?? []}, ${b.confidence_weight ?? 0.5},
-        ${b.active !== false}, ${b.version ?? "v1"}, NOW(),
-        ${b.owner ?? "admin"}, ${b.notes ?? null})
-    `);
+        confidence_weight, active, version, last_updated, owner, notes
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25,$26
+      )`,
+      [
+        b.rule_id,
+        b.rule_name,
+        b.rule_type,
+        b.priority ?? 5,
+        b.complaint_id ?? "ALL",
+        b.cluster_id ?? null,
+        b.diagnosis_id ?? null,
+        toArr(b.modifier_dependencies),    // $8  TEXT[]
+        toArr(b.question_dependencies),    // $9  TEXT[]
+        toArr(b.red_flag_dependencies),    // $10 TEXT[]
+        toArr(b.input_fields),             // $11 TEXT[]
+        b.logic_description ?? null,
+        b.logic_type ?? "boolean",
+        b.source_tab ?? null,
+        toArr(b.target_tabs),              // $15 TEXT[]
+        b.outputs ? JSON.stringify(b.outputs) : null,  // $16 JSONB (as string)
+        b.disposition_impact ?? null,
+        b.medication_impact ?? null,
+        b.workup_impact ?? null,
+        b.safety_level ?? "MODERATE",
+        toArr(b.override_rules),           // $21 TEXT[]
+        b.confidence_weight ?? 0.5,
+        b.active !== false,
+        b.version ?? "v1",
+        b.owner ?? "admin",
+        b.notes ?? null,
+      ]
+    );
     res.json({ ok: true, rule_id: b.rule_id });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
