@@ -9,8 +9,7 @@ import {
 import { matchComplaintFromText, listEnabledComplaints } from "../services/complaintMatchService";
 import type { QRow } from "../services/questionFlowService";
 import {
-  extractClinicalFields,
-  generateResponse,
+  extractAndRespond,
   generateClosingMessage,
   mapFieldsToQIds,
   isComplete,
@@ -451,25 +450,9 @@ export async function handleWhatsAppKBIntake(params: {
       logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
     });
 
-    // ── Extract from initial message + generate first conversational response ─
-    console.log('[T4] conversational engine: extracting from initial message', Date.now());
-
-    // LLM extraction guides conversational continuity (don't re-ask things the
-    // patient volunteered), but its output is NEVER seeded into session.answers.
-    // The rule pipeline only accepts explicit patient yes/no responses to safety
-    // questions — see hasInstantEscalationInText below for the only first-message
-    // hard-stop pathway.
-    const initExtraction = await extractClinicalFields(rawText, {}, match.slug);
-    const initFields     = initExtraction.extracted;
-
-    session.extractedFields = initFields;
-    session.answers         = {};
-    hotSet(threadId, session);
-
-    // First-message hard stop fires only on deterministic critical phrases
-    // ("worst headache of my life", "can't breathe", etc.) — never on LLM
-    // extraction. Subsequent messages route through the question flow where
-    // the patient explicitly answers safety questions.
+    // First-message hard stop: deterministic keyword scan. Runs BEFORE the LLM
+    // call so an explicit emergency phrase short-circuits the 2.5s round-trip.
+    // The LLM is NEVER trusted to trigger a hard stop on the initial complaint.
     if (hasInstantEscalationInText(rawText)) {
       setImmediate(() => {
         setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — initial message keyword", rfTriggered: ["KEYWORD_ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
@@ -480,23 +463,23 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
-    const firstResponse = await generateResponse({
-      complaintDisplay:    match.display,
-      complaintSlug:       match.slug,
-      extractedFields:     initFields,
-      needsProbe:          initExtraction.needs_probe,
-      lastMessage:         rawText,
-      exchanges:           [],
-      isFirstMessage:      true,
-    });
+    // ── Single combined LLM call: extract + generate first question (2.5s timeout) ─
+    // extractAndRespond has a hard 2.5s timeout and a deterministic
+    // keyword-extraction + question-library fallback. Extracted fields drive
+    // conversational continuity only — session.answers stays {} so LLM-extracted
+    // safety fields can never fire a red-flag rule on this or any subsequent message.
+    console.log('[T4] extractAndRespond from initial message', Date.now());
+    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true);
 
+    session.extractedFields = initCombined.extracted;
+    session.answers         = {};
     session.exchanges = [
-      { role: "user",      text: rawText       },
-      { role: "assistant", text: firstResponse },
+      { role: "user",      text: rawText              },
+      { role: "assistant", text: initCombined.response },
     ];
     hotSet(threadId, session);
 
-    await sendWhatsAppMessage(cleanFrom, firstResponse);
+    await sendWhatsAppMessage(cleanFrom, initCombined.response);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
@@ -549,23 +532,7 @@ export async function handleWhatsAppKBIntake(params: {
     hotDel(threadId);
   }
 
-  // ── Step 1: Extract clinical fields from this message ─────────────────────
-  console.log('[T4] conversational engine: extracting fields', Date.now());
-  const extraction = await extractClinicalFields(
-    rawText,
-    session.extractedFields ?? {},
-    complaint.slug
-  );
-
-  // Merge new extracted fields into session
-  const updatedFields  = { ...(session.extractedFields ?? {}), ...extraction.extracted };
-  const updatedAnswers = { ...answers, ...mapFieldsToQIds(complaint.slug, extraction.extracted) };
-
-  session.extractedFields = updatedFields;
-  session.answers         = updatedAnswers;
-  persistState(updatedAnswers);
-
-  // ── Fix 3: Keyword safety check (sync, no I/O) — can happen immediately ─────
+  // ── Step 1: Pre-LLM keyword safety scan — short-circuits the LLM call ─────
   const CRITICAL_PHRASES = [
     "can't breathe", "cannot breathe", "unable to breathe", "worst headache of my life",
     "chest pain and can't", "coughing blood", "vomiting blood", "thunderclap",
@@ -573,31 +540,32 @@ export async function handleWhatsAppKBIntake(params: {
   ];
   if (CRITICAL_PHRASES.some(p => rawText.toLowerCase().includes(p))) {
     console.log(`[WhatsApp] 🚨 Keyword escalation triggered`);
-    await doEscalation(updatedAnswers, "keyword");
+    await doEscalation(answers, "keyword");
     return true;
   }
 
-  // ── Fix 3: Run safety check + response generation in parallel ─────────────
-  // checkEscalation is a DB/pipeline call (~50-100ms).
-  // generateResponse is a GPT call (~300ms).
-  // Neither depends on the other — launch both at the same time.
-  // If escalation triggers, we send the ER message and discard the response.
+  // ── Step 2: Single combined LLM call (extract + next question, 2.5s timeout) ─
+  console.log('[T4] extractAndRespond', Date.now());
   const exchanges = session.exchanges ?? [];
-  const complete   = isComplete(complaint.slug, updatedFields);
+  const combined  = await extractAndRespond(
+    rawText,
+    session.extractedFields ?? {},
+    complaint.slug,
+    exchanges,
+    false,
+  );
 
-  const [shouldEscalate, nextResponse] = await Promise.all([
-    checkEscalation(complaint.slug, updatedAnswers),
-    complete
-      ? generateClosingMessage({ complaintDisplay: complaint.display })
-      : generateResponse({
-          complaintDisplay: complaint.display,
-          complaintSlug:    complaint.slug,
-          extractedFields:  updatedFields,
-          needsProbe:       extraction.needs_probe,
-          lastMessage:      rawText,
-          exchanges,
-        }),
-  ]);
+  // Merge extracted fields into session
+  const updatedFields  = { ...(session.extractedFields ?? {}), ...combined.extracted };
+  const updatedAnswers = { ...answers, ...mapFieldsToQIds(complaint.slug, combined.extracted) };
+
+  session.extractedFields = updatedFields;
+  session.answers         = updatedAnswers;
+  persistState(updatedAnswers);
+
+  // ── Step 3: Rule-pipeline safety check on the updated answers (~50-100ms) ──
+  const complete       = isComplete(complaint.slug, updatedFields);
+  const shouldEscalate = await checkEscalation(complaint.slug, updatedAnswers);
 
   if (shouldEscalate) {
     console.log(`[WhatsApp] 🚨 Safety escalation triggered for ${complaint.slug}`);
@@ -605,23 +573,24 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
-  // ── Step 3: Check if we have enough information ────────────────────────────
+  // ── Step 4: Interview complete → closing message + triage ─────────────────
   if (complete) {
     console.log('[T4] conversational engine: interview complete', Date.now());
-    await sendWhatsAppMessage(cleanFrom, nextResponse);
+    const closing = await generateClosingMessage({ complaintDisplay: complaint.display });
+    await sendWhatsAppMessage(cleanFrom, closing);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
     return true;
   }
 
-  // Update exchange history (keep last 10 turns)
+  // ── Step 5: Send the next question from the combined call ─────────────────
   session.exchanges = [
     ...exchanges,
-    { role: "user",      text: rawText       },
-    { role: "assistant", text: nextResponse  },
+    { role: "user",      text: rawText           },
+    { role: "assistant", text: combined.response },
   ].slice(-10);
 
-  await sendWhatsAppMessage(cleanFrom, nextResponse);
+  await sendWhatsAppMessage(cleanFrom, combined.response);
   console.log('[T5] sendWhatsAppMessage done', Date.now());
   return true;
 }

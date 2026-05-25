@@ -615,7 +615,7 @@ interface CombinedResult {
   response:     string;
 }
 
-async function extractAndRespond(
+export async function extractAndRespond(
   patientMessage: string,
   existingFields: Record<string, any>,
   slug:           string,
