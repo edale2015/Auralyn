@@ -265,7 +265,7 @@ export const llmGateway = {
     let model       = routerDecision.model;
 
     try {
-      if (routing.primary.provider === "anthropic") {
+      if (provider === "anthropic") {
         ({ content, tokensUsed } = await callAnthropic(model, request.messages, request.system, request.maxTokens));
       } else {
         ({ content, tokensUsed } = await callOpenAI(model, request.messages, request.system, request.maxTokens));

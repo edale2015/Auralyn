@@ -208,20 +208,8 @@ function buildIntroMessage(): string {
   ].join("\n");
 }
 
-// F003 fix: conversational "didn't catch" prompt — no numbered list
-function buildNoMatchMessage(tonePrefix: string): string {
-  return tonePrefix + [
-    `I didn't quite catch that — no worries! 😊`,
-    ``,
-    `Could you describe your *main symptom* in a few words?`,
-    ``,
-    `For example:`,
-    `• "chest pain"`,
-    `• "sore throat with fever"`,
-    `• "bad headache for 3 days"`,
-    ``,
-    `Just type what you're feeling and I'll take it from there.`,
-  ].join("\n");
+function buildNoMatchMessage(_tonePrefix: string): string {
+  return `Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?`;
 }
 
 // buildComplaintMenu kept for backward compat (used nowhere except legacy paths)

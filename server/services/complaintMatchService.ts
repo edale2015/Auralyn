@@ -71,7 +71,7 @@ export function matchComplaintFromText(
 
   for (const r of rows) {
     const aliases = r.ALIASES.split(";")
-      .map((s) => s.trim().toLowerCase())
+      .map((s) => s.trim().toLowerCase().replaceAll("_", " "))
       .filter(Boolean);
 
     for (const a of aliases) {

@@ -26,9 +26,14 @@ import type { AgentScorecard } from "../eval/agentBenchmark";
 // ── Pinned agents — NEVER change these via scorecard ─────────────────────────
 
 const PINNED: Partial<Record<ModelPurpose, { provider: "anthropic" | "openai"; model: string }>> = {
-  clinical_brain:  { provider: "anthropic", model: "claude-opus-4-20250514" },
-  kb_validator:    { provider: "anthropic", model: "claude-opus-4-20250514" },
-  skill_generator: { provider: "anthropic", model: "claude-opus-4-20250514" },
+  clinical_brain:       { provider: "anthropic", model: "claude-opus-4-20250514" },
+  kb_validator:         { provider: "anthropic", model: "claude-opus-4-20250514" },
+  skill_generator:      { provider: "anthropic", model: "claude-opus-4-20250514" },
+  intent_parser:        { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  retrieval_pruner:     { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  uncertainty_sampler:  { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  discharge_generator:  { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  cme_quiz:             { provider: "anthropic", model: "claude-sonnet-4-20250514" },
 };
 
 // ── Latency budgets per purpose (ms) ─────────────────────────────────────────
@@ -48,22 +53,27 @@ const LATENCY_BUDGETS: Record<ModelPurpose, number> = {
 
 const CANDIDATE_MODELS: Partial<Record<ModelPurpose, Array<{ provider: "anthropic" | "openai"; model: string }>>> = {
   intent_parser:        [
+    { provider: "anthropic", model: "claude-sonnet-4-20250514" },
     { provider: "openai",    model: "gpt-4o-mini" },
     { provider: "openai",    model: "gpt-4o" },
   ],
   retrieval_pruner:     [
+    { provider: "anthropic", model: "claude-sonnet-4-20250514" },
     { provider: "openai",    model: "gpt-4o-mini" },
     { provider: "openai",    model: "gpt-4o" },
   ],
   uncertainty_sampler:  [
+    { provider: "anthropic", model: "claude-sonnet-4-20250514" },
     { provider: "openai",    model: "gpt-4o-mini" },
     { provider: "openai",    model: "gpt-4o" },
   ],
   discharge_generator:  [
+    { provider: "anthropic", model: "claude-sonnet-4-20250514" },
     { provider: "openai",    model: "gpt-4o-mini" },
     { provider: "openai",    model: "gpt-4o" },
   ],
   cme_quiz:             [
+    { provider: "anthropic", model: "claude-sonnet-4-20250514" },
     { provider: "openai",    model: "gpt-4o-mini" },
     { provider: "openai",    model: "gpt-4o" },
   ],
