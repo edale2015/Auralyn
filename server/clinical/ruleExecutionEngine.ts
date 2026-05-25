@@ -60,6 +60,7 @@ const PIPELINE_STEPS = [
   { step:  9,  name: "Diagnosis Ranking / Differential Refinement",ruleType: "diagnosis"       },
   { step: 10,  name: "Disposition + Plan",                         ruleType: "disposition"     },
   { step: 11,  name: "Plan Generation",                            ruleType: "plan"            },
+  { step: 12,  name: "Output Summary / Physician Communication",   ruleType: null              },
   { step: 13,  name: "Audit Trail",                                ruleType: null              },
 ];
 
@@ -275,6 +276,26 @@ export async function executePipeline(
       summary,
     });
   }
+
+  // Step 12: Output Summary / Physician Communication
+  steps.push({
+    step: 12, name: "Output Summary / Physician Communication", ruleType: "summary",
+    rulesEvaluated: 0, rulesFired: [],
+    outputs: {
+      finalDisposition:   finalDisposition ?? "HOME_CARE",
+      totalRulesFired:    totalFired,
+      criticalFlagsHit,
+      hardStop,
+      patientSummary:     hardStop
+        ? `URGENT: ${hardStopReason ?? "Critical flag hit"} — immediate escalation required.`
+        : `Assessment complete. Recommended disposition: ${finalDisposition ?? "HOME_CARE"}. Awaiting physician review.`,
+    },
+    redFlagHit:  hardStop,
+    escalation:  finalDisposition,
+    summary:     hardStop
+      ? `Escalation → ${finalDisposition}. ${totalFired} rules fired. Physician communication prepared.`
+      : `Assessment complete. Disposition: ${finalDisposition ?? "HOME_CARE"}. ${totalFired} rules fired.`,
+  });
 
   // Step 13: Audit (summarize)
   steps.push({
