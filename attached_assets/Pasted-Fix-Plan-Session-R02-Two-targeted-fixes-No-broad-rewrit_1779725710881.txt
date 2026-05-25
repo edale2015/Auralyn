@@ -1,0 +1,133 @@
+Fix Plan — Session R02
+Two targeted fixes. No broad rewrites.
+
+R02-F001 — Remove bullet-point examples from introduction message
+Status: ⏳ Not started
+File: server/whatsapp/conversationalEngine.ts (or wherever the Turn 0 intro message is built)
+Find the intro message. It currently looks like:
+...
+- "chest pain"
+- "sore throat with fever"  
+- "bad headache for 3 days"
+
+Just type what you're feeling and I'll take it from there.
+Replace it with:
+Hi, I'm Auralyn, your urgent care assistant. I'm here to help get you seen faster. What's bringing you in today?
+That's it. One sentence. No examples, no bullets, no coaching. A real triage nurse doesn't coach patients on how to describe symptoms.
+Acceptance criteria:
+
+New session → intro message contains "Auralyn" and ends with a question
+Intro message contains zero bullet points
+Intro message is under 20 words
+
+Verification:
+bashcurl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=hello&From=whatsapp:+15550000001" \
+  | grep -c "•\|\*\|-"
+Required output: 0
+bashcurl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=hello&From=whatsapp:+15550000001" \
+  | grep -i "auralyn"
+Required output: Line containing "Auralyn"
+Dependencies: None
+
+R02-F002 — Fix "headache + fever" disposition: must ask red flag questions before any ER routing
+Status: ⏳ Not started — THIS IS THE CRITICAL FIX
+Root cause: The disposition engine or safety check is treating headache + fever as an ER trigger. It is not. It is a starting point. The questions that determine disposition haven't been asked yet.
+File: server/whatsapp/conversationalEngine.ts — find _computeDisposition() and _checkSafety()
+The rule to implement:
+headache complaint code → ER is ONLY triggered after these questions are asked AND answered YES:
+QuestionER trigger if YESIs this the worst headache of your life?Yes → ER (thunderclap / subarachnoid)Any stiff neck or sensitivity to light?Yes → ER (meningitis)Any sudden vision loss or weakness in face/arm?Yes → ER (stroke)Fever over 104°F with confusion?Yes → ER
+Headache + fever WITHOUT any of the above confirmed → urgent care.
+The fix has two parts:
+Part A — Question sequence for headache must include red flag questions before disposition fires:
+In questionSequences.ts, the headache sequence must be:
+
+How long have you had the headache?
+On a scale of 1–10, how bad is the pain?
+Is this the worst headache of your life?
+Any stiff neck or sensitivity to light?
+Any fever?
+Any vision changes, facial drooping, or weakness in your arms?
+
+Part B — Safety check must NOT fire ER on fever=true + headache alone:
+Find the safety check. It likely has a rule like:
+typescriptif (fields.fever && complaintCode === 'headache') → ER
+or a combined keyword check on the raw text. Delete or rewrite that rule.
+The correct rule is:
+typescript// headache ER only if red flags explicitly confirmed
+if (complaintCode === 'headache') {
+  if (fields.worstHeadacheOfLife === true) → ER (thunderclap)
+  if (fields.stiffNeck === true || fields.lightSensitivity === true) → ER (meningitis)
+  if (fields.focalNeuroDeficit === true) → ER (stroke)
+  // fever alone → NOT ER → continue workup
+}
+Acceptance criteria:
+
+"I have a headache and high fever for 2 days" → system asks red flag questions, does NOT send ER immediately
+After answering NO to all red flag questions → disposition is urgent care with explanation
+After answering YES to "worst headache of your life" → disposition is ER with explanation including "thunderclap" or "severe" as reason
+Minimum 4 questions asked before any disposition fires
+
+Verification — must paste all output verbatim:
+bash# Reset session
+SESSION_NUM=$RANDOM
+
+# Turn 1 — give both symptoms at once
+T1=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=I have a headache and high fever for 2 days&From=whatsapp:+1555${SESSION_NUM}")
+echo "T1: $T1"
+
+# Turn 2
+T2=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=about a 6 out of 10&From=whatsapp:+1555${SESSION_NUM}")
+echo "T2: $T2"
+
+# Turn 3 — critical: NOT worst headache
+T3=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=no this is not the worst headache of my life&From=whatsapp:+1555${SESSION_NUM}")
+echo "T3: $T3"
+
+# Turn 4 — no meningitis signs
+T4=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=no stiff neck no light sensitivity&From=whatsapp:+1555${SESSION_NUM}")
+echo "T4: $T4"
+
+# Turn 5 — no neuro
+T5=$(curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=no vision changes no weakness&From=whatsapp:+1555${SESSION_NUM}")
+echo "T5: $T5"
+
+echo "=== DISPOSITION CHECK ==="
+echo "$T5" | grep -i "urgent care\|emergency\|ER\|based on\|because"
+Required output for T1–T4: A clinical question. No ER message.
+Required output for T5: Contains "urgent care" and "based on" or "because". Does NOT contain "emergency care immediately".
+bash# Now test the TRUE positive — worst headache of life
+SESSION2=$((RANDOM + 10000))
+
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=I have a headache&From=whatsapp:+1555${SESSION2}"
+
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=10 out of 10&From=whatsapp:+1555${SESSION2}"
+
+curl -s -X POST localhost:3000/api/twilio/webhook \
+  -d "Body=yes this is the worst headache of my life I have never felt this before&From=whatsapp:+1555${SESSION2}" \
+  | grep -i "emergency\|ER\|911\|based on\|because"
+Required output: Contains "emergency" or "911" AND contains "based on" or "because".
+Dependencies: R02-F001 (intro fix should be done first to clear session state cleanly)
+
+R02-F003 — Run the 17-scenario test harness after both fixes
+Status: ⏳ Not started
+This was never done after R001–R006. It must be done now.
+bashnpm run test:conversation
+Required output: All 17 scenarios listed with PASS/FAIL. Paste verbatim. Do not summarize.
+If any scenario fails → fix it before declaring done. Do not modify the test to make it pass.
+Dependencies: R02-F001, R02-F002
+
+Hard Rules for This Session
+
+R02-F001 is 10 minutes of work. Find the intro string, replace it. Done.
+R02-F002 is the real work. The safety check file must be read first, the exact offending rule found and shown, then fixed. Do not rewrite the whole disposition engine — find the specific headache + fever → ER rule and remove it.
+Do not declare R02-F002 done without pasting the full curl output for both test scenarios verbatim.
+Do not skip R02-F003. The 17-scenario harness is the contract.

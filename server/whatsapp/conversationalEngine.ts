@@ -751,20 +751,55 @@ function _keywordExtract(slug: string, msg: string): Record<string, any> {
   // Diaphoresis
   if (/\b(sweat|clammy|diaphoresis)\b/.test(m)) f.diaphoresis = true;
 
-  // Thunderclap headache — only if NOT negated in the same sentence.
-  // "no this is NOT the worst headache of my life" must NOT fire.
-  const isNegated = /\b(no\b|not\b|isn.?t|wasn.?t|never|don.?t think)\b/.test(m);
-  if (/\bthundercla[p]?\b/.test(m) && !isNegated) f.thunderclap = true;
-  else if (/\bworst.{0,30}(headache.{0,15})?(?:of\s+my\s+)?life\b/.test(m) && !isNegated) f.thunderclap = true;
-  else if (/\bsuddenly?.{0,15}worst\b/.test(m) && !isNegated) f.thunderclap = true;
+  // Global negation guard (used for simple patterns).
+  const isNegated = /\b(no\b|not\b|isn.?t|wasn.?t|don.?t think)\b/.test(m);
+
+  // Thunderclap headache — negation is scoped: only blocks if a negation word
+  // appears BEFORE "worst" in the sentence (within ~15 chars).
+  // This prevents "I have never felt this before" (after "worst") from blocking.
+  const thunderclapNegated =
+    /\b(no|not|isn.?t|wasn.?t|never)\s*.{0,15}worst\b/.test(m) ||
+    /\bnot\s+the\s+worst\b/.test(m);
+  if (/\bthundercla[p]?\b/.test(m) && !thunderclapNegated) f.thunderclap = true;
+  else if (/\bworst.{0,30}(headache.{0,15})?(?:of\s+my\s+)?life\b/.test(m) && !thunderclapNegated) f.thunderclap = true;
+  else if (/\bsuddenly?.{0,15}worst\b/.test(m) && !thunderclapNegated) f.thunderclap = true;
+
+  // Stiff neck (meningitis) — use proximity-based negation so "I have a stiff
+  // neck" still fires even when the sentence also contains "no" elsewhere.
+  const stiffNeckNegated =
+    /\bno\s+stiff\s+neck\b/.test(m) ||
+    /\bneck\s+(is\s+)?not\s+stiff\b/.test(m) ||
+    /\b(no|not|don.?t|without)\s+.{0,15}stiff\s+neck\b/.test(m);
+  if (/\b(stiff\s+neck|neck\s+(is\s+)?(stiff|rigid))\b/.test(m) && !stiffNeckNegated) f.stiff_neck = true;
+  else if (stiffNeckNegated) f.stiff_neck = false;
+
+  // Light sensitivity / photophobia — same proximity-based approach.
+  const lightSensNegated =
+    /\bno\s+(light\s+sens|photophob|sensitivity\s+to\s+light)\b/.test(m) ||
+    /\b(no|not|don.?t|without)\s+.{0,20}(sensitive\s+to\s+light|photophob|light\s+hurt)\b/.test(m);
+  if (/\b(sensitive\s+to\s+light|light\s+(hurts|bothers|is\s+bothering)|photophob|lights?\s+hurt)\b/.test(m) && !lightSensNegated) f.light_sensitivity = true;
+  else if (lightSensNegated) f.light_sensitivity = false;
+
+  // Weakness (dehydration marker — for nausea ER trigger)
+  if (/\b(very\s+weak|feel\s+(so\s+)?weak|too\s+weak|extremely\s+weak|weakness)\b/.test(m) && !isNegated) f.weakness = true;
+  if (/\bno\s+weakness\b/.test(m) || /\bnot\s+(very\s+)?weak\b/.test(m)) f.weakness = false;
+
+  // Oliguria (dehydration marker — for nausea ER trigger)
+  if (/\b(not\s+urinated|haven.?t\s+(peed|urinated)|no\s+urine|oliguria|not\s+peed)\b/.test(m)) f.oliguria = true;
+  if (/\b\d+\s+hours?\b/.test(m) && /\b(without\s+urinat|no\s+urine|not\s+peed|not\s+urinated)\b/.test(m)) f.oliguria = true;
 
   // Unable to keep fluids
   if (/\b(cannot|can.?t|unable)\s+keep\b/.test(m) ||
       /\b(not|nothing)\s+(staying|staying)\s+down\b/.test(m) ||
       /\bnothing\s+stays?\s+down\b/.test(m)) f.unable_keep_fluids = true;
 
-  // Flank pain (pyelonephritis)
-  if (/\b(flank|side)\s+pain\b/.test(m) && slug === "gu_uti_symptoms") f.flank_pain = true;
+  // Flank pain (pyelonephritis) — catch "flank/back/side pain" AND "back/side hurts" patterns
+  if (slug === "gu_uti_symptoms") {
+    const flankPos = /\b(flank|side|back)\s+pain\b/.test(m) ||
+      (/\b(back|side|flank)\b/.test(m) && /\b(hurt|hurts|hurting|ache|aches|aching|sore|tender)\b/.test(m));
+    if (flankPos && !isNegated) f.flank_pain = true;
+    if (/\b(no|without)\s+(back|flank|side)\s+(pain|hurt)\b/.test(m)) f.flank_pain = false;
+  }
 
   return f;
 }
@@ -944,10 +979,15 @@ function _checkSafety(slug: string, fields: Record<string, any>): { escalate: bo
     }
   }
 
-  // Headache — thunderclap / SAH / stroke
+  // Headache — thunderclap / SAH / meningitis / stroke
+  // Rule: fever alone and light_sensitivity alone do NOT trigger ER.
+  // Stiff neck is the strongest isolated meningitis sign.
   if (slug === "neuro_headache") {
     if (isExplicitlyPositive(fields.thunderclap))   return { escalate: true, disposition: "ambulance_now" };
+    if (isExplicitlyPositive(fields.stiff_neck))    return { escalate: true, disposition: "er_now" };
     if (isExplicitlyPositive(fields.neuro_deficit)) return { escalate: true, disposition: "er_now" };
+    // light_sensitivity alone (common in migraine) → NOT ER → continue workup
+    // fever alone → NOT ER → continue workup
   }
 
   // Cough — hypoxia / severe dyspnea + elderly + comorbidities
@@ -1004,19 +1044,19 @@ function _computeDisposition(
     if (isTruthy(fields.dyspnea) && age > 60)
       return { disposition: "er_now", reason: "based on your breathing difficulty and age, this needs urgent evaluation" };
     if (isTruthy(fields.dyspnea))
-      return { disposition: "urgent_care_workup", reason: "because of the breathing difficulty alongside your cough" };
+      return { disposition: "urgent_care_workup", reason: "based on the breathing difficulty alongside your cough" };
     if (isTruthy(fields.fever) && age > 60)
       return { disposition: "urgent_care_workup", reason: "based on the fever and your age, we want to check this carefully" };
     return { disposition: "treat_and_follow", reason: "based on your symptoms, this looks like a viral illness we can manage" };
   }
 
   if (slug === "neuro_headache")
-    return { disposition: "treat_and_watch", reason: "based on your description, this sounds like a tension or migraine headache" };
+    return { disposition: "treat_and_watch", reason: "based on your description, urgent care can help with your headache" };
 
   if (slug === "chest_pain") {
     if (isTruthy(fields.pleuritic) && !isTruthy(fields.radiation))
-      return { disposition: "urgent_care_workup", reason: "because the pain changes with breathing, we want to rule out a lung issue" };
-    return { disposition: "urgent_care_workup", reason: "based on the chest pain, we want a physician to evaluate this today" };
+      return { disposition: "urgent_care_workup", reason: "based on the chest pain that changes with breathing" };
+    return { disposition: "urgent_care_workup", reason: "based on the chest pain, see a physician today" };
   }
 
   if (slug === "sore_throat")
@@ -1081,7 +1121,7 @@ export const conversationalEngine = {
 
       // Greeting → return intro immediately, no LLM
       if (routerCode === "unknown" && _isGreeting(message)) {
-        const intro = "Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?";
+        const intro = "Hi, I'm Auralyn — very nice to meet you! What's bringing you in today?";
         session.exchanges.push({ role: "user", text: message });
         session.exchanges.push({ role: "assistant", text: intro });
         return { response: intro };

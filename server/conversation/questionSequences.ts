@@ -24,15 +24,14 @@ const SEQUENCES: Record<string, readonly string[]> = {
     "How long have you had the headache?",
     "On a scale of 1–10, how bad is the pain?",
     "Is this the worst headache of your life?",
-    "Any fever, stiff neck, or sensitivity to light?",
-    "Any vision changes or weakness in your arms or face?",
-    "Any nausea or vomiting with it?",
+    "Any stiff neck or sensitivity to light?",
+    "Any fever, vision changes, or weakness in your face or arms?",
   ],
 
   // ── Nausea / Vomiting ─────────────────────────────────────────────────────
   nausea_vomiting: [
     "How long have you been nauseated?",
-    "Have you vomited? If so, how many times?",
+    "Have you vomited, and if so how many times?",
     "Any blood in the vomit?",
     "Any abdominal pain with it?",
     "Any fever?",
@@ -115,11 +114,11 @@ const SEQUENCES: Record<string, readonly string[]> = {
 
   // ── Back Pain ─────────────────────────────────────────────────────────────
   back_pain: [
-    "Where exactly — upper, middle, or lower back?",
+    "Which part of your back — neck area, mid, or low back?",
     "How long have you had it?",
     "On a scale of 1–10, how bad is the pain?",
     "Any numbness or weakness in your legs?",
-    "Any trouble controlling your bladder or bowels?",
+    "Any trouble controlling your bowels or urine?",
     "Any fever?",
     "Did this start after an injury or heavy lifting?",
   ],
