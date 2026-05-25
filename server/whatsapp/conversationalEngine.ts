@@ -298,10 +298,15 @@ function scrubResponse(text: string): string {
 
 // ── Field → Q_ID mapper (for safety pipeline) ────────────────────────────────
 
-function boolToYesNo(v: any): string {
-  if (v === false || v === "false" || v === "no")    return "no";
-  if (v === "historical" || v === "mild" || v === "severe") return "yes";
-  return "yes"; // conservative for safety
+// Strict yes/no normalizer. Returns null for anything that isn't an
+// unambiguous boolean — including "historical" (means "had it before, not
+// now"), severity descriptors, numbers, or unrecognized strings. The
+// caller (mapFieldsToQIds) drops null results so the rule pipeline sees
+// "not answered" rather than firing a red flag on an LLM artifact.
+function boolToYesNo(v: any): "yes" | "no" | null {
+  if (v === true  || v === "true"  || v === "yes") return "yes";
+  if (v === false || v === "false" || v === "no")  return "no";
+  return null;
 }
 
 function parseDurationToDays(v: any): number {
@@ -392,7 +397,10 @@ export function mapFieldsToQIds(slug: string, fields: Record<string, any>): Reco
   for (const [field, val] of Object.entries(fields)) {
     if (isNull(val)) continue;
     const m = mapper[field];
-    if (m) out[m.qid] = m.transform ? m.transform(val) : val;
+    if (!m) continue;
+    const transformed = m.transform ? m.transform(val) : val;
+    if (transformed === null || transformed === undefined) continue;
+    out[m.qid] = transformed;
   }
   const compound = COMPOUND_MAPPERS[slug];
   if (compound) Object.assign(out, compound(fields));
