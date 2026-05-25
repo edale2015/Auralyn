@@ -68,15 +68,16 @@ export const COMPLAINT_GOALS: Record<string, ClinicalGoal[]> = {
     { field: "systemic",       priority: 2, safety: false, label: "other symptoms like chills or fatigue" },
   ],
   neuro_headache: [
-    { field: "onset",          priority: 1, safety: true,  label: "sudden or gradual onset" },
-    { field: "thunderclap",    priority: 1, safety: true,  label: "thunderclap quality" },
-    { field: "severity",       priority: 1, safety: false, label: "severity" },
-    { field: "neuro_deficit",  priority: 1, safety: true,  label: "weakness, numbness, or speech change" },
-    { field: "fever",          priority: 1, safety: true,  label: "fever with stiff neck" },
-    { field: "vision",         priority: 2, safety: true,  label: "vision changes or eye pain" },
-    { field: "trauma",         priority: 2, safety: false, label: "recent head injury" },
-    { field: "age",            priority: 1, safety: false, label: "age" },
-    { field: "pattern",        priority: 2, safety: false, label: "migraine or tension pattern" },
+    { field: "onset",              priority: 1, safety: true,  label: "sudden or gradual onset" },
+    { field: "thunderclap",        priority: 1, safety: true,  label: "thunderclap quality" },
+    { field: "severity",           priority: 1, safety: false, label: "severity" },
+    { field: "neuro_deficit",      priority: 1, safety: true,  label: "weakness, numbness, or speech change" },
+    { field: "fever",              priority: 1, safety: false, label: "fever" },
+    { field: "stiff_neck",         priority: 1, safety: true,  label: "neck stiffness or pain bending forward" },
+    { field: "vision_threatening", priority: 1, safety: true,  label: "vision loss, halos around lights, or severe eye pain" },
+    { field: "trauma",             priority: 2, safety: false, label: "recent head injury" },
+    { field: "age",                priority: 1, safety: false, label: "age" },
+    { field: "pattern",            priority: 2, safety: false, label: "migraine or tension pattern" },
   ],
   chest_pain: [
     { field: "onset",          priority: 1, safety: true,  label: "sudden or gradual onset" },
@@ -325,11 +326,12 @@ const FIELD_TO_QID: Record<string, FieldMapper> = {
     severity:      { qid: "Q_C_SEVERITY", transform: (v) => typeof v === "number" ? v : 5 },
   },
   neuro_headache: {
-    thunderclap:   { qid: "Q_NHA_THUNDER",     transform: boolToYesNo },
-    neuro_deficit: { qid: "Q_NHA_NEURODEF",    transform: boolToYesNo },
-    fever:         { qid: "Q_NHA_FEVER_NECK",  transform: boolToYesNo },
-    trauma:        { qid: "Q_NHA_TRAUMA",      transform: boolToYesNo },
-    vision:        { qid: "Q_NHA_EYE",         transform: boolToYesNo },
+    thunderclap:         { qid: "Q_NHA_THUNDER",  transform: boolToYesNo },
+    neuro_deficit:       { qid: "Q_NHA_NEURODEF", transform: boolToYesNo },
+    trauma:              { qid: "Q_NHA_TRAUMA",   transform: boolToYesNo },
+    vision_threatening:  { qid: "Q_NHA_EYE",      transform: boolToYesNo },
+    // Q_NHA_FEVER_NECK (meningitis trigger) is compound — emitted by
+    // COMPOUND_MAPPERS only when both `fever` and `stiff_neck` are true.
   },
   chest_pain: {
     radiation:     { qid: "Q_CP_RADIATES",    transform: boolToYesNo },
@@ -370,6 +372,20 @@ const FIELD_TO_QID: Record<string, FieldMapper> = {
   },
 };
 
+// Compound Q_ID emitters — for red-flag rules that require multiple atomic
+// fields to be true together (e.g., meningitis = fever AND stiff neck, not
+// either alone). A single broad field name like "fever" must never map
+// directly to a compound trigger.
+const COMPOUND_MAPPERS: Record<string, (fields: Record<string, any>) => Record<string, any>> = {
+  neuro_headache: (fields) => {
+    const out: Record<string, any> = {};
+    if (fields.fever === true && fields.stiff_neck === true) {
+      out.Q_NHA_FEVER_NECK = "yes";
+    }
+    return out;
+  },
+};
+
 export function mapFieldsToQIds(slug: string, fields: Record<string, any>): Record<string, any> {
   const mapper = FIELD_TO_QID[slug] ?? {};
   const out: Record<string, any> = {};
@@ -378,6 +394,8 @@ export function mapFieldsToQIds(slug: string, fields: Record<string, any>): Reco
     const m = mapper[field];
     if (m) out[m.qid] = m.transform ? m.transform(val) : val;
   }
+  const compound = COMPOUND_MAPPERS[slug];
+  if (compound) Object.assign(out, compound(fields));
   return out;
 }
 
@@ -400,15 +418,16 @@ export const QUESTION_LIBRARY: Record<string, Record<string, string>> = {
     systemic:      "Any chills, fatigue, or body aches alongside this?",
   },
   neuro_headache: {
-    onset:         "Did this headache come on suddenly or gradually?",
-    thunderclap:   "Was it the worst headache of your life, hitting in seconds?",
-    severity:      "How severe is it, 1 to 10?",
-    neuro_deficit: "Any weakness, numbness, or trouble speaking?",
-    fever:         "Do you have a fever or stiff neck with this?",
-    vision:        "Any vision changes or eye pain?",
-    trauma:        "Did you hit your head recently?",
-    age:           "How old are you?",
-    pattern:       "Have you had migraines or tension headaches before?",
+    onset:              "Did this headache come on suddenly or gradually?",
+    thunderclap:        "Was it the worst headache of your life, hitting in seconds?",
+    severity:           "How severe is it, 1 to 10?",
+    neuro_deficit:      "Any weakness, numbness, or trouble speaking?",
+    fever:              "Do you have a fever?",
+    stiff_neck:         "Is your neck stiff or painful when you bend it forward?",
+    vision_threatening: "Any vision loss, halos around lights, or severe eye pain?",
+    trauma:             "Did you hit your head recently?",
+    age:                "How old are you?",
+    pattern:            "Have you had migraines or tension headaches before?",
   },
   chest_pain: {
     onset:         "Did this chest pain come on suddenly or gradually?",
