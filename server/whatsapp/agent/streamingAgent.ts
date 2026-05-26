@@ -18,7 +18,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSystemPrompt, hasSystemPrompt } from "./prompts/registry";
 
-const ANTHROPIC_MODEL  = "claude-sonnet-4-20250514";
+// Current Sonnet model. The previous ID claude-sonnet-4-20250514 hit Anthropic
+// end-of-life and now returns 404 not_found_error.
+const ANTHROPIC_MODEL  = "claude-sonnet-4-6";
 const MAX_OUTPUT_TOKENS = 350;
 const MIN_USER_TURNS_BEFORE_CLOSE = 6;   // close-detection cannot fire below this floor
 const MAX_USER_TURNS    = 15;            // force-close after this many patient messages
@@ -36,7 +38,10 @@ const CLOSING_MARKERS: RegExp[] = [
 let _client: Anthropic | null = null;
 function client(): Anthropic {
   if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    // Replit Secrets preserve the casing the user typed, so the same secret
+    // may live under either name. The rest of this codebase accepts both —
+    // we mirror that here so the agent works regardless of secret casing.
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
     _client = new Anthropic({ apiKey });
   }
