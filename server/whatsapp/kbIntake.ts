@@ -455,17 +455,25 @@ export async function handleWhatsAppKBIntake(params: {
   ]);
   console.log('[T3] firestoreLookup done', Date.now(), session ? `caseId=${session.caseId}` : "no session");
 
-  // ── Bug 1 fix: expire stale sessions and detect new chief complaint ─────────
+  // ── Session reset: any new complaint match closes the prior session ────────
+  //
+  // If the patient's message matches ANY complaint via the router, treat it
+  // as a fresh chief complaint and start over — even if it matches the same
+  // slug as the current session. This protects against state leaking between
+  // conversations (e.g. patient resumes hours later with a new headache and
+  // we accidentally pick up where the last interview left off). Routine
+  // answers like "yes" / "3 days" / "35, male" do not match a chief
+  // complaint, so they keep the session alive as expected.
   const SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
   if (session) {
-    const isExpired = Date.now() - (session.createdAt ?? 0) > SESSION_MAX_AGE_MS;
-    const incomingMatch = matchComplaintFromText(rawText);
-    const complaintMismatch =
-      incomingMatch !== null &&
-      incomingMatch.slug !== session.complaint.slug;
-    if (isExpired || complaintMismatch) {
-      const reason = isExpired ? "expired (>4h)" : `complaint mismatch (was ${session.complaint.slug}, incoming ${incomingMatch!.slug})`;
-      console.log(`[Session] Closing stale session: ${reason}`);
+    const isExpired      = Date.now() - (session.createdAt ?? 0) > SESSION_MAX_AGE_MS;
+    const incomingMatch  = matchComplaintFromText(rawText);
+    const isNewComplaint = incomingMatch !== null;
+    if (isExpired || isNewComplaint) {
+      const reason = isExpired
+        ? "expired (>4h)"
+        : `new chief complaint matched (${incomingMatch!.slug}); was ${session.complaint.slug}`;
+      console.log(`[Session] Closing prior session: ${reason}`);
       setImmediate(() => setCaseState(session!.caseId, "CLOSED").catch(() => {}));
       hotDel(threadId);
       session = null;

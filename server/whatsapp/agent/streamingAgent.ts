@@ -20,11 +20,14 @@ import { getSystemPrompt, hasSystemPrompt } from "./prompts/registry";
 
 const ANTHROPIC_MODEL  = "claude-sonnet-4-20250514";
 const MAX_OUTPUT_TOKENS = 350;
+const MIN_USER_TURNS_BEFORE_CLOSE = 6;   // close-detection cannot fire below this floor
 const MAX_USER_TURNS    = 15;            // force-close after this many patient messages
 const REQUEST_TIMEOUT_MS = 30_000;       // hard ceiling so a stalled stream cannot hang the webhook
 
 // The exact closing phrase the prompt instructs the model to emit. Matching
-// any of these substrings (case-insensitive) flips the session to closed.
+// any of these substrings (case-insensitive) flips the session to closed —
+// but ONLY after MIN_USER_TURNS_BEFORE_CLOSE patient turns have happened,
+// so the model can't accidentally close on turn 1 by quoting the phrase.
 const CLOSING_MARKERS: RegExp[] = [
   /sending your information to our care team/i,
   /in touch with you shortly/i,
@@ -138,9 +141,16 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
 
     text = text.trim();
   } catch (e: any) {
-    console.warn(`[StreamingAgent] LLM call failed (${e?.message}); sending handoff message`);
-    // Fail-closed clinically: if the model is unreachable we hand the case
-    // off to the physician immediately rather than guessing.
+    console.warn(`[StreamingAgent] LLM call failed (${e?.message}); userTurnCount=${userTurnCount}`);
+    // Below the close floor we cannot send the physician handoff — there is
+    // nothing meaningful for the physician to review yet. Send a benign
+    // retry message and keep the session open so the patient can try again.
+    // At/above the floor we fail-closed and hand the case off.
+    if (userTurnCount < MIN_USER_TURNS_BEFORE_CLOSE) {
+      const retry = "Sorry, I'm having a brief connection issue. Could you tell me that again?";
+      session.exchanges.push({ role: "assistant", content: retry });
+      return { text: retry, closed: false, latencyMs: Date.now() - startMs };
+    }
     text = "Thank you for sharing all of that with me. I'm sending your information to our care team right now. Someone will be in touch with you shortly.";
     session.exchanges.push({ role: "assistant", content: text });
     session.closed      = true;
@@ -150,13 +160,25 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
   }
 
   if (!text) {
-    // Empty model output (rare) — same fail-closed handoff.
+    // Empty model output (rare). Below the close floor we send a retry and
+    // keep the session open; at/above the floor we hand off as fail-closed.
+    if (userTurnCount < MIN_USER_TURNS_BEFORE_CLOSE) {
+      const retry = "Sorry, I missed that — could you tell me again?";
+      session.exchanges.push({ role: "assistant", content: retry });
+      return { text: retry, closed: false, latencyMs: Date.now() - startMs };
+    }
     text = "Thank you for sharing all of that with me. I'm sending your information to our care team right now. Someone will be in touch with you shortly.";
   }
 
   session.exchanges.push({ role: "assistant", content: text });
 
-  const matchedClose = CLOSING_MARKERS.some(rx => rx.test(text));
+  // Close detection is gated by a minimum-turn floor. Below the floor we
+  // ignore the close markers entirely — the model may emit the phrase in an
+  // example, a quote, or a misread of the instructions, and we must keep the
+  // interview going until enough information has been collected.
+  const eligibleForClose = userTurnCount >= MIN_USER_TURNS_BEFORE_CLOSE;
+  const matchedClose     = eligibleForClose && CLOSING_MARKERS.some(rx => rx.test(text));
+
   if (matchedClose || isFinalTurn) {
     session.closed      = true;
     session.closedAt    = Date.now();
