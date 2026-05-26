@@ -74,3 +74,26 @@ FORMAT:
 - One sentence per turn ideally, never more than two
 - No medical jargon
 - Use the patient's own words when possible`;
+
+// Deterministic fallback questions used when the Anthropic API call times out.
+// Index N corresponds to the N-th patient turn — that is, the question the
+// model would normally have asked AFTER receiving the patient's N-th reply.
+// The wording mirrors the headache protocol embedded in the system prompt
+// above. NEVER includes a disposition — the physician-review rule still holds.
+export const NEURO_HEADACHE_FALLBACK_QUESTIONS: string[] = [
+  "I'm sorry you're dealing with that. How old are you, and are you male or female?",
+  "Got it. How long have you had this headache?",
+  "Thanks. On a scale of 1 to 10, how bad is the pain right now?",
+  "And did the headache come on suddenly, like a thunderclap, or gradually over time?",
+  "Where exactly is the pain — front, back, one side, or all over?",
+  "How does it feel — throbbing, pressure, stabbing, or squeezing?",
+  "Do you have a fever along with this?",
+  "Any stiff neck or pain when you move your neck?",
+  "Any sensitivity to light or sound?",
+  "Any changes in your vision — blurry, double, or vision loss?",
+  "Any weakness, numbness, or trouble speaking?",
+  "Any nausea or vomiting?",
+  "Any recent head injury or trauma?",
+  "Have you had similar headaches before?",
+  "Have you tried any medications, and did they help?",
+];

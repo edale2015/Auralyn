@@ -16,15 +16,21 @@
 // this agent is invoked by isInstantKeywordEscalation in kbIntake.ts.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { getSystemPrompt, hasSystemPrompt } from "./prompts/registry";
+import { getSystemPrompt, hasSystemPrompt, getFallbackQuestion } from "./prompts/registry";
 
 // Current Sonnet model. The previous ID claude-sonnet-4-20250514 hit Anthropic
 // end-of-life and now returns 404 not_found_error.
 const ANTHROPIC_MODEL  = "claude-sonnet-4-6";
-const MAX_OUTPUT_TOKENS = 350;
+// One question per turn ≈ 20-40 words. 150 tokens is plenty and cuts
+// generation time roughly in half versus the original 350 cap.
+const MAX_OUTPUT_TOKENS = 150;
+// Lower temperature → faster sampling, more consistent triage wording.
+const TEMPERATURE       = 0.3;
 const MIN_USER_TURNS_BEFORE_CLOSE = 6;   // close-detection cannot fire below this floor
 const MAX_USER_TURNS    = 15;            // force-close after this many patient messages
-const REQUEST_TIMEOUT_MS = 30_000;       // hard ceiling so a stalled stream cannot hang the webhook
+// 8s hard ceiling. On timeout we serve the next pre-written protocol question
+// instead of stalling the patient. Target end-to-end latency is < 5s.
+const REQUEST_TIMEOUT_MS = 8_000;
 
 // The exact closing phrase the prompt instructs the model to emit. Matching
 // any of these substrings (case-insensitive) flips the session to closed —
@@ -121,17 +127,22 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
   // so the production server logs prove which code is actually running.
   console.log(`[StreamingAgent] turn=${userTurnCount} slug=${session.slug} model=${ANTHROPIC_MODEL} maxTokens=${MAX_OUTPUT_TOKENS}`);
 
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   try {
     const stream = client().messages.stream({
-      model:      ANTHROPIC_MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system:     turnSystem,
-      messages:   session.exchanges,
+      model:       ANTHROPIC_MODEL,
+      max_tokens:  MAX_OUTPUT_TOKENS,
+      temperature: TEMPERATURE,
+      system:      turnSystem,
+      messages:    session.exchanges,
     });
 
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("agent stream timeout")), REQUEST_TIMEOUT_MS),
-    );
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error("agent stream timeout")),
+        REQUEST_TIMEOUT_MS,
+      );
+    });
 
     // Accumulate text deltas. SDK helper exposes per-token events as well as
     // a finalMessage() — we read deltas to keep latency-to-first-token low.
@@ -150,16 +161,16 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
 
     text = text.trim();
   } catch (e: any) {
+    const isTimeout = e?.message === "agent stream timeout";
     // Full structured error dump so production logs reveal the actual cause
-    // (model name typo, expired key, rate limit, region block, etc.). Anthropic
-    // SDK exposes status / error.error.type / request_id on the thrown object;
-    // we log them explicitly and also include the raw message and name.
+    // (model name typo, expired key, rate limit, region block, timeout, etc.).
     const errPayload = {
       where:        "streamingAgent.nextReply",
       slug:         session.slug,
       model:        ANTHROPIC_MODEL,
       userTurnCount,
       durationMs:   Date.now() - startMs,
+      isTimeout,
       name:         e?.name,
       message:      e?.message,
       status:       e?.status,
@@ -170,11 +181,21 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
       stack:        typeof e?.stack === "string" ? e.stack.split("\n").slice(0, 6).join("\n") : undefined,
     };
     console.error("[StreamingAgent] LLM call failed:", JSON.stringify(errPayload));
-    console.warn(`[StreamingAgent] LLM call failed (${e?.message}); userTurnCount=${userTurnCount}`);
-    // Below the close floor we cannot send the physician handoff — there is
-    // nothing meaningful for the physician to review yet. Send a benign
-    // retry message and keep the session open so the patient can try again.
-    // At/above the floor we fail-closed and hand the case off.
+
+    // Timeout fallback: serve the next deterministic question from the
+    // protocol sequence so the conversation keeps moving even when the
+    // model is slow. This is the path that protects the 5s patient SLA.
+    if (isTimeout) {
+      const fallback = getFallbackQuestion(session.slug, userTurnCount);
+      if (fallback) {
+        session.exchanges.push({ role: "assistant", content: fallback });
+        return { text: fallback, closed: false, latencyMs: Date.now() - startMs };
+      }
+    }
+
+    // Non-timeout errors (or timeout past the end of the fallback list) take
+    // the same close-floor split as before: retry below the floor, physician
+    // handoff at/above.
     if (userTurnCount < MIN_USER_TURNS_BEFORE_CLOSE) {
       const retry = "Sorry, I'm having a brief connection issue. Could you tell me that again?";
       session.exchanges.push({ role: "assistant", content: retry });
@@ -186,6 +207,10 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
     session.closedAt    = Date.now();
     session.closeReason = "model_closed";
     return { text, closed: true, reason: "model_closed", latencyMs: Date.now() - startMs };
+  } finally {
+    // Always clear the timeout — otherwise a fast success leaks a pending
+    // setTimeout that will reject 8 s later into nothing.
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   if (!text) {
