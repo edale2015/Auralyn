@@ -117,6 +117,10 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
   const startMs = Date.now();
   let text = "";
 
+  // Build-verification log: prints the exact model ID on every patient turn
+  // so the production server logs prove which code is actually running.
+  console.log(`[StreamingAgent] turn=${userTurnCount} slug=${session.slug} model=${ANTHROPIC_MODEL} maxTokens=${MAX_OUTPUT_TOKENS}`);
+
   try {
     const stream = client().messages.stream({
       model:      ANTHROPIC_MODEL,
@@ -146,6 +150,26 @@ export async function nextReply(session: AgentSession, patientMessage: string): 
 
     text = text.trim();
   } catch (e: any) {
+    // Full structured error dump so production logs reveal the actual cause
+    // (model name typo, expired key, rate limit, region block, etc.). Anthropic
+    // SDK exposes status / error.error.type / request_id on the thrown object;
+    // we log them explicitly and also include the raw message and name.
+    const errPayload = {
+      where:        "streamingAgent.nextReply",
+      slug:         session.slug,
+      model:        ANTHROPIC_MODEL,
+      userTurnCount,
+      durationMs:   Date.now() - startMs,
+      name:         e?.name,
+      message:      e?.message,
+      status:       e?.status,
+      code:         e?.code,
+      type:         e?.error?.error?.type ?? e?.error?.type,
+      requestId:    e?.request_id ?? e?.headers?.["request-id"],
+      anthropicErr: e?.error,
+      stack:        typeof e?.stack === "string" ? e.stack.split("\n").slice(0, 6).join("\n") : undefined,
+    };
+    console.error("[StreamingAgent] LLM call failed:", JSON.stringify(errPayload));
     console.warn(`[StreamingAgent] LLM call failed (${e?.message}); userTurnCount=${userTurnCount}`);
     // Below the close floor we cannot send the physician handoff — there is
     // nothing meaningful for the physician to review yet. Send a benign
