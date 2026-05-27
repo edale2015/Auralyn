@@ -10,8 +10,10 @@
 // physician sees this packet alongside the conversation transcript and
 // decides the disposition.
 
+import Anthropic from "@anthropic-ai/sdk";
 import { getClinicalKnowledge, type ClinicalKnowledge } from "./knowledge/registry";
 import type { AgentSession } from "./streamingAgent";
+import { sendWhatsAppMessage } from "../send";
 
 export interface PhysicianPacket {
   caseId:         string;
@@ -106,4 +108,407 @@ export function formatPhysicianPacket(packet: PhysicianPacket): string {
     for (const n of packet.notes) lines.push(`  • ${n}`);
   }
   return lines.join("\n");
+}
+
+// ─── Physician handoff over WhatsApp ──────────────────────────────────────────
+//
+// After buildPhysicianPacket runs, we extract a structured summary from the
+// transcript (one LLM call, off the patient hot path) and send a formatted
+// WhatsApp message to PHYSICIAN_PHONE_NUMBER with the chief complaint,
+// patient summary, differentials, suggested workup, and the three action
+// reply keywords (URGENT / UC / CALLBACK). The mapping caseId → patient
+// phone is held in memory so the physician's reply can be routed back to
+// the correct patient.
+
+export interface ExtractedClinicalSummary {
+  ageSex:           string;        // "54F", "—" if unknown
+  duration:         string;        // free text from the patient ("3 days")
+  severity:         string;        // "7/10" or "—"
+  keyFindings:      string[];      // short bullets
+  medicationsTried: string[];      // short bullets
+  redFlagsPresent:  string[];      // red-flag findings the patient endorsed
+  redFlagsRuledOut: string[];      // red-flag findings the patient denied
+}
+
+const SUMMARY_MODEL          = "claude-sonnet-4-6";
+const SUMMARY_MAX_TOKENS     = 600;
+const SUMMARY_TIMEOUT_MS     = 10_000;
+
+let _summaryClient: Anthropic | null = null;
+function summaryClient(): Anthropic {
+  if (!_summaryClient) {
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
+    _summaryClient = new Anthropic({ apiKey });
+  }
+  return _summaryClient;
+}
+
+function emptySummary(): ExtractedClinicalSummary {
+  return {
+    ageSex:           "—",
+    duration:         "—",
+    severity:         "—",
+    keyFindings:      [],
+    medicationsTried: [],
+    redFlagsPresent:  [],
+    redFlagsRuledOut: [],
+  };
+}
+
+/**
+ * Pull a JSON object out of a model response that may contain prose framing
+ * or a ```json fence. Returns null if no balanced object is found.
+ */
+function parseFirstJsonObject(text: string): any | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract a structured clinical summary from the conversation transcript.
+ * One LLM call, run at conversation close (not on the patient hot path).
+ * Returns an empty summary on any failure — the physician still receives
+ * the packet with the raw transcript visible.
+ */
+export async function extractClinicalSummary(packet: PhysicianPacket): Promise<ExtractedClinicalSummary> {
+  const transcriptText = packet.transcript
+    .map(t => `${t.role === "user" ? "Patient" : "Auralyn"}: ${t.content}`)
+    .join("\n");
+
+  const redFlagList = packet.knowledge.differentials
+    .filter(d => d.redFlagFor)
+    .map(d => d.redFlagFor!)
+    .join(", ");
+
+  const system =
+    "You extract a brief structured summary from a triage chat transcript. " +
+    "Reply with ONLY a JSON object (no prose, no code fence) with these keys: " +
+    "ageSex (e.g. \"54F\"), duration, severity (e.g. \"7/10\"), " +
+    "keyFindings (string[]), medicationsTried (string[]), " +
+    "redFlagsPresent (string[]), redFlagsRuledOut (string[]). " +
+    "Use \"—\" for any scalar field the patient did not provide. " +
+    "Keep each list entry under 60 characters. Do not invent details.";
+
+  const user =
+    `Chief complaint: ${packet.display}\n` +
+    `Possible red-flag categories: ${redFlagList || "(none registered)"}\n\n` +
+    `Transcript:\n${transcriptText}\n\n` +
+    `Return the JSON object now.`;
+
+  let raw = "";
+  try {
+    const result = await Promise.race([
+      summaryClient().messages.create({
+        model:       SUMMARY_MODEL,
+        max_tokens:  SUMMARY_MAX_TOKENS,
+        temperature: 0.0,
+        system,
+        messages: [{ role: "user", content: user }],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("summary timeout")), SUMMARY_TIMEOUT_MS),
+      ),
+    ]);
+    const block = result.content.find((b: any) => b.type === "text") as { type: "text"; text: string } | undefined;
+    raw = block?.text ?? "";
+  } catch (e: any) {
+    console.warn(`[PhysicianPacket] summary extraction failed: ${e?.message ?? e}`);
+    return emptySummary();
+  }
+
+  const parsed = parseFirstJsonObject(raw);
+  if (!parsed || typeof parsed !== "object") return emptySummary();
+
+  const asString = (v: any): string => (typeof v === "string" && v.trim() ? v.trim() : "—");
+  const asList   = (v: any): string[] => Array.isArray(v) ? v.filter(x => typeof x === "string" && x.trim()).map(x => x.trim()) : [];
+
+  return {
+    ageSex:           asString(parsed.ageSex),
+    duration:         asString(parsed.duration),
+    severity:         asString(parsed.severity),
+    keyFindings:      asList(parsed.keyFindings),
+    medicationsTried: asList(parsed.medicationsTried),
+    redFlagsPresent:  asList(parsed.redFlagsPresent),
+    redFlagsRuledOut: asList(parsed.redFlagsRuledOut),
+  };
+}
+
+/**
+ * Format the physician-facing WhatsApp message. Single string body —
+ * Twilio delivers as one atomic message.
+ */
+export function formatPhysicianWhatsAppMessage(
+  packet: PhysicianPacket,
+  summary: ExtractedClinicalSummary,
+): string {
+  const lines: string[] = [];
+  lines.push("🔔 NEW PATIENT TRIAGE");
+  lines.push(`Chief complaint: ${packet.display}`);
+  lines.push(`Age/Sex: ${summary.ageSex}`);
+  lines.push(`Duration: ${summary.duration}`);
+  lines.push(`Severity: ${summary.severity}`);
+
+  lines.push("");
+  lines.push("Key findings:");
+  if (summary.keyFindings.length) {
+    for (const f of summary.keyFindings) lines.push(`• ${f}`);
+  } else {
+    lines.push("• —");
+  }
+
+  lines.push("");
+  lines.push("Medications tried:");
+  if (summary.medicationsTried.length) {
+    for (const m of summary.medicationsTried) lines.push(`• ${m}`);
+  } else {
+    lines.push("• —");
+  }
+
+  // Differentials — top 3 "common" first, then up to 3 red-flag "cannot miss".
+  const topLikely = packet.knowledge.differentials
+    .filter(d => d.commonality === "common")
+    .slice(0, 3)
+    .map(d => d.dx);
+  lines.push("");
+  lines.push("Differentials (from knowledge base):");
+  lines.push(`Most likely: ${topLikely.length ? topLikely.join("; ") : "—"}`);
+
+  const cannotMiss = packet.knowledge.differentials
+    .filter(d => !!d.redFlagFor)
+    .slice(0, 5)
+    .map(d => {
+      const trigger = d.redFlagFor!;
+      const present = summary.redFlagsPresent.some(p => p.toLowerCase().includes(trigger.toLowerCase()));
+      const ruled   = summary.redFlagsRuledOut.some(p => p.toLowerCase().includes(trigger.toLowerCase()));
+      const status  = present ? "PRESENT" : ruled ? "ruled out" : "unclear";
+      return `${d.dx} (${trigger}) — ${status}`;
+    });
+  lines.push("Cannot miss:");
+  if (cannotMiss.length) {
+    for (const c of cannotMiss) lines.push(`• ${c}`);
+  } else {
+    lines.push("• —");
+  }
+
+  lines.push("");
+  lines.push("Suggested workup:");
+  const workup = packet.knowledge.labsImaging.slice(0, 6);
+  if (workup.length) {
+    for (const w of workup) lines.push(`• ${w}`);
+  } else {
+    lines.push("• —");
+  }
+
+  lines.push("");
+  lines.push("Physician action — reply with one keyword:");
+  lines.push("URGENT — send patient to ER");
+  lines.push("UC — seen at urgent care");
+  lines.push("CALLBACK — needs phone call first");
+  lines.push("");
+  lines.push(`Case: ${packet.caseId}`);
+  lines.push("For clinical decision support only.");
+  return lines.join("\n");
+}
+
+// ─── Patient mapping for physician replies ────────────────────────────────────
+
+interface PendingCase {
+  caseId:       string;
+  patientPhone: string;       // E.164 or whatsapp:E.164 — passed straight to sendWhatsAppMessage
+  complaint:    string;
+  sentAt:       number;
+}
+
+const PENDING_TTL_MS = 6 * 60 * 60 * 1000;   // 6 hours
+const pendingByCaseId  = new Map<string, PendingCase>();
+let   latestPendingCaseId: string | null = null;
+
+function gcPending(): void {
+  const now = Date.now();
+  for (const [k, v] of pendingByCaseId.entries()) {
+    if (now - v.sentAt > PENDING_TTL_MS) pendingByCaseId.delete(k);
+  }
+}
+
+/** Normalize a phone number for equality checks (digits-only). */
+function digitsOnly(phone: string): string {
+  return String(phone || "").replace(/[^\d]/g, "");
+}
+
+/** Returns true if `from` matches PHYSICIAN_PHONE_NUMBER (env var). */
+export function isPhysicianNumber(from: string): boolean {
+  const expected = process.env.PHYSICIAN_PHONE_NUMBER;
+  if (!expected) return false;
+  return digitsOnly(from) === digitsOnly(expected);
+}
+
+/**
+ * Build the structured summary, format the WhatsApp packet, send it to the
+ * physician, and record the case→patient mapping so a follow-up reply can
+ * be routed back. Returns true if a packet was actually sent.
+ */
+export async function sendPhysicianPacket(args: {
+  packet:       PhysicianPacket;
+  patientPhone: string;   // patient's WhatsApp number (the `to` for downstream disposition messages)
+}): Promise<boolean> {
+  const { packet, patientPhone } = args;
+  const physicianPhone = process.env.PHYSICIAN_PHONE_NUMBER;
+  if (!physicianPhone) {
+    console.warn("[PhysicianPacket] PHYSICIAN_PHONE_NUMBER not set — skipping handoff send");
+    return false;
+  }
+
+  const summary = await extractClinicalSummary(packet);
+  const body    = formatPhysicianWhatsAppMessage(packet, summary);
+
+  gcPending();
+  pendingByCaseId.set(packet.caseId, {
+    caseId:       packet.caseId,
+    patientPhone,
+    complaint:    packet.display,
+    sentAt:       Date.now(),
+  });
+  latestPendingCaseId = packet.caseId;
+
+  try {
+    await sendWhatsAppMessage(physicianPhone, body);
+    console.log(`[PhysicianPacket] handoff sent to physician — caseId=${packet.caseId} slug=${packet.slug}`);
+    return true;
+  } catch (e: any) {
+    console.error(`[PhysicianPacket] failed to send physician handoff: ${e?.message ?? e}`);
+    return false;
+  }
+}
+
+// ─── Physician reply → patient disposition ────────────────────────────────────
+
+export type PhysicianAction = "URGENT" | "UC" | "CALLBACK";
+
+function parsePhysicianAction(text: string): PhysicianAction | null {
+  const t = text.trim().toUpperCase();
+  // Accept the bare keyword or "reply URGENT" / "URGENT please" forms.
+  if (/\bURGENT\b/.test(t))   return "URGENT";
+  if (/\bUC\b/.test(t))       return "UC";
+  if (/\bCALLBACK\b/.test(t)) return "CALLBACK";
+  return null;
+}
+
+function patientDispositionMessage(action: PhysicianAction, complaint: string): string {
+  switch (action) {
+    case "URGENT":
+      return [
+        `🚑 Update from our care team`,
+        ``,
+        `Based on what you've shared about your ${complaint.toLowerCase()}, our physician wants you seen in the emergency room right away.`,
+        ``,
+        `Please head to the nearest ER now. If you don't have a safe way to get there, call 911 and they will come to you.`,
+        ``,
+        `You're doing the right thing by reaching out — take care of yourself.`,
+        ``,
+        `_Auralyn care team_`,
+      ].join("\n");
+    case "UC":
+      return [
+        `🏥 Update from our care team`,
+        ``,
+        `Thanks for telling us about your ${complaint.toLowerCase()}. Our physician would like you seen at urgent care today.`,
+        ``,
+        `Please head to your nearest urgent care clinic when you're able. Bring a list of any medications you've taken so far.`,
+        ``,
+        `If anything gets worse before you arrive — sudden severe symptoms, trouble breathing, fainting — call 911 right away.`,
+        ``,
+        `Take care,`,
+        `_Auralyn care team_`,
+      ].join("\n");
+    case "CALLBACK":
+      return [
+        `📞 Update from our care team`,
+        ``,
+        `Thanks for sharing what's going on. Our physician has reviewed your information and would like to speak with you by phone before deciding the next step.`,
+        ``,
+        `Someone from the care team will call you shortly at this number. If you don't hear back within the next hour, just reply here and we'll follow up.`,
+        ``,
+        `If your symptoms suddenly get much worse while you wait, please call 911.`,
+        ``,
+        `_Auralyn care team_`,
+      ].join("\n");
+  }
+}
+
+/**
+ * Handle a WhatsApp message that came from PHYSICIAN_PHONE_NUMBER. If the
+ * message is one of the action keywords, dispatch the matching disposition
+ * message to the most recent pending patient and clear the mapping.
+ *
+ * Returns true if the message was a physician action that we handled.
+ */
+export async function handlePhysicianReply(args: {
+  from: string;
+  text: string;
+}): Promise<boolean> {
+  if (!isPhysicianNumber(args.from)) return false;
+
+  const action = parsePhysicianAction(args.text);
+  if (!action) {
+    // Physician sent a non-action message. Acknowledge and exit — do NOT
+    // route arbitrary physician text into the patient triage pipeline.
+    try {
+      await sendWhatsAppMessage(
+        args.from,
+        `Reply URGENT, UC, or CALLBACK to dispatch a disposition to the most recent patient.`,
+      );
+    } catch { /* swallow — already best-effort */ }
+    return true;
+  }
+
+  gcPending();
+  const caseId = latestPendingCaseId;
+  const pending = caseId ? pendingByCaseId.get(caseId) : null;
+  if (!pending) {
+    try {
+      await sendWhatsAppMessage(
+        args.from,
+        `No pending patient to dispatch. (No triage packet is currently awaiting your reply.)`,
+      );
+    } catch { /* best-effort */ }
+    return true;
+  }
+
+  const body = patientDispositionMessage(action, pending.complaint);
+  try {
+    await sendWhatsAppMessage(pending.patientPhone, body);
+    console.log(`[PhysicianPacket] dispatched ${action} disposition for case=${pending.caseId}`);
+  } catch (e: any) {
+    console.error(`[PhysicianPacket] failed to send patient disposition: ${e?.message ?? e}`);
+    try {
+      await sendWhatsAppMessage(
+        args.from,
+        `⚠️ Could not deliver the ${action} message to the patient (${e?.message ?? "send error"}). Please try again or contact the patient directly.`,
+      );
+    } catch { /* best-effort */ }
+    return true;
+  }
+
+  pendingByCaseId.delete(pending.caseId);
+  if (latestPendingCaseId === pending.caseId) latestPendingCaseId = null;
+
+  try {
+    await sendWhatsAppMessage(
+      args.from,
+      `✅ ${action} sent to patient for case ${pending.caseId} (${pending.complaint}).`,
+    );
+  } catch { /* best-effort */ }
+  return true;
 }

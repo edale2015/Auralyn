@@ -20,7 +20,13 @@ import {
   nextReply as agentNextReply,
   type AgentSession,
 } from "./agent/streamingAgent";
-import { buildPhysicianPacket, formatPhysicianPacket } from "./agent/physicianPacket";
+import {
+  buildPhysicianPacket,
+  formatPhysicianPacket,
+  sendPhysicianPacket,
+  handlePhysicianReply,
+  isPhysicianNumber,
+} from "./agent/physicianPacket";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
@@ -273,7 +279,7 @@ async function deliverAgentClose(params: {
   cleanFrom: string;
   threadId:  string;
 }): Promise<void> {
-  const { session, caseId, threadId } = params;
+  const { session, caseId, cleanFrom, threadId } = params;
   const packet = buildPhysicianPacket({ caseId, session });
   if (!packet) {
     console.warn(`[WhatsApp] no physician packet built for slug ${session.slug} (no knowledge registered)`);
@@ -282,6 +288,16 @@ async function deliverAgentClose(params: {
   }
 
   const reviewText = formatPhysicianPacket(packet);
+
+  // Physician handoff over WhatsApp — fire-and-forget. The patient already
+  // received the closing handoff message; sending the physician packet must
+  // not block this function or the webhook ack.
+  setImmediate(() => {
+    sendPhysicianPacket({ packet, patientPhone: cleanFrom })
+      .catch((e: any) =>
+        console.error(`[WhatsApp] physician handoff dispatch error: ${e?.message ?? e}`),
+      );
+  });
 
   setImmediate(() => {
     // Triage row: status NEEDS_REVIEW (physician decides), no AI-named
@@ -386,6 +402,18 @@ export async function handleWhatsAppKBIntake(params: {
   const cleanFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
   const rawText   = text.trim();
   const mood      = analyzeMood(rawText);
+
+  // ── Physician inbound replies — short-circuit BEFORE any patient logic ────
+  // If this WhatsApp message came from PHYSICIAN_PHONE_NUMBER, it's a
+  // disposition action (URGENT / UC / CALLBACK) for a pending patient
+  // packet, not patient triage input. Route it and exit.
+  if (isPhysicianNumber(from)) {
+    const handled = await handlePhysicianReply({ from, text: rawText }).catch((e: any) => {
+      console.error("[WhatsApp] physician reply handler error:", e?.message ?? e);
+      return false;
+    });
+    if (handled) return true;
+  }
 
   // ── /start / hello ──────────────────────────────────────────────────────────
   if (rawText.toLowerCase() === "/start" || rawText.toLowerCase() === "hi" || rawText.toLowerCase() === "hello") {
