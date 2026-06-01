@@ -14,6 +14,7 @@ import {
   mapFieldsToQIds,
   isComplete,
 } from "./conversationalEngine";
+import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
 import { hasSystemPrompt } from "./agent/prompts/registry";
 import {
   startAgentSession,
@@ -68,6 +69,12 @@ interface HotSession {
   // per-turn database calls). Null on slugs without a system prompt, which
   // fall back to the legacy extract-and-respond path until they get one.
   agent?:          AgentSession | null;
+  // Precomputed complaint bundle (goals, prompt fragments, fallback question
+  // library). Resolved once on session start via getComplaintBundle(slug);
+  // passed through to extractAndRespond so it skips the per-turn lookup.
+  // Streaming-agent (Claude) sessions also get a bundle for API symmetry,
+  // but the agent path never consults it.
+  bundle?:         ComplaintBundle;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -540,6 +547,10 @@ export async function handleWhatsAppKBIntake(params: {
       caseId, complaint: match, answers: {}, extractedFields: {}, exchanges: [],
       state: "DRAFT", createdAt: Date.now(), pendingSafetyAsk: null,
       agent: agentSession,
+      // Resolve the complaint bundle once per session (cache hit when slug
+      // was prewarmed at startup). Cheap O(1) lookup; pass through to every
+      // extractAndRespond call so the system prompt skeleton is reused.
+      bundle: getComplaintBundle(match.slug),
     };
     hotSet(threadId, session);
 
@@ -600,7 +611,7 @@ export async function handleWhatsAppKBIntake(params: {
     // ── Legacy path (slugs without a registered protocol): one LLM call to
     // extract + generate the first question.
     console.log('[T4] extractAndRespond from initial message', Date.now());
-    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true, null);
+    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true, null, session.bundle);
 
     session.extractedFields  = initCombined.extracted;
     session.answers          = {};
@@ -713,6 +724,7 @@ export async function handleWhatsAppKBIntake(params: {
     exchanges,
     false,
     session.pendingSafetyAsk ?? null,
+    session.bundle,
   );
 
   // Merge extracted fields into session

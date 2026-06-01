@@ -12,7 +12,8 @@
  * File: server/tests/conversationTestHarness.ts
  */
 
-import { conversationalEngine } from "../whatsapp/conversationalEngine";
+import { conversationalEngine, prewarmOpenAI } from "../whatsapp/conversationalEngine";
+import { prewarmComplaintBundles } from "../whatsapp/complaintBundle";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────
 
@@ -477,6 +478,16 @@ async function runAllTests(): Promise<void> {
   console.log(`║  ${TEST_SCENARIOS.length} scenarios across 7 complaint packs                 ║`);
   console.log("╚══════════════════════════════════════════════════════════╝");
 
+  // ── Measurement preamble: warm the same caches the production server warms
+  // at startup, so harness latency reflects what real users see (rather than
+  // including a one-off bundle-build and OpenAI cold-start in the first turn).
+  // No clinical logic — these only prepopulate the per-complaint bundle cache
+  // and exercise the GPT-4o-mini connection pool.
+  prewarmComplaintBundles();
+  prewarmOpenAI();
+  // Give the GPT prewarm ~1.5s to land before we start measuring the first turn.
+  await new Promise(r => setTimeout(r, 1500));
+
   const results: ScenarioResult[] = [];
 
   for (const scenario of TEST_SCENARIOS) {
@@ -513,11 +524,18 @@ async function runAllTests(): Promise<void> {
   const outPath = path.join(outDir, `conversation_harness_${Date.now()}.json`);
   fs.writeFileSync(outPath, JSON.stringify(testRun, null, 2));
 
+  // Target check against the latency optimization goals (avg <700ms, max <2000ms).
+  // These are stricter than the harness pass thresholds and only inform the
+  // summary print — they do not influence exit status.
+  const avgTargetMet = avgLatency < 700;
+  const maxTargetMet = maxLatency < 2000;
+
   console.log("\n╔══════════════════════════════════════════════════════════╗");
   console.log("║  RESULTS SUMMARY                                          ║");
   console.log(`║  Passed: ${passed}/${results.length} scenarios`.padEnd(59) + "║");
   console.log(`║  Avg latency: ${avgLatency.toFixed(0)}ms (target <3000ms)`.padEnd(59) + "║");
   console.log(`║  Max latency: ${maxLatency.toFixed(0)}ms`.padEnd(59) + "║");
+  console.log(`║  Opt target: avg<700ms ${avgTargetMet ? "MET" : "MISS"} · max<2000ms ${maxTargetMet ? "MET" : "MISS"}`.padEnd(59) + "║");
   console.log(`║  False ER escalations: ${falseERs} (must be 0)`.padEnd(59) + "║");
   console.log("╠══════════════════════════════════════════════════════════╣");
 

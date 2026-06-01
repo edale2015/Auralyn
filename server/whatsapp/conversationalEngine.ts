@@ -30,6 +30,7 @@ import {
   MIN_QUESTIONS_BEFORE_DISPOSITION,
 } from "../conversation/questionSequences";
 import { addPhysicianCase } from "../physician/physicianController";
+import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
 
 // Use Replit AI integration key if available, fall back to OPENAI_API_KEY
 const _apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
@@ -44,6 +45,35 @@ function ai(): OpenAI {
     });
   }
   return _client;
+}
+
+/**
+ * Pre-warm GPT-4o-mini at server startup with one trivial completion.
+ *
+ * Without this, the first patient turn that reaches extractAndRespond pays
+ * the full OpenAI TCP+TLS+HTTP/2 handshake (typically 200–500 ms over and
+ * above the actual completion latency). The dummy call instantiates the
+ * SDK client, establishes the connection pool to the OpenAI endpoint, and
+ * exercises the chat-completions path so the route, region, and auth are
+ * all primed before the first real request.
+ *
+ * Fire-and-forget: any failure (no key, transient 5xx) is swallowed — the
+ * first real call will simply pay the cold-start cost itself.
+ */
+export function prewarmOpenAI(): void {
+  if (!_apiKey) {
+    console.log("[ConversationalEngine] OpenAI prewarm skipped — no API key set");
+    return;
+  }
+  const t0 = Date.now();
+  ai().chat.completions.create({
+    model:       "gpt-4o-mini",
+    messages:    [{ role: "user", content: "ok" }],
+    max_tokens:  1,
+    temperature: 0,
+  })
+    .then(() => console.log(`[ConversationalEngine] GPT-4o-mini prewarm OK in ${Date.now() - t0}ms`))
+    .catch((e: any) => console.warn(`[ConversationalEngine] GPT-4o-mini prewarm failed: ${e?.message ?? e}`));
 }
 
 // ── Clinical goal definitions ─────────────────────────────────────────────────
@@ -701,9 +731,13 @@ export async function extractAndRespond(
   exchanges:      Array<{ role: string; text: string }>,
   isFirstMessage: boolean,
   pendingSafetyAsk: string | null = null,
+  bundleOverride?: ComplaintBundle,
 ): Promise<CombinedResult> {
-  const goals        = getGoals(slug);
-  const fieldList    = goals.map(g => g.field).join(", ");
+  // Bundle holds the precomputed per-complaint fragments (goal list, field
+  // CSVs, JSON schema template, system-prompt prefix/suffix, fallback library).
+  // O(1) lookup with cache-on-miss — built once per process per slug.
+  const bundle      = bundleOverride ?? getComplaintBundle(slug);
+  const goals       = bundle.goals;
   const missingSafety = getMissingSafetyFields(slug, existingFields);
   const missingOther  = getMissingFields(slug, existingFields);
 
@@ -721,35 +755,26 @@ export async function extractAndRespond(
   const _safetyKeys  = getMissingSafetyFieldKeys(slug, existingFields);
   const _otherKeys   = getMissingFieldKeys(slug, existingFields);
   const fallbackField = _safetyKeys[0] ?? _otherKeys[0] ?? "severity";
-  const fallbackText  = _questionFor(slug, fallbackField);
+  const fallbackText  = bundle.questionLibrary[fallbackField]
+    ?? _questionFor(slug, fallbackField);
 
   // Safety fields gate ER/ambulance escalations — they MUST come from a direct
   // yes/no answer to a targeted question. Even if the patient writes "my head
   // and neck hurt", the LLM must not infer stiff_neck:true from prose.
-  const safetyFieldList = getGoals(slug).filter(g => g.safety).map(g => g.field).join(", ") || "(none)";
   const safetyAskClause = isFirstMessage
     ? `THIS IS THE FIRST MESSAGE — no safety question has been asked yet, so NO safety field can possibly have been answered. Set EVERY safety field to null without exception, even if the complaint text mentions body parts (e.g., "my head and neck hurt" must NOT set stiff_neck).`
     : pendingSafetyAsk
       ? `The ONLY safety field you may set this turn is "${pendingSafetyAsk}" — and only if the patient just answered the targeted question with an explicit yes/no. Set every other safety field to null.`
       : `Set ALL safety fields to null. No safety question is pending; the patient cannot have answered one.`;
 
+  // System prompt: bundle.systemPromptPrefix already encodes the static head
+  // up through " any prose mention. " (with the slug-specific safety-field
+  // list inlined). We append the per-turn safetyAskClause and one of the two
+  // precomputed tails. Byte-identical to the previous inline assembly.
   const system =
-    `You are Auralyn, a clinical intake assistant. Return ONLY valid JSON.\n\n` +
-    `EXTRACTION RULE — CRITICAL: Set a field to true/false/value ONLY if the patient EXPLICITLY mentioned it. ` +
-    `If not mentioned, set to null. NEVER guess or default to false/no for unstated fields.\n\n` +
-    `SAFETY-FIELD RULE — CRITICAL: Safety fields (${safetyFieldList}) trigger emergency escalation. ` +
-    `They may ONLY be set when the patient is directly answering the specific question we asked about that field. ` +
-    `NEVER infer a safety field from the initial complaint, chat history, or any prose mention. ${safetyAskClause}\n\n` +
-    `RULES:\n` +
-    `1. Extract clinical fields from the patient message (boolean fields: true=yes, false=no, null=not mentioned).\n` +
-    `2. Write "response": ONE short question, under 80 characters, warm tone.\n` +
-    `3. Ask safety fields first, then other missing fields.\n` +
-    `4. No jargon. No numbered lists. No line breaks.\n` +
-    `FORBIDDEN in response (words followed by space containing "er " trigger false alerts):\n` +
-    `  other→additional, better→improved, however→but, fever→high temperature,\n` +
-    `  after→following, whether→if, over→past, ever→at any point, another→a second,\n` +
-    `  together→combined, under→below, trigger→cause, tender→sore\n` +
-    (isFirstMessage ? `FIRST MESSAGE: one warm direct question only.\n` : "");
+    bundle.systemPromptPrefix +
+    safetyAskClause +
+    (isFirstMessage ? bundle.systemPromptSuffixFirstMsg : bundle.systemPromptSuffix);
 
   // Ask one context (non-safety) question on the very first exchange before jumping
   // to safety questions. This prevents GPT from extracting the wrong field when a
@@ -768,12 +793,12 @@ export async function extractAndRespond(
     : (_safetyKeys[0] ?? _otherKeys[0] ?? "");
 
   const user =
-    `Complaint: ${slug.replace(/_/g, " ")}\n` +
+    `Complaint: ${bundle.complaintDisplay}\n` +
     `Known: ${existingStr}\n` +
     `Ask next: ${askNext}\n` +
     `Patient: "${patientMessage}"\n` +
     (recent ? `Chat:\n${recent}\n` : "") +
-    `\nJSON: {"extracted":{${goals.map(g => `"${g.field}":null`).join(",")}},"needs_probe":[],"response":""}`;
+    `\nJSON: {"extracted":{${bundle.jsonSchemaTemplate}},"needs_probe":[],"response":""}`;
 
   try {
     // 2.5 s hard timeout — fallback to question library keeps latency well under 3 s
@@ -1356,6 +1381,14 @@ interface _Session {
   questionIndex:         number;   // how many sequence questions have been asked
   awaitingPhysicianReview: boolean; // R005: set before any disposition fires
   pendingSafetyAsk:      string | null; // safety field the assistant just asked about; null until a safety question has been posed
+  /**
+   * Precomputed per-complaint bundle (goals, field CSVs, prompt fragments,
+   * fallback question library). Built once via getComplaintBundle(slug) when
+   * the session starts; reused on every subsequent turn so extractAndRespond
+   * doesn't re-derive any of it. Bundle holds NO clinical decisions — it
+   * only stages strings the engine would otherwise rebuild per turn.
+   */
+  bundle:                ComplaintBundle;
 }
 
 const _sessions = new Map<string, _Session>();
@@ -1545,6 +1578,9 @@ export const conversationalEngine = {
         questionIndex:         0,
         awaitingPhysicianReview: false,
         pendingSafetyAsk:      null,
+        // Resolve the complaint bundle once per session — read-through cache
+        // hit for any slug prewarmed at startup, build-and-cache otherwise.
+        bundle:                getComplaintBundle(engineSlug),
       };
       _sessions.set(threadId, session);
 
@@ -1604,6 +1640,8 @@ export const conversationalEngine = {
 
     // ── Turn MIN_QUESTIONS+: LLM for better extraction ────────────────────
     // Still use keyword fields already captured; GPT refines them.
+    // session.bundle is passed through so extractAndRespond skips the
+    // bundle Map lookup on every turn.
     const combined = await extractAndRespond(
       message,
       session.fields,
@@ -1611,6 +1649,7 @@ export const conversationalEngine = {
       session.exchanges,
       false,
       session.pendingSafetyAsk,
+      session.bundle,
     );
     Object.assign(session.fields, combined.extracted);
     session.questionIndex = Math.max(session.questionIndex + 1, MIN_QUESTIONS_BEFORE_DISPOSITION);

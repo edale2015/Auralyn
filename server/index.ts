@@ -1497,6 +1497,14 @@ app.use((req, res, next) => {
       // Pre-warm WhatsApp hot path: CSV caches + Twilio SDK HTTP connection pool.
       // Without this the first patient message pays ~4s (CSV reads) + ~27s (Twilio cold start).
       import("./whatsapp/send").then(({ prewarmTwilioConnection }) => prewarmTwilioConnection()).catch(() => {});
+      // Pre-build the top-10 complaint bundles (goals + prompt skeletons +
+      // fallback library). Bundles are pure in-memory derivation from the
+      // hardcoded module-level tables in conversationalEngine.ts — no DB.
+      import("./whatsapp/complaintBundle").then(({ prewarmComplaintBundles }) => prewarmComplaintBundles()).catch(() => {});
+      // Pre-warm GPT-4o-mini: one 1-token completion to establish the SDK
+      // client, TCP/TLS pool, and chat-completions route before the first
+      // real patient turn pays that cold-start cost.
+      import("./whatsapp/conversationalEngine").then(({ prewarmOpenAI }) => prewarmOpenAI()).catch(() => {});
       // Register the DB-backed per-complaint prior loader so loadComplaintPriors() works.
       // Without this, any call to loadComplaintPriors() throws "No registry adapter registered".
       import("./clinical/diagnosisPriorLoader").then(({ registerPriorLoader }) => {
