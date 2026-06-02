@@ -1505,6 +1505,11 @@ app.use((req, res, next) => {
       // client, TCP/TLS pool, and chat-completions route before the first
       // real patient turn pays that cold-start cost.
       import("./whatsapp/conversationalEngine").then(({ prewarmOpenAI }) => prewarmOpenAI()).catch(() => {});
+      // Pre-warm Anthropic (Claude Sonnet): the streaming agent is the
+      // patient-facing path for every protocol slug (e.g. neuro_headache).
+      // One 1-token completion establishes the SDK client + TLS pool so the
+      // first patient message doesn't pay the ~30s cold-start cost.
+      import("./whatsapp/agent/streamingAgent").then(({ prewarmAnthropicConnection }) => prewarmAnthropicConnection()).catch(() => {});
       // Register the DB-backed per-complaint prior loader so loadComplaintPriors() works.
       // Without this, any call to loadComplaintPriors() throws "No registry adapter registered".
       import("./clinical/diagnosisPriorLoader").then(({ registerPriorLoader }) => {

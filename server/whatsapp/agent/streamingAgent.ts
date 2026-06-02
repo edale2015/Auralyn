@@ -54,6 +54,33 @@ function client(): Anthropic {
   return _client;
 }
 
+/**
+ * Pre-warm the Anthropic SDK at server startup: one minimal completion to
+ * establish the client, TCP/TLS connection pool, and messages route before
+ * the first real patient turn pays that cold-start cost (previously ~30s on
+ * the first message). The streaming agent is the patient-facing path for
+ * every protocol slug, so warming it warms the whole WhatsApp triage hot path.
+ *
+ * Fire-and-forget: any failure (no key, transient 5xx) is swallowed — the
+ * first real call simply pays the cold-start cost itself.
+ */
+export function prewarmAnthropicConnection(): void {
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.Anthropic_API_Key;
+  if (!apiKey) {
+    console.log("[StreamingAgent] Anthropic prewarm skipped — no API key set");
+    return;
+  }
+  const t0 = Date.now();
+  client().messages.create({
+    model:       ANTHROPIC_MODEL,
+    max_tokens:  1,
+    temperature: 0,
+    messages:    [{ role: "user", content: "ok" }],
+  })
+    .then(() => console.log(`[StreamingAgent] Anthropic prewarm OK in ${Date.now() - t0}ms (model=${ANTHROPIC_MODEL})`))
+    .catch((e: any) => console.warn(`[StreamingAgent] Anthropic prewarm failed: ${e?.message ?? e}`));
+}
+
 export interface AgentSession {
   slug:          string;                                                   // complaint slug; selects the system prompt
   exchanges:     Array<{ role: "user" | "assistant"; content: string }>;   // full conversation history
