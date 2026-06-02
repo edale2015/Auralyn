@@ -90,5 +90,58 @@ covering a signed inbound physician reply end to end.
 
 ---
 
+## Emergency protocol — deferred items
+
+The universal clinic emergency protocol was built backend-first (commit
+`2244b78b`): `server/emergency/emergencyProtocol.ts` (staff alert + audit) and
+the WhatsApp patient-phrase bypass in `server/whatsapp/kbIntake.ts`. The
+following were intentionally deferred.
+
+### 6. 🔴 Physician sign-off on the emergency clinical template
+
+**What.** The ABCs / "consider while waiting" block in
+`formatEmergencyAlert()` is a physician-authored static template containing
+specific interventions (e.g. NS 500 mL bolus, O2 if SpO2 < 95%, EKG, hold pain
+meds).
+
+**Risk.** Per `CLAUDE.md` §2, clinical protocol/dosing must be physician-owned.
+It is transcribed verbatim and flagged in-file as not-for-production until
+reviewed.
+
+**Where.** `formatEmergencyAlert()` in `server/emergency/emergencyProtocol.ts`.
+
+**To do.** Obtain documented physician sign-off on the template wording before
+production; record the approving physician + date.
+
+### 7. 🔴 Dashboard EMERGENCY button (frontend)
+
+**What.** A prominent one-tap EMERGENCY button on the physician dashboard that
+calls `triggerEmergencyProtocol()`.
+
+**Where (to build).** A new route/endpoint that invokes
+`triggerEmergencyProtocol({ source: "staff_dashboard", ... })`, plus the button
+in the dashboard UI (`client/src/...`). Needs auth (admin/physician role + CSRF)
+and a decision on which dashboard page hosts it.
+
+**To do.** Add the protected endpoint and the UI control; audit already fires
+inside `triggerEmergencyProtocol()`.
+
+### 8. 🔴 Staff dedicated-number trigger + staff authentication
+
+**What.** Allow staff to text "EMERGENCY — [description]" to a dedicated number
+to fire the protocol (`source: "staff_text"`).
+
+**Risk.** Needs a verified staff principal — like the physician number
+(item #2), an inbound number is weak/unscoped auth for a clinical trigger.
+
+**Where (to build).** Inbound routing in `server/routes/whatsappWebhook.ts` /
+`server/whatsapp/kbIntake.ts`; a `STAFF_EMERGENCY_NUMBER`-style allowlist.
+
+**To do.** Decide the number + per-clinic allowlist and how staff senders are
+authenticated, then route matching inbound texts to
+`triggerEmergencyProtocol()`.
+
+---
+
 _Note: Issue #4 (URGENT → ER_SEND disposition mapping) was resolved — see commit
 `38bd55a3`. The mapping was already correct; a regression test now locks it._
