@@ -43,13 +43,15 @@ export function getDb(mode: "read" | "write" = "write") {
 
 export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs: number; replica: boolean }> {
   const start = Date.now();
+  let client: pg.PoolClient | undefined;
   try {
-    const client = await primaryPool.connect();
-    await client.query("SELECT 1");
-    client.release();
+    client = await primaryPool.connect();
+    await client.query("SET statement_timeout = 3000; SELECT 1");
     return { ok: true, latencyMs: Date.now() - start, replica: !!replicaPool };
   } catch {
     return { ok: false, latencyMs: Date.now() - start, replica: !!replicaPool };
+  } finally {
+    client?.release();
   }
 }
 

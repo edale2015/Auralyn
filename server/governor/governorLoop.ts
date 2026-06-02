@@ -6,6 +6,7 @@ import { db } from "../db";
 import { sql } from "drizzle-orm";
 
 let loopActive = false;
+let _iterRunning = false;
 let iterationCount = 0;
 
 const DELTA_CAP = PRODUCTION_FLAGS.RLHF_MAX_DELTA_PER_CYCLE;
@@ -72,6 +73,8 @@ export function startGovernorLoop(intervalMs = 30000): void {
   console.log(`[Governor] Autonomous agent governor loop started (interval: ${intervalMs}ms, delta_cap: ±${(DELTA_CAP * 100).toFixed(0)}%)`);
 
   setInterval(async () => {
+    if (_iterRunning) return;
+    _iterRunning = true;
     iterationCount++;
     try {
       const statuses = await evaluateAgents();
@@ -89,6 +92,8 @@ export function startGovernorLoop(intervalMs = 30000): void {
       runRLHFUpdate();
     } catch (e: any) {
       console.error(`[Governor] Loop error on iteration ${iterationCount}:`, e?.message);
+    } finally {
+      _iterRunning = false;
     }
   }, intervalMs);
 }

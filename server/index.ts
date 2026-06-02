@@ -1547,7 +1547,7 @@ app.use((req, res, next) => {
         }).catch(() => {});
       }).catch(() => {});
       runFailoverLoop(300_000);        // 5 min — was 60 s
-      startRecoveryLoop(10_000);
+      startRecoveryLoop(30_000);
       initControlTowerSocket(httpServer);
       startPatientStreamSocket(httpServer);
       initRealtimeGateway(httpServer);

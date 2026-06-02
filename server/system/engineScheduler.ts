@@ -55,15 +55,7 @@ export function getFullEngineList(): string[] {
 }
 
 let schedulerStarted = false;
-
-async function safeLearningCycle() {
-  try {
-    const { runLearningCycle } = await import("../engines/unifiedOutcomeLearning");
-    await runLearningCycle();
-  } catch (e: any) {
-    console.error("[EngineScheduler] Learning cycle error:", e?.message);
-  }
-}
+let _predRunning = false;
 
 async function safeHealthMonitor() {
   try {
@@ -76,10 +68,14 @@ async function safeHealthMonitor() {
 }
 
 async function safeFailurePrediction() {
+  if (_predRunning) return;
+  _predRunning = true;
   try {
     await predictFailures();
   } catch (e: any) {
     console.error("[EngineScheduler] Failure prediction error:", e?.message);
+  } finally {
+    _predRunning = false;
   }
 }
 

@@ -5,29 +5,36 @@ let loopInterval: ReturnType<typeof setInterval> | null = null;
 let recoveryCount = 0;
 let lastActions: RecoveryAction[] = [];
 let lastRunAt: number | null = null;
+let _isRunning = false;
 
 async function runCycle() {
-  const actions = await runRecovery();
-  lastRunAt = Date.now();
-  recoveryCount++;
-  lastActions = actions;
+  if (_isRunning) return;
+  _isRunning = true;
+  try {
+    const actions = await runRecovery();
+    lastRunAt = Date.now();
+    recoveryCount++;
+    lastActions = actions;
 
-  if (actions.length > 0) {
-    console.log(
-      `[RecoveryLoop] Cycle #${recoveryCount} — ${actions.length} action(s): ` +
-      actions.map((a) => `[${a.severity}] ${a.trigger}`).join(" | ")
-    );
+    if (actions.length > 0) {
+      console.log(
+        `[RecoveryLoop] Cycle #${recoveryCount} — ${actions.length} action(s): ` +
+        actions.map((a) => `[${a.severity}] ${a.trigger}`).join(" | ")
+      );
 
-    const needsScaleUp = actions.some(
-      (a) => a.category === "scaling" && a.severity === "CRITICAL"
-    );
-    if (needsScaleUp) {
-      scaleUp(10, "high-error-rate-recovery").catch(() => {});
+      const needsScaleUp = actions.some(
+        (a) => a.category === "scaling" && a.severity === "CRITICAL"
+      );
+      if (needsScaleUp) {
+        scaleUp(10, "high-error-rate-recovery").catch(() => {});
+      }
     }
+  } finally {
+    _isRunning = false;
   }
 }
 
-export function startRecoveryLoop(intervalMs = 10_000): void {
+export function startRecoveryLoop(intervalMs = 30_000): void {
   if (loopInterval) return;
   console.log(`[RecoveryLoop] Starting automated recovery loop (every ${intervalMs / 1000}s)`);
   loopInterval = setInterval(async () => {
