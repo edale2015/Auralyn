@@ -28,6 +28,11 @@ import {
   handlePhysicianReply,
   isPhysicianNumber,
 } from "./agent/physicianPacket";
+import {
+  matchesEmergencyBypass,
+  triggerEmergencyProtocol,
+  EMERGENCY_BYPASS_PATIENT_MESSAGE,
+} from "../emergency/emergencyProtocol";
 import { runOrchestratorTriage } from "../services/orchestratorTriageAdapter";
 import { executePipeline, type PipelineResult } from "../clinical/ruleExecutionEngine";
 import {
@@ -420,6 +425,25 @@ export async function handleWhatsAppKBIntake(params: {
       return false;
     });
     if (handled) return true;
+  }
+
+  // ── Universal emergency bypass — runs BEFORE any triage, for every patient
+  // message regardless of session state. If the patient texts an unambiguous
+  // emergency phrase ("I can't breathe", "call 911", "I collapsed", …) we tell
+  // them to call 911 and fire the staff emergency alert to the physician. We do
+  // NOT route this into triage and never let an in-progress conversation block
+  // it. The clinical red-flag keyword checks further down still cover symptom
+  // phrasing; this is the obvious-distress fast path.
+  if (matchesEmergencyBypass(rawText)) {
+    await sendWhatsAppMessage(cleanFrom, EMERGENCY_BYPASS_PATIENT_MESSAGE);
+    setImmediate(() => {
+      triggerEmergencyProtocol({
+        observation: rawText,
+        source:      "patient_whatsapp",
+        traceId:     threadId,
+      }).catch((e: any) => console.error("[WhatsApp] emergency protocol error:", e?.message ?? e));
+    });
+    return true;
   }
 
   // ── /start / hello ──────────────────────────────────────────────────────────
