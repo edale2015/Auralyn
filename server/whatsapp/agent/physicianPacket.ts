@@ -440,7 +440,7 @@ export function parsePhysicianAction(text: string): PhysicianAction | null {
 // This map is the authoritative meaning of THIS flow's reply keywords.
 // CALL is a process step (phone the patient first), not a final disposition,
 // so it has no canonical disposition value.
-const ACTION_TO_DISPOSITION: Record<PhysicianAction, DispositionCanonical | null> = {
+export const ACTION_TO_DISPOSITION: Record<PhysicianAction, DispositionCanonical | null> = {
   URGENT: "ER_SEND",
   UC:     "URGENT_CARE",
   HOME:   "SELF_CARE",

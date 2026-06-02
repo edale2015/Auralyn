@@ -79,6 +79,24 @@ beforeEach(() => {
   process.env.ANTHROPIC_API_KEY = "test-key";
 });
 
+describe("ACTION_TO_DISPOSITION contract", () => {
+  it("routes URGENT to ER_SEND — never to URGENT_CARE", async () => {
+    const { ACTION_TO_DISPOSITION } = await freshModule();
+    // The reason this map exists instead of OntologyFieldMapper: the ontology
+    // alias table maps the literal "URGENT" to URGENT_CARE, which would
+    // down-triage an ER decision. Lock the correct meaning here.
+    expect(ACTION_TO_DISPOSITION.URGENT).toBe("ER_SEND");
+    expect(ACTION_TO_DISPOSITION.URGENT).not.toBe("URGENT_CARE");
+  });
+
+  it("maps UC, HOME, and CALL to their canonical dispositions", async () => {
+    const { ACTION_TO_DISPOSITION } = await freshModule();
+    expect(ACTION_TO_DISPOSITION.UC).toBe("URGENT_CARE");
+    expect(ACTION_TO_DISPOSITION.HOME).toBe("SELF_CARE");
+    expect(ACTION_TO_DISPOSITION.CALL).toBeNull();   // callback is a step, not a final disposition
+  });
+});
+
 describe("parsePhysicianAction", () => {
   it("parses each keyword, case-insensitively and within a sentence", async () => {
     const { parsePhysicianAction } = await freshModule();
