@@ -58,7 +58,7 @@ interface ProviderConfig {
 export const PROVIDERS: Record<DiversityProvider, ProviderConfig> = {
   anthropic: {
     name:            "anthropic",
-    models:          { fast: "claude-haiku-4-20250514", capable: "claude-sonnet-4-20250514" },
+    models:          { fast: "claude-haiku-4-6", capable: "claude-sonnet-4-6" },
     costPer1MTokens: { input: 1.00, output: 5.00 },
     envKey:          "ANTHROPIC_API_KEY",
     baseUrl:         "https://api.anthropic.com",

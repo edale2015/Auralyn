@@ -40,15 +40,15 @@ export function initAsyncWorkerHandlers(): void {
 
   registerHandler("learning", async (job: AsyncJob) => {
     const { complaint, scores, answers } = job.payload;
-    const { recordOutcome, runLearningCycle } = await import("../engines/unifiedOutcomeLearning");
+    const { recordOutcome } = await import("../engines/unifiedOutcomeLearning");
+    // Only record the outcome here — the periodic autonomous loop (every 5 min)
+    // runs the full learning cycle. Triggering it on every encounter caused
+    // N+1 query storms (400+ DB queries per patient) that saturated the pool.
     await recordOutcome({
       predicted: scores?.primaryDiagnosis ?? complaint,
       actual: null,
       input: answers ?? {},
     });
-    await runLearningCycle().catch((e: any) =>
-      console.error("[AsyncWorker:learning] cycle failed:", e?.message)
-    );
   });
 
   registerHandler("notification", async (job: AsyncJob) => {

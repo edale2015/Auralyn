@@ -28,37 +28,56 @@ export async function runLearningCycle(): Promise<{ processed: number; updated: 
       .orderBy(desc(outcomes.createdAt))
       .limit(200);
 
-    const updated: string[] = [];
+    if (recent.length === 0) {
+      learningCycleCount++;
+      console.log(`[UnifiedOutcomeLearning] Cycle #${learningCycleCount} complete — processed 0, updated weights: none`);
+      return { processed: 0, updated: [] };
+    }
 
-    const yield$ = () => new Promise<void>(r => setImmediate(r));
-    for (let i = 0; i < recent.length; i++) {
-      const o = recent[i];
+    // Batch: load all existing weights in ONE query instead of N separate SELECTs
+    const existingWeights = await db.select().from(weights);
+    const weightMap = new Map<string, number>();
+    for (const w of existingWeights) {
+      weightMap.set(w.diagnosis, w.value ?? 1.0);
+    }
+
+    // Compute new weight values entirely in memory — zero extra DB round-trips
+    const deltas = new Map<string, number>();
+    for (const o of recent) {
       if (!o.predicted) continue;
-      // Yield to event loop every 20 rows so in-flight WhatsApp requests
-      // are not starved while the learning engine processes outcomes.
-      if (i > 0 && i % 20 === 0) await yield$();
-
       const delta = o.predicted === o.actual ? 0.02 : -0.05;
-      const diagnosis = o.predicted;
+      deltas.set(o.predicted, (deltas.get(o.predicted) ?? 0) + delta);
+    }
 
-      const existing = await db.select().from(weights).where(eq(weights.diagnosis, diagnosis));
-      if (existing.length > 0) {
-        const newValue = Math.max(0.1, Math.min(2.0, (existing[0].value ?? 1.0) + delta));
-        await db.update(weights).set({ value: newValue }).where(eq(weights.diagnosis, diagnosis));
+    const toUpsert: Array<{ diagnosis: string; value: number }> = [];
+    const updated: string[] = [];
+    for (const [diagnosis, totalDelta] of deltas.entries()) {
+      const current = weightMap.get(diagnosis) ?? 1.0;
+      const newValue = Math.max(0.1, Math.min(2.0, current + totalDelta));
+      toUpsert.push({ diagnosis, value: newValue });
+      updated.push(diagnosis);
+    }
+
+    // Yield before the batch write so HTTP requests can proceed
+    await new Promise<void>(r => setImmediate(r));
+
+    // Batch upsert: one query per unique diagnosis (far fewer than 400 queries)
+    for (const row of toUpsert) {
+      if (weightMap.has(row.diagnosis)) {
+        await db.update(weights).set({ value: row.value }).where(eq(weights.diagnosis, row.diagnosis));
       } else {
-        await db.insert(weights).values({ diagnosis, value: Math.max(0.1, 1.0 + delta) });
+        await db.insert(weights).values(row).catch(() =>
+          db.update(weights).set({ value: row.value }).where(eq(weights.diagnosis, row.diagnosis))
+        );
       }
-      if (!updated.includes(diagnosis)) updated.push(diagnosis);
     }
 
     learningCycleCount++;
 
     if (updated.length > 0) {
-      const allWeights = await db.select().from(weights);
-      const snapshot: Record<string, number> = {};
-      for (const w of allWeights) {
-        snapshot[w.diagnosis] = w.value ?? 1.0;
-      }
+      // Re-use the weightMap (updated in memory) for the snapshot — avoids another full SELECT
+      for (const row of toUpsert) weightMap.set(row.diagnosis, row.value);
+      const snapshot: Record<string, number> = Object.fromEntries(weightMap);
 
       await db.insert(modelVersions).values({
         weights: snapshot,

@@ -64,17 +64,17 @@ const MODEL_ROUTING: Record<ModelPurpose, {
     costPer1kTokens: 0.025,
   },
   retrieval_pruner: {
-    primary:         { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    primary:         { provider: "anthropic", model: "claude-sonnet-4-6" },
     fallback:        { provider: "openai",    model: "gpt-4o-mini" },
     costPer1kTokens: 0.004,
   },
   uncertainty_sampler: {
-    primary:         { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    primary:         { provider: "anthropic", model: "claude-sonnet-4-6" },
     fallback:        { provider: "openai",    model: "gpt-4o-mini" },
     costPer1kTokens: 0.004,
   },
   intent_parser: {
-    primary:         { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    primary:         { provider: "anthropic", model: "claude-sonnet-4-6" },
     fallback:        { provider: "openai",    model: "gpt-4o-mini" },
     costPer1kTokens: 0.004,
   },
@@ -89,12 +89,12 @@ const MODEL_ROUTING: Record<ModelPurpose, {
     costPer1kTokens: 0.025,
   },
   discharge_generator: {
-    primary:         { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    primary:         { provider: "anthropic", model: "claude-sonnet-4-6" },
     fallback:        { provider: "openai",    model: "gpt-4o-mini" },
     costPer1kTokens: 0.004,
   },
   cme_quiz: {
-    primary:         { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+    primary:         { provider: "anthropic", model: "claude-sonnet-4-6" },
     fallback:        { provider: "openai",    model: "gpt-4o-mini" },
     costPer1kTokens: 0.004,
   },
