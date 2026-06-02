@@ -14,6 +14,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getClinicalKnowledge, type ClinicalKnowledge } from "./knowledge/registry";
 import type { AgentSession } from "./streamingAgent";
 import { sendWhatsAppMessage } from "../send";
+import { appendAuditEvent } from "../../audit/hashChain";
+import type { DispositionCanonical } from "../../ontology/clinicalOntology";
 
 export interface PhysicianPacket {
   caseId:         string;
@@ -312,12 +314,32 @@ export function formatPhysicianWhatsAppMessage(
   }
 
   lines.push("");
+  lines.push("Treatment options (physician selects):");
+  const treatments = packet.knowledge.treatments.slice(0, 6);
+  if (treatments.length) {
+    for (const t of treatments) lines.push(`• ${t}`);
+  } else {
+    lines.push("• —");
+  }
+
+  lines.push("");
+  lines.push("ICD-10 candidates:");
+  const codes = packet.knowledge.icd10Codes.slice(0, 6);
+  if (codes.length) {
+    for (const c of codes) lines.push(`• ${c.code} — ${c.description}`);
+  } else {
+    lines.push("• —");
+  }
+
+  lines.push("");
   lines.push("Physician action — reply with one keyword:");
   lines.push("URGENT — send patient to ER");
   lines.push("UC — seen at urgent care");
-  lines.push("CALLBACK — needs phone call first");
+  lines.push("CALL — call the patient first");
+  lines.push("HOME — safe to manage at home");
   lines.push("");
   lines.push(`Case: ${packet.caseId}`);
+  lines.push(`If more than one patient is awaiting your reply, add this Case ID after the keyword (e.g. HOME ${packet.caseId}).`);
   lines.push("For clinical decision support only.");
   return lines.join("\n");
 }
@@ -328,12 +350,12 @@ interface PendingCase {
   caseId:       string;
   patientPhone: string;       // E.164 or whatsapp:E.164 — passed straight to sendWhatsAppMessage
   complaint:    string;
+  slug:         string;       // complaint slug, for the audit record
   sentAt:       number;
 }
 
 const PENDING_TTL_MS = 6 * 60 * 60 * 1000;   // 6 hours
 const pendingByCaseId  = new Map<string, PendingCase>();
-let   latestPendingCaseId: string | null = null;
 
 function gcPending(): void {
   const now = Date.now();
@@ -378,9 +400,9 @@ export async function sendPhysicianPacket(args: {
     caseId:       packet.caseId,
     patientPhone,
     complaint:    packet.display,
+    slug:         packet.slug,
     sentAt:       Date.now(),
   });
-  latestPendingCaseId = packet.caseId;
 
   try {
     await sendWhatsAppMessage(physicianPhone, body);
@@ -394,16 +416,36 @@ export async function sendPhysicianPacket(args: {
 
 // ─── Physician reply → patient disposition ────────────────────────────────────
 
-export type PhysicianAction = "URGENT" | "UC" | "CALLBACK";
+export type PhysicianAction = "URGENT" | "UC" | "CALL" | "HOME";
 
-function parsePhysicianAction(text: string): PhysicianAction | null {
+export function parsePhysicianAction(text: string): PhysicianAction | null {
   const t = text.trim().toUpperCase();
   // Accept the bare keyword or "reply URGENT" / "URGENT please" forms.
-  if (/\bURGENT\b/.test(t))   return "URGENT";
-  if (/\bUC\b/.test(t))       return "UC";
-  if (/\bCALLBACK\b/.test(t)) return "CALLBACK";
+  // ER is the highest-acuity action — check it first so a compound message
+  // can never be down-triaged. CALLBACK is accepted as a legacy alias for
+  // CALL (older packets in flight instructed "CALLBACK").
+  if (/\bURGENT\b/.test(t))              return "URGENT";
+  if (/\bUC\b/.test(t))                  return "UC";
+  if (/\bCALL(BACK)?\b/.test(t))         return "CALL";
+  if (/\bHOME\b/.test(t))                return "HOME";
   return null;
 }
+
+// Keyword → canonical clinical disposition, for the AUDIT record only.
+//
+// We deliberately do NOT route these keywords through OntologyFieldMapper:
+// its alias table maps the literal string "URGENT" to URGENT_CARE, whereas in
+// this physician-reply flow URGENT means "send to the ER" (ER_SEND). Routing
+// the keyword through the resolver would silently down-triage an ER decision.
+// This map is the authoritative meaning of THIS flow's reply keywords.
+// CALL is a process step (phone the patient first), not a final disposition,
+// so it has no canonical disposition value.
+const ACTION_TO_DISPOSITION: Record<PhysicianAction, DispositionCanonical | null> = {
+  URGENT: "ER_SEND",
+  UC:     "URGENT_CARE",
+  HOME:   "SELF_CARE",
+  CALL:   null,
+};
 
 function patientDispositionMessage(action: PhysicianAction, complaint: string): string {
   switch (action) {
@@ -432,7 +474,7 @@ function patientDispositionMessage(action: PhysicianAction, complaint: string): 
         `Take care,`,
         `_Auralyn care team_`,
       ].join("\n");
-    case "CALLBACK":
+    case "CALL":
       return [
         `📞 Update from our care team`,
         ``,
@@ -444,13 +486,52 @@ function patientDispositionMessage(action: PhysicianAction, complaint: string): 
         ``,
         `_Auralyn care team_`,
       ].join("\n");
+    case "HOME":
+      return [
+        `🏠 Update from our care team`,
+        ``,
+        `Thanks for sharing what's going on with your ${complaint.toLowerCase()}. Our physician has reviewed your information and feels it's safe to care for this at home for now.`,
+        ``,
+        `Please rest, stay hydrated, and reach out to your primary care doctor if things aren't improving over the next day or two.`,
+        ``,
+        `Please seek care right away — or call 911 — if anything changes for the worse: sudden severe symptoms, trouble breathing, chest pain, fainting, weakness, confusion, or symptoms that quickly get worse.`,
+        ``,
+        `Take care,`,
+        `_Auralyn care team_`,
+      ].join("\n");
   }
+}
+
+/**
+ * Resolve which pending case a physician reply targets.
+ *
+ * Safety: a bare one-word reply is ambiguous when more than one patient is
+ * awaiting a disposition (WhatsApp gives us no thread to bind the reply to a
+ * case). To avoid dispatching a disposition to the WRONG patient we:
+ *   1. match a Case ID quoted anywhere in the reply text, else
+ *   2. use the sole pending case when exactly one is awaiting, else
+ *   3. fail closed (return { ambiguous: true } and dispatch nothing).
+ */
+function resolveTargetCase(text: string):
+  | { case: PendingCase }
+  | { ambiguous: true; pending: PendingCase[] }
+  | { none: true } {
+  const pending = [...pendingByCaseId.values()];
+  if (pending.length === 0) return { none: true };
+
+  const upper = text.toUpperCase();
+  const quoted = pending.find(p => upper.includes(p.caseId.toUpperCase()));
+  if (quoted) return { case: quoted };
+
+  if (pending.length === 1) return { case: pending[0] };
+  return { ambiguous: true, pending };
 }
 
 /**
  * Handle a WhatsApp message that came from PHYSICIAN_PHONE_NUMBER. If the
  * message is one of the action keywords, dispatch the matching disposition
- * message to the most recent pending patient and clear the mapping.
+ * message to the targeted pending patient, append an audit event, and clear
+ * the mapping.
  *
  * Returns true if the message was a physician action that we handled.
  */
@@ -467,16 +548,16 @@ export async function handlePhysicianReply(args: {
     try {
       await sendWhatsAppMessage(
         args.from,
-        `Reply URGENT, UC, or CALLBACK to dispatch a disposition to the most recent patient.`,
+        `Reply URGENT, UC, CALL, or HOME to dispatch a disposition. If more than one patient is pending, add the Case ID after the keyword.`,
       );
     } catch { /* swallow — already best-effort */ }
     return true;
   }
 
   gcPending();
-  const caseId = latestPendingCaseId;
-  const pending = caseId ? pendingByCaseId.get(caseId) : null;
-  if (!pending) {
+  const target = resolveTargetCase(args.text);
+
+  if ("none" in target) {
     try {
       await sendWhatsAppMessage(
         args.from,
@@ -486,23 +567,69 @@ export async function handlePhysicianReply(args: {
     return true;
   }
 
-  const body = patientDispositionMessage(action, pending.complaint);
-  try {
-    await sendWhatsAppMessage(pending.patientPhone, body);
-    console.log(`[PhysicianPacket] dispatched ${action} disposition for case=${pending.caseId}`);
-  } catch (e: any) {
-    console.error(`[PhysicianPacket] failed to send patient disposition: ${e?.message ?? e}`);
+  if ("ambiguous" in target) {
+    // FAIL CLOSED: never guess which patient a bare keyword refers to.
+    const list = target.pending.map(p => `${p.caseId} (${p.complaint})`).join("\n");
     try {
       await sendWhatsAppMessage(
         args.from,
-        `⚠️ Could not deliver the ${action} message to the patient (${e?.message ?? "send error"}). Please try again or contact the patient directly.`,
+        `⚠️ ${target.pending.length} patients are awaiting a reply, so I can't tell which one "${action}" is for. Reply again with the Case ID after the keyword, e.g. "${action} ${target.pending[0].caseId}". Pending:\n${list}`,
+      );
+    } catch { /* best-effort */ }
+    return true;
+  }
+
+  const pending = target.case;
+  const body    = patientDispositionMessage(action, pending.complaint);
+
+  let delivered = false;
+  let sendErr: string | undefined;
+  try {
+    await sendWhatsAppMessage(pending.patientPhone, body);
+    delivered = true;
+    console.log(`[PhysicianPacket] dispatched ${action} disposition for case=${pending.caseId}`);
+  } catch (e: any) {
+    sendErr = e?.message ?? String(e);
+    console.error(`[PhysicianPacket] failed to send patient disposition: ${sendErr}`);
+  }
+
+  // Audit the physician's clinical decision through the canonical hash chain.
+  // PHI-safe: caseId is a random id; we record the complaint type, action, and
+  // canonical disposition — never the patient phone number or transcript.
+  try {
+    await appendAuditEvent({
+      traceId: pending.caseId,
+      step:    "physician_disposition",
+      input:   { action, source: "whatsapp_physician_reply" },
+      output:  {
+        disposition: ACTION_TO_DISPOSITION[action],
+        delivered,
+        ...(sendErr ? { deliveryError: sendErr } : {}),
+      },
+      metadata: {
+        complaint:        pending.complaint,
+        slug:             pending.slug,
+        physicianContact: "verified_number",   // sender matched PHYSICIAN_PHONE_NUMBER
+        intendedUse:      "clinical_decision_support_only",
+      },
+    });
+  } catch (e: any) {
+    // Loud, not silent — a failed audit on a clinical decision is itself a
+    // finding, but it must not undo a disposition already sent to the patient.
+    console.error(`[PhysicianPacket] AUDIT FAILED for physician_disposition case=${pending.caseId}: ${e?.message ?? e}`);
+  }
+
+  if (!delivered) {
+    try {
+      await sendWhatsAppMessage(
+        args.from,
+        `⚠️ Could not deliver the ${action} message to the patient (${sendErr ?? "send error"}). Please try again or contact the patient directly.`,
       );
     } catch { /* best-effort */ }
     return true;
   }
 
   pendingByCaseId.delete(pending.caseId);
-  if (latestPendingCaseId === pending.caseId) latestPendingCaseId = null;
 
   try {
     await sendWhatsAppMessage(

@@ -412,7 +412,7 @@ export async function handleWhatsAppKBIntake(params: {
 
   // ── Physician inbound replies — short-circuit BEFORE any patient logic ────
   // If this WhatsApp message came from PHYSICIAN_PHONE_NUMBER, it's a
-  // disposition action (URGENT / UC / CALLBACK) for a pending patient
+  // disposition action (URGENT / UC / CALL / HOME) for a pending patient
   // packet, not patient triage input. Route it and exit.
   if (isPhysicianNumber(from)) {
     const handled = await handlePhysicianReply({ from, text: rawText }).catch((e: any) => {
