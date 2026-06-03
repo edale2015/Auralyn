@@ -13,7 +13,12 @@ import {
   generateClosingMessage,
   mapFieldsToQIds,
   isComplete,
+  keywordExtract,
 } from "./conversationalEngine";
+import {
+  getNextQuestion,
+  MIN_QUESTIONS_BEFORE_DISPOSITION,
+} from "../conversation/questionSequences";
 import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
 import { hasSystemPrompt } from "./agent/prompts/registry";
 import {
@@ -51,6 +56,66 @@ import {
 } from "../services/surveyStateService";
 import { sha256Hex } from "../services/hash";
 
+// ── Slug → router-code reverse map (for scripted question sequences) ──────────
+// `questionSequences.ts` uses short routerCodes ("headache", "cough", …).
+// `kbIntake` has the full engine slugs ("neuro_headache", "cough", …).
+// This map converts slug → routerCode so getNextQuestion() can be called.
+const SLUG_TO_ROUTER: Record<string, string> = {
+  neuro_headache:       "headache",
+  nausea:               "nausea_vomiting",
+  abdominal_pain:       "abdominal_pain",
+  chest_pain:           "chest_pain",
+  cough:                "cough",
+  pulm_shortness_of_breath: "shortness_of_breath",
+  ent_sinus_pressure:   "uri_sinus",
+  sore_throat:          "sore_throat",
+  gu_uti_symptoms:      "uti",
+  msk_back_pain:        "back_pain",
+  id_fever:             "fever",
+  derm_rash:            "rash",
+  dizziness:            "dizziness",
+  ent_earache:          "ear_pain",
+  cardio_palpitations:  "palpitations",
+};
+
+function slugToRouter(slug: string): string {
+  return SLUG_TO_ROUTER[slug] ?? slug;
+}
+
+// ── Listen-first acknowledgment builder (T018) ───────────────────────────────
+// Builds a short ack sentence from keyword-extracted fields so Auralyn can
+// confirm what it heard BEFORE asking the next scripted question.  No LLM.
+const FIELD_POS_LABEL: Record<string, string> = {
+  nausea:    "nausea",
+  vomiting:  "vomiting",
+  fever:     "fever",
+  chills:    "chills",
+  dyspnea:   "trouble breathing",
+  myalgia:   "body aches",
+  fatigue:   "fatigue",
+  rhinorrhea: "congestion",
+  diaphoresis: "sweating",
+  stiff_neck: "neck stiffness",
+  thunderclap: "sudden severe headache",
+};
+const FIELD_NEG_LABEL: Record<string, string> = {
+  fever:  "no fever",
+  dyspnea: "no trouble breathing",
+};
+
+function buildListenAck(extracted: Record<string, any>): string {
+  const parts: string[] = [];
+  if (extracted.duration) parts.push(String(extracted.duration));
+  if (typeof extracted.severity === "number") parts.push(`pain ${extracted.severity}/10`);
+  for (const [k, v] of Object.entries(extracted)) {
+    if (k === "duration" || k === "severity" || k === "age") continue;
+    if ((v === "yes" || v === true) && FIELD_POS_LABEL[k]) parts.push(FIELD_POS_LABEL[k]);
+    if ((v === "no" || v === false) && FIELD_NEG_LABEL[k]) parts.push(FIELD_NEG_LABEL[k]);
+  }
+  if (parts.length === 0) return "";
+  return `Got it — I noted ${parts.join(", ")}. `;
+}
+
 // ── In-memory hot session store ────────────────────────────────────────────────
 // Eliminates ~38s of Firestore round-trips from the patient-facing hot path.
 // Firestore writes are fire-and-forget background persistence — patient reply
@@ -80,6 +145,10 @@ interface HotSession {
   // Streaming-agent (Claude) sessions also get a bundle for API symmetry,
   // but the agent path never consults it.
   bundle?:         ComplaintBundle;
+  // F017: index of the next scripted question to send (0-based).
+  // Incremented after each scripted-phase turn. When questionIndex reaches
+  // MIN_QUESTIONS_BEFORE_DISPOSITION - 1, the engine switches to GPT extraction.
+  questionIndex?:  number;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -632,21 +701,26 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
-    // ── Legacy path (slugs without a registered protocol): one LLM call to
-    // extract + generate the first question.
-    console.log('[T4] extractAndRespond from initial message', Date.now());
-    const initCombined = await extractAndRespond(rawText, {}, match.slug, [], true, null, session.bundle);
+    // ── Legacy path (slugs without a registered protocol) ───────────────────
+    // F017: Turn 0 — send scripted Q[0] with ZERO LLM calls.
+    // T018: keyword-extract any volunteered fields from the opening message so
+    //       the next scripted question targets the first gap.
+    console.log('[T4] scripted Q[0] — no LLM (F017)', Date.now());
+    const routerCode0 = slugToRouter(match.slug);
+    const initKwFields = keywordExtract(match.slug, rawText, null, true);
+    const q0 = getNextQuestion(routerCode0, 0) || "How long have you been having these symptoms?";
 
-    session.extractedFields  = initCombined.extracted;
-    session.answers          = {};
+    session.extractedFields  = initKwFields;
+    session.answers          = mapFieldsToQIds(match.slug, initKwFields);
+    session.questionIndex    = 1;
     session.exchanges = [
-      { role: "user",      text: rawText              },
-      { role: "assistant", text: initCombined.response },
+      { role: "user",      text: rawText },
+      { role: "assistant", text: q0      },
     ];
-    session.pendingSafetyAsk = initCombined.nextSafetyAsk;
+    session.pendingSafetyAsk = null;
     hotSet(threadId, session);
 
-    await sendWhatsAppMessage(cleanFrom, initCombined.response);
+    await sendWhatsAppMessage(cleanFrom, q0);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
     return true;
   }
@@ -734,13 +808,97 @@ export async function handleWhatsAppKBIntake(params: {
     return true;
   }
 
-  // ── Step 2: Single combined LLM call (extract + next question, 2.5s timeout) ─
+  const exchanges    = session.exchanges ?? [];
+  const qIndex       = session.questionIndex ?? 1;
+  const routerCode   = slugToRouter(complaint.slug);
+
+  // ── F017: Scripted-question phase (turns 1 … MIN_QUESTIONS-2) ─────────────
+  // For the first MIN_QUESTIONS_BEFORE_DISPOSITION turns we return pre-written
+  // questions from the clinical sequence — zero LLM round-trips.  GPT is
+  // called only for turns that cannot be resolved by keyword logic (free-form
+  // long replies) or after the scripted phase ends.
+  //
+  // T018 (listen-first): on long replies (>4 words) we run GPT extraction so
+  // every volunteered field is captured, then pair the extracted-field
+  // acknowledgment with the NEXT SCRIPTED question (never GPT-generated text).
+  // This ensures Auralyn acknowledges what was heard before asking a gap.
+  if (qIndex < MIN_QUESTIONS_BEFORE_DISPOSITION) {
+
+    let extracted: Record<string, any>;
+
+    if (wordCount > 4) {
+      // Free-form multi-symptom reply — use GPT for extraction only.
+      // The RESPONSE field from the LLM is discarded; we build the reply
+      // from (a) a deterministic ack of extracted fields and (b) the next
+      // scripted question.  This is ONE GPT call, satisfying F017 crit 3.
+      console.log('[T4] scripted phase — GPT extract only (free-form)', Date.now());
+      const gpte = await extractAndRespond(
+        rawText,
+        session.extractedFields ?? {},
+        complaint.slug,
+        exchanges,
+        false,
+        session.pendingSafetyAsk ?? null,
+        session.bundle,
+      );
+      extracted = gpte.extracted;
+    } else {
+      // Short/simple reply — keyword extraction only (0ms, no LLM).
+      console.log('[T4] scripted phase — keyword extract (short reply)', Date.now());
+      extracted = keywordExtract(complaint.slug, rawText, session.pendingSafetyAsk ?? null, false);
+    }
+
+    // Merge extracted fields
+    const updatedFields  = { ...(session.extractedFields ?? {}), ...extracted };
+    const updatedAnswers = { ...answers, ...mapFieldsToQIds(complaint.slug, extracted) };
+    session.extractedFields  = updatedFields;
+    session.answers          = updatedAnswers;
+    session.pendingSafetyAsk = null;          // safety gate resets each scripted turn
+    persistState(updatedAnswers);
+
+    // Safety check — always runs regardless of scripted phase
+    const shouldEscalateS = await checkEscalation(complaint.slug, updatedAnswers);
+    if (shouldEscalateS) {
+      console.log(`[WhatsApp] 🚨 Safety escalation in scripted phase for ${complaint.slug}`);
+      await doEscalation(updatedAnswers, "engine");
+      return true;
+    }
+
+    const completeS = isComplete(complaint.slug, updatedFields);
+    if (completeS) {
+      const closing = await generateClosingMessage({ complaintDisplay: complaint.display });
+      await sendWhatsAppMessage(cleanFrom, closing);
+      await runTriageAndSend({ caseId, complaintSlug: complaint.slug, answers: updatedAnswers, to: cleanFrom, threadId });
+      return true;
+    }
+
+    // T018: build listen-first response — ack what was heard + next scripted Q
+    const scriptedQ = getNextQuestion(routerCode, qIndex)
+                   || getNextQuestion("unknown", qIndex)
+                   || "Can you tell me more about your symptoms?";
+    const ack = wordCount > 4 ? buildListenAck(extracted) : "";
+    const reply = ack ? `${ack}${scriptedQ}` : scriptedQ;
+
+    session.questionIndex = qIndex + 1;
+    session.exchanges = [
+      ...exchanges,
+      { role: "user",      text: rawText },
+      { role: "assistant", text: reply   },
+    ].slice(-10);
+    hotSet(threadId, session);
+
+    await sendWhatsAppMessage(cleanFrom, reply);
+    console.log('[T5] sendWhatsAppMessage done (scripted)', Date.now());
+    return true;
+  }
+
+  // ── Step 2: GPT phase — single combined LLM call (extract + next question) ─
+  // Reached only after MIN_QUESTIONS_BEFORE_DISPOSITION - 1 scripted turns.
   // session.pendingSafetyAsk is the safety field the previous assistant
   // response asked about (or null). extractAndRespond will drop any safety
   // field extraction that doesn't match — so chat-history phrases like
   // "my head and neck hurt" can't get re-emitted as stiff_neck:true.
-  console.log('[T4] extractAndRespond', Date.now());
-  const exchanges = session.exchanges ?? [];
+  console.log('[T4] extractAndRespond (GPT phase)', Date.now());
   const combined  = await extractAndRespond(
     rawText,
     session.extractedFields ?? {},
@@ -781,11 +939,13 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   // ── Step 5: Send the next question from the combined call ─────────────────
+  session.questionIndex = (qIndex ?? 0) + 1;
   session.exchanges = [
     ...exchanges,
     { role: "user",      text: rawText           },
     { role: "assistant", text: combined.response },
   ].slice(-10);
+  hotSet(threadId, session);
 
   await sendWhatsAppMessage(cleanFrom, combined.response);
   console.log('[T5] sendWhatsAppMessage done', Date.now());

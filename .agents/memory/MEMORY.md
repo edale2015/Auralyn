@@ -2,3 +2,4 @@
 - [Learning cycle N+1 fix](learning-cycle-n1-fix.md) — runLearningCycle had 400+ DB queries (SELECT+UPDATE per row); fixed to batch; also removed per-encounter trigger from asyncWorker.
 - [Anthropic model IDs](anthropic-model-ids.md) — current working sonnet model is claude-sonnet-4-6; opus is claude-opus-4-20250514; haiku is claude-haiku-4-6.
 - [Production death spiral fix](prod-death-spiral.md) — setInterval loops with DB work and no isRunning guard exhaust the pool when DB is slow; recoveryLoop, governorLoop, and engineScheduler prediction all needed guards.
+- [WhatsApp scripted phase](whatsapp-scripted-phase.md) — F017/T018: first MIN_QUESTIONS turns use scripted Qs (zero LLM); GPT only for extraction on free-form replies; kbIntake.ts owns all logic.

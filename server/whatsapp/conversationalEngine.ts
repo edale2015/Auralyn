@@ -310,7 +310,7 @@ function getMissingSafetyFieldKeys(slug: string, fields: Record<string, any>): s
 }
 
 /** Returns field keys (not labels) for missing non-safety fields — for question library lookups. */
-function getMissingFieldKeys(slug: string, fields: Record<string, any>): string[] {
+export function getMissingFieldKeys(slug: string, fields: Record<string, any>): string[] {
   return getGoals(slug)
     .filter(g => !g.safety && isNull(fields[g.field]))
     .map(g => g.field);
@@ -991,6 +991,18 @@ function _keywordExtract(
   if (/\b(runny\s+nose|stuffy\s+nose|nasal\s+congestion|sinus\s+(congestion|pressure|drainage)|rhinorrhea|post.?nasal\s+drip|sneezing)\b/.test(m) && !isNegated) f.rhinorrhea = true;
   if (/\bno\s+(runny|stuffy)\s+nose\b/.test(m)) f.rhinorrhea = false;
 
+  // Nausea
+  if (/\b(nausea|nauseated|nauseous|feel\s+sick|feeling\s+sick|stomach\s+(is\s+)?(upset|sick))\b/.test(m) && !isNegated) f.nausea = "yes";
+  if (/\bno\s+(nausea|vomiting|throwing\s+up)\b/.test(m)) f.nausea = "no";
+
+  // Vomiting
+  if (/\b(vomit|throw\s+up|threw\s+up|puking?|puke|vomiting|throwing\s+up|been\s+sick)\b/.test(m) && !isNegated) f.vomiting = "yes";
+  if (/\bno\s+(vomiting|vomit|throwing\s+up)\b/.test(m)) f.vomiting = "no";
+
+  // Chills
+  if (/\b(chills?|shivering|rigors?)\b/.test(m) && !isNegated) f.chills = "yes";
+  if (/\bno\s+chills?\b/.test(m)) f.chills = "no";
+
   // Safety-field gate: keyword regexes scan prose and would set stiff_neck:true
   // on "my head and neck hurt" — that is exactly the inference the user has
   // forbidden. Run every match through the canonical gate so it drops on first
@@ -1003,6 +1015,20 @@ function _keywordExtract(
   }
 
   return f;
+}
+
+/**
+ * Public wrapper for the keyword extractor. Used by kbIntake.ts for the
+ * scripted-question phase (F017) so the extractor can fill fields from
+ * simple yes/no answers without an LLM round-trip.
+ */
+export function keywordExtract(
+  slug: string,
+  msg: string,
+  pendingSafetyAsk: string | null = null,
+  isFirstMessage: boolean = false,
+): Record<string, any> {
+  return _keywordExtract(slug, msg, pendingSafetyAsk, isFirstMessage);
 }
 
 // ── Differential diagnosis engine ────────────────────────────────────────────
