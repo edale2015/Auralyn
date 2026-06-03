@@ -263,10 +263,17 @@ function isStrictYesNo(v: any): boolean {
  *   1. Non-safety fields always pass.
  *   2. On the first message (initial complaint), NO safety field can be set —
  *      no question has been asked yet, so no answer can exist.
- *   3. On later turns, a safety field can be set only if it matches the
- *      specific safety question the assistant just asked (`pendingSafetyAsk`).
- *   4. For boolean safety fields, the value must be a clean yes/no/true/false —
- *      this blocks the LLM from extracting stiff_neck:"head and neck hurt".
+ *   3. A red flag the patient VOLUNTEERS — stated in their own words at any
+ *      point, not as the answer to the exact question we pended — must still
+ *      escalate. Only the deterministic keyword extractor (`source: "keyword"`)
+ *      may set a safety field outside `pendingSafetyAsk`: it fires solely on a
+ *      red-flag regex matching the patient's literal words (with negation
+ *      guards), so it is anchored to what was actually said, not to inference.
+ *      A missed escalation is a patient-safety failure; an extra one is safe.
+ *   4. The LLM path (`source: "llm"`, the default) stays gated to
+ *      `pendingSafetyAsk` so the model cannot invent a red flag from prose like
+ *      "my head and neck hurt" — it may only confirm the field we just asked.
+ *   5. For boolean safety fields, the value must be a clean yes/no/true/false.
  */
 export function canExtractSafetyField(
   slug: string,
@@ -274,11 +281,16 @@ export function canExtractSafetyField(
   value: any,
   isFirstMessage: boolean,
   pendingSafetyAsk: string | null,
+  source: "keyword" | "llm" = "llm",
 ): boolean {
   if (!isSafetyField(slug, field)) return true;
   if (isFirstMessage) return false;
-  if (!pendingSafetyAsk || field !== pendingSafetyAsk) return false;
   if (BOOLEAN_SAFETY_FIELDS.has(field) && !isStrictYesNo(value)) return false;
+  // Deterministic keyword match of the patient's actual words → trust it as a
+  // volunteered red flag regardless of which question was pending.
+  if (source === "keyword") return true;
+  // LLM-inferred value → only accept it for the field we directly asked about.
+  if (!pendingSafetyAsk || field !== pendingSafetyAsk) return false;
   return true;
 }
 
@@ -910,11 +922,14 @@ function _keywordExtract(
       /having\s+trouble\s+breath/.test(m)) f.dyspnea = true;
   if (/\bno\s+(trouble\s+)?breath/.test(m)) f.dyspnea = false;
 
-  // Drooling (epiglottitis)
-  if (/\bdrool/i.test(m)) f.drooling = true;
+  // Drooling (epiglottitis) — negation-guarded so "no drooling" sets false,
+  // not a volunteered positive.
+  if (/\bno\s+drool/i.test(m)) f.drooling = false;
+  else if (/\bdrool/i.test(m)) f.drooling = true;
 
-  // Stridor
-  if (/\b(stridor|high[\s-]pitched|whistling)\b/.test(m)) f.stridor = true;
+  // Stridor — negation-guarded.
+  if (/\bno\s+(stridor|high[\s-]pitched|whistling)\b/.test(m)) f.stridor = false;
+  else if (/\b(stridor|high[\s-]pitched|whistling)\b/.test(m)) f.stridor = true;
 
   // Bowel / bladder (cauda equina)
   if (/\b(cannot\s+control|can.?t\s+control|lost\s+control|incontinent|lose\s+control)\b/.test(m) &&
@@ -925,8 +940,9 @@ function _keywordExtract(
   // NOTE: no trailing \b on "radiat" — must match "radiating", "radiates", etc.
   if (/\bradiat\w*|spreading\s+(to|into)|going\s+to/.test(m) && /\b(arm|jaw|shoulder|neck)\b/.test(m)) f.radiation = "yes";
 
-  // Diaphoresis
-  if (/\b(sweat|clammy|diaphoresis)\b/.test(m)) f.diaphoresis = true;
+  // Diaphoresis — negation-guarded so "no sweating" sets false.
+  if (/\bno\s+(sweat|clammy|diaphoresis)/.test(m)) f.diaphoresis = false;
+  else if (/\b(sweat|clammy|diaphoresis)\b/.test(m)) f.diaphoresis = true;
 
   // Global negation guard (used for simple patterns).
   const isNegated = /\b(no\b|not\b|isn.?t|wasn.?t|don.?t think)\b/.test(m);
@@ -1009,7 +1025,7 @@ function _keywordExtract(
   // message, drops when the field isn't the one we just asked about, and drops
   // when the value isn't a clean yes/no for boolean safety fields.
   for (const k of Object.keys(f)) {
-    if (!canExtractSafetyField(slug, k, f[k], isFirstMessage, pendingSafetyAsk)) {
+    if (!canExtractSafetyField(slug, k, f[k], isFirstMessage, pendingSafetyAsk, "keyword")) {
       delete f[k];
     }
   }

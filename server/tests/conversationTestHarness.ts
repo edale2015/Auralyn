@@ -145,6 +145,21 @@ const TEST_SCENARIOS = [
     ],
   },
   {
+    // NEW: red flag (stiff neck → meningitis) VOLUNTEERED on a later turn, not
+    // as the answer to the pended question. Proves canExtractSafetyField detects
+    // volunteered red flags generally — not just the six cases already in suite.
+    name: "Headache — meningitis, volunteered stiff neck, ER now",
+    complaint: "headache",
+    expectedDisposition: "er_now",
+    isSafety: true,
+    falseERRisk: false,
+    conversation: [
+      "I have a headache",
+      "it started earlier today",
+      "I also have a stiff neck and it hurts to bend forward",
+    ],
+  },
+  {
     name: "Headache — migraine history, no ER",
     complaint: "headache",
     expectedDisposition: "treat_and_watch",
