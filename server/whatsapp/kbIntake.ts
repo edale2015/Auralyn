@@ -17,6 +17,7 @@ import {
 } from "./conversationalEngine";
 import {
   getNextQuestion,
+  getNextGapQuestion,
   MIN_QUESTIONS_BEFORE_DISPOSITION,
 } from "../conversation/questionSequences";
 import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
@@ -58,24 +59,125 @@ import { sha256Hex } from "../services/hash";
 
 // ── Slug → router-code reverse map (for scripted question sequences) ──────────
 // `questionSequences.ts` uses short routerCodes ("headache", "cough", …).
-// `kbIntake` has the full engine slugs ("neuro_headache", "cough", …).
-// This map converts slug → routerCode so getNextQuestion() can be called.
+// `kbIntake` has the full engine slugs from COMPLAINT_REGISTRY.csv.
+// This map converts every known CC_ID → routerCode so gap-skipping works.
+// Unmapped slugs fall back to their raw value; SEQUENCES falls back to
+// DEFAULT_QUESTIONS, which are all null-hinted (never skipped).
 const SLUG_TO_ROUTER: Record<string, string> = {
-  neuro_headache:       "headache",
-  nausea:               "nausea_vomiting",
-  abdominal_pain:       "abdominal_pain",
-  chest_pain:           "chest_pain",
-  cough:                "cough",
-  pulm_shortness_of_breath: "shortness_of_breath",
-  ent_sinus_pressure:   "uri_sinus",
-  sore_throat:          "sore_throat",
-  gu_uti_symptoms:      "uti",
-  msk_back_pain:        "back_pain",
-  id_fever:             "fever",
-  derm_rash:            "rash",
-  dizziness:            "dizziness",
-  ent_earache:          "ear_pain",
-  cardio_palpitations:  "palpitations",
+  // ── Headache / Neuro ──────────────────────────────────────────────────────
+  neuro_headache:              "headache",
+  ortho_trauma_head_injury:    "headache",
+  neuro_confusion_ams:         "headache",
+  neuro_seizure:               "headache",
+  neuro_weakness_numbness:     "headache",
+
+  // ── Nausea / Vomiting ─────────────────────────────────────────────────────
+  nausea:                      "nausea_vomiting",
+  gi_vomiting:                 "nausea_vomiting",
+  general_nausea_malaise:      "nausea_vomiting",
+
+  // ── Abdominal Pain ────────────────────────────────────────────────────────
+  abdominal_pain:              "abdominal_pain",
+  gi_abdominal_pain:           "abdominal_pain",
+  gi_diarrhea:                 "abdominal_pain",
+  gi_constipation:             "abdominal_pain",
+  gi_gi_bleeding:              "abdominal_pain",
+  gi_jaundice:                 "abdominal_pain",
+  gi_acute_pancreatitis_like:  "abdominal_pain",
+  gu_pelvic_pain_possible_ovarian_torsion: "abdominal_pain",
+  gu_testicular_pain:          "abdominal_pain",
+  gu_testicular_pain_prostatitis: "abdominal_pain",
+  gu_vaginal_bleeding:         "abdominal_pain",
+  gyn_pelvic_pain:             "abdominal_pain",
+  tox_overdose_intoxication:   "abdominal_pain",
+  tox_poisoning_exposure:      "abdominal_pain",
+  tox_withdrawal:              "abdominal_pain",
+  cardio_leg_swelling:         "abdominal_pain",
+
+  // ── Chest Pain ────────────────────────────────────────────────────────────
+  chest_pain:                  "chest_pain",
+  cardio_chest_pain:           "chest_pain",
+
+  // ── Shortness of Breath ───────────────────────────────────────────────────
+  pulm_shortness_of_breath:    "shortness_of_breath",
+  pulm_chest_tightness:        "shortness_of_breath",
+  pulm_wheezing:               "shortness_of_breath",
+
+  // ── Sore Throat / Dysphagia ───────────────────────────────────────────────
+  sore_throat:                 "sore_throat",
+  ent_sore_throat:             "sore_throat",
+  gi_dysphagia:                "sore_throat",
+  dental_pain:                 "sore_throat",
+
+  // ── Cough ─────────────────────────────────────────────────────────────────
+  cough:                       "cough",
+  persistent_cough:            "cough",
+  pulm_cough:                  "cough",
+  pulm_hemoptysis:             "cough",
+
+  // ── UTI / Urinary ─────────────────────────────────────────────────────────
+  gu_uti_symptoms:             "uti",
+  gu_dysuria_uti:              "uti",
+  gu_flank_pain:               "uti",
+  gu_hematuria:                "uti",
+  gu_sti_exposure_discharge:   "uti",
+  gu_urinary_retention:        "uti",
+
+  // ── Sinus / URI ───────────────────────────────────────────────────────────
+  ent_sinus_pressure:          "uri_sinus",
+  sinus_pressure:              "uri_sinus",
+  ent_nasal_congestion:        "uri_sinus",
+  allergic_rhinitis:           "uri_sinus",
+
+  // ── Back Pain / MSK ───────────────────────────────────────────────────────
+  msk_back_pain:               "back_pain",
+  msk_joint_pain:              "back_pain",
+  msk_sprain_injury:           "back_pain",
+
+  // ── Fever / Systemic ──────────────────────────────────────────────────────
+  id_fever:                    "fever",
+  id_flu_like:                 "fever",
+  general_fatigue:             "fever",
+  general_generalized_weakness: "fever",
+  environmental_heat_illness:  "fever",
+  environmental_hypothermia_cold_exposure: "fever",
+  endo_hyperglycemia:          "fever",
+  endo_thyroid_symptoms:       "fever",
+
+  // ── Rash / Derm ───────────────────────────────────────────────────────────
+  derm_rash:                   "rash",
+  derm_allergic_reaction:      "rash",
+  derm_cellulitis:             "rash",
+
+  // ── Dizziness ─────────────────────────────────────────────────────────────
+  dizziness:                   "dizziness",
+  neuro_dizziness_vertigo:     "dizziness",
+  neuro_syncope:               "dizziness",
+  endo_hypoglycemia:           "dizziness",
+
+  // ── Ear Pain ──────────────────────────────────────────────────────────────
+  earache:                     "ear_pain",
+  ent_ear_pain:                "ear_pain",
+  ent_earache:                 "ear_pain",
+
+  // ── Eye Complaints ────────────────────────────────────────────────────────
+  ophtho_eye_pain_foreign_body: "eye_complaint",
+  ophtho_red_eye:              "eye_complaint",
+  ophtho_vision_loss:          "eye_complaint",
+
+  // ── Anxiety / Psych ───────────────────────────────────────────────────────
+  psych_anxiety_panic:         "anxiety",
+  psych_agitation_psychosis:   "anxiety",
+  psych_depression_suicidal_ideation: "anxiety",
+  insomnia:                    "anxiety",
+
+  // ── Laceration / Trauma ───────────────────────────────────────────────────
+  ortho_trauma_laceration:     "laceration",
+  ortho_trauma_fracture_dislocation: "laceration",
+  id_animal_bite_wound_infection: "laceration",
+
+  // ── Palpitations ─────────────────────────────────────────────────────────
+  cardio_palpitations:         "palpitations",
 };
 
 function slugToRouter(slug: string): string {
@@ -705,14 +807,17 @@ export async function handleWhatsAppKBIntake(params: {
     // F017: Turn 0 — send scripted Q[0] with ZERO LLM calls.
     // T018: keyword-extract any volunteered fields from the opening message so
     //       the next scripted question targets the first gap.
-    console.log('[T4] scripted Q[0] — no LLM (F017)', Date.now());
-    const routerCode0 = slugToRouter(match.slug);
+    console.log('[T4] scripted Q[0] — no LLM (F017/F020)', Date.now());
+    const routerCode0  = slugToRouter(match.slug);
     const initKwFields = keywordExtract(match.slug, rawText, null, true);
-    const q0 = getNextQuestion(routerCode0, 0) || "How long have you been having these symptoms?";
+    // F020: gap-aware — skip Q[0] if the patient already answered its field
+    const gap0  = getNextGapQuestion(routerCode0, initKwFields, 0);
+    const q0    = gap0?.question ?? "How long have you been having these symptoms?";
+    const qi0   = gap0?.nextIndex ?? 1;
 
     session.extractedFields  = initKwFields;
     session.answers          = mapFieldsToQIds(match.slug, initKwFields);
-    session.questionIndex    = 1;
+    session.questionIndex    = qi0;
     session.exchanges = [
       { role: "user",      text: rawText },
       { role: "assistant", text: q0      },
@@ -872,14 +977,14 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
-    // T018: build listen-first response — ack what was heard + next scripted Q
-    const scriptedQ = getNextQuestion(routerCode, qIndex)
-                   || getNextQuestion("unknown", qIndex)
-                   || "Can you tell me more about your symptoms?";
+    // T018 + F020: build listen-first response — ack what was heard + next gap Q
+    // getNextGapQuestion scans forward from qIndex, skipping already-answered fields
+    const gapResult = getNextGapQuestion(routerCode, updatedFields, qIndex);
+    const scriptedQ = gapResult?.question ?? "Can you tell me more about your symptoms?";
     const ack = wordCount > 4 ? buildListenAck(extracted) : "";
     const reply = ack ? `${ack}${scriptedQ}` : scriptedQ;
 
-    session.questionIndex = qIndex + 1;
+    session.questionIndex = gapResult?.nextIndex ?? (qIndex + 1);
     session.exchanges = [
       ...exchanges,
       { role: "user",      text: rawText },

@@ -214,6 +214,32 @@ const DEFAULT_QUESTIONS: readonly string[] = [
 ];
 
 /**
+ * F020 — Field-hint map: parallel to SEQUENCES.
+ * Each entry is the extractedFields key the question covers, or null (always ask).
+ * If the field is already populated in extractedFields, the question is skipped.
+ */
+const QUESTION_FIELD_HINTS: Record<string, readonly (string | null)[]> = {
+  headache:         ["duration", "severity", "thunderclap", "stiff_neck", "fever"],
+  nausea_vomiting:  ["duration", "vomiting", null, null, "fever", null, "dizziness"],
+  abdominal_pain:   [null, "duration", "severity", "fever", "nausea", null, null],
+  chest_pain:       [null, "duration", "radiation", "diaphoresis", "dyspnea", null, null],
+  shortness_of_breath: ["duration", null, null, "fever", null, null],
+  sore_throat:      ["duration", "severity", "fever", null, null, null, "dyspnea"],
+  cough:            ["duration", "fever", "dyspnea", null, null, "age"],
+  uti:              ["duration", "fever", null, null, null, "vomiting"],
+  uri_sinus:        ["duration", "fever", null, null, null, "rhinorrhea"],
+  back_pain:        [null, "duration", "severity", null, null, "fever", null],
+  fever:            ["duration", null, "chills", null, null, null],
+  rash:             ["duration", null, null, "fever", "dyspnea", null],
+  dizziness:        [null, "duration", null, null, null, "nausea"],
+  ear_pain:         ["duration", null, "fever", null, null, null],
+  eye_complaint:    ["duration", null, null, null, null, "fever"],
+  anxiety:          ["duration", "dyspnea", null, null, null, null],
+  laceration:       [null, null, null, null, null, null],
+  palpitations:     ["duration", null, "dizziness", "dyspnea", null, null],
+};
+
+/**
  * Return the question at the given zero-based index for a complaint.
  * Returns empty string when the sequence is exhausted.
  *
@@ -223,6 +249,41 @@ const DEFAULT_QUESTIONS: readonly string[] = [
 export function getNextQuestion(complaint: string, index: number): string {
   const seq = SEQUENCES[complaint] ?? DEFAULT_QUESTIONS;
   return seq[index] ?? "";
+}
+
+/**
+ * F020 — Gap-aware question selector.
+ *
+ * Scans forward from `fromIndex`, skipping any question whose field is already
+ * populated in `extractedFields`. Returns the first unanswered question and the
+ * index to store as `session.questionIndex` for the next turn.
+ *
+ * Returns null when all scripted questions are exhausted (caller should switch
+ * to the GPT phase immediately).
+ *
+ * @param complaint       routerCode (e.g. "cough", "nausea_vomiting")
+ * @param extractedFields semantic fields collected so far
+ * @param fromIndex       where to start scanning (= current session.questionIndex)
+ */
+export function getNextGapQuestion(
+  complaint: string,
+  extractedFields: Record<string, any>,
+  fromIndex: number,
+): { question: string; nextIndex: number } | null {
+  const seq   = SEQUENCES[complaint] ?? DEFAULT_QUESTIONS;
+  const hints = QUESTION_FIELD_HINTS[complaint] ?? null;
+
+  for (let i = fromIndex; i < seq.length; i++) {
+    const field = hints?.[i] ?? null;
+    const alreadyAnswered =
+      field !== null &&
+      extractedFields[field] !== undefined &&
+      extractedFields[field] !== null;
+    if (!alreadyAnswered) {
+      return { question: seq[i], nextIndex: i + 1 };
+    }
+  }
+  return null; // all scripted questions answered — caller should go to GPT phase
 }
 
 /**
