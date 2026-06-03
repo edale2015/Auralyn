@@ -137,12 +137,31 @@ export function getTwilioWASendAuditLog() {
   return [..._sendAuditLog];
 }
 
+// ── Test intercept hooks ──────────────────────────────────────────────────────
+// Registered by the /api/test/kb-sim endpoint to capture outbound messages
+// without hitting Twilio. Key is normalized E.164 phone (+1555…).
+const _testInterceptors = new Map<string, (msg: string) => void>();
+
+export function registerTestInterceptor(e164: string, fn: (msg: string) => void): void {
+  _testInterceptors.set(e164, fn);
+}
+export function clearTestInterceptor(e164: string): void {
+  _testInterceptors.delete(e164);
+}
+
 export async function sendWhatsAppMessage(
   to: string,
   body: string,
   opts?: { incomingSid?: string }
 ): Promise<void> {
   const formattedTo = normalizeWhatsAppTo(to);
+  // Check for test intercept before touching Twilio
+  const e164 = formattedTo.replace(/^whatsapp:/, "");
+  const interceptor = _testInterceptors.get(e164);
+  if (interceptor) {
+    interceptor(String(body ?? "").trim());
+    return;
+  }
   const { text: sanitized, phiFound } = redactPHI(String(body ?? "").trim());
   if (!sanitized) throw new Error("Missing message body");
 

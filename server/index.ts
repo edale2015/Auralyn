@@ -534,6 +534,47 @@ app.post("/whatsapp/webhook", (req, res) => {
   }
 });
 
+// ── POST /api/test/kb-sim ────────────────────────────────────────────────────
+// Synchronous test shim for kbIntake.ts. Exercises handleWhatsAppKBIntake
+// without calling Twilio — intercepts sendWhatsAppMessage via the test hook
+// in send.ts and returns the captured reply in JSON.
+// Body: { sessionId: string, message: string }
+app.post("/api/test/kb-sim", async (req: any, res: any) => {
+  console.log("[kb-sim] HIT — body:", JSON.stringify(req.body));
+  try {
+    const { sessionId, message } = req.body ?? {};
+    if (!sessionId || message === undefined) {
+      return res.status(400).json({ ok: false, error: "sessionId and message required" });
+    }
+    const hashNum = Buffer.from(String(sessionId)).reduce((a: number, b: number) => (a * 31 + b) % 9_000_000, 0) + 1_000_000;
+    const fakePhone = `+1555${String(hashNum).slice(0, 7)}`;
+
+    const { registerTestInterceptor, clearTestInterceptor } = await import("./whatsapp/send");
+    const { handleWhatsAppKBIntake } = await import("./whatsapp/kbIntake");
+
+    const replyPromise = new Promise<string>((resolve) => {
+      registerTestInterceptor(fakePhone, (msg: string) => {
+        clearTestInterceptor(fakePhone);
+        resolve(msg);
+      });
+    });
+
+    const t0 = Date.now();
+    await handleWhatsAppKBIntake({ from: fakePhone, text: String(message) || "(empty)", messageSid: `sim-${Date.now()}` });
+
+    const reply = await Promise.race([
+      replyPromise,
+      new Promise<string>((_, reject) =>
+        setTimeout(() => { clearTestInterceptor(fakePhone); reject(new Error("timeout")); }, 12_000)
+      ),
+    ]);
+
+    res.json({ ok: true, reply, latencyMs: Date.now() - t0, phone: fakePhone });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 app.use(tenantContextMiddleware);
 app.use(globalSafetyGate);
 

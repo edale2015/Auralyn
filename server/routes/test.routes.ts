@@ -402,4 +402,58 @@ export function registerTestRoutes(router: Router): void {
       res.status(500).json({ ok: false, error: error.message || "Compare failed" });
     }
   });
+
+  // ── POST /api/test/kb-sim ─────────────────────────────────────────────────
+  // Synchronous test harness for kbIntake.ts. Exercises the LIVE path
+  // (handleWhatsAppKBIntake) without calling Twilio. Captures the outbound
+  // message via the test-intercept hook in send.ts and returns it in JSON.
+  //
+  // Body: { sessionId: string, message: string }
+  // Response: { reply: string, latencyMs: number }
+  //
+  // Use a stable sessionId per test session — the hot-session store in
+  // kbIntake.ts is keyed by "from" phone number, so the same sessionId
+  // resumes the same conversation.
+  router.post("/api/test/kb-sim", async (req: Request, res: Response) => {
+    try {
+      const { sessionId, message } = req.body as { sessionId?: string; message?: string };
+      if (!sessionId || message === undefined) {
+        res.status(400).json({ ok: false, error: "sessionId and message are required" });
+        return;
+      }
+
+      // Derive a stable fake E.164 phone from sessionId (max 15 digits total)
+      const hashNum = Buffer.from(sessionId).reduce((acc, b) => (acc * 31 + b) % 9_000_000, 0) + 1_000_000;
+      const fakePhone = `+1555${String(hashNum).slice(0, 7)}`;
+
+      const { registerTestInterceptor, clearTestInterceptor } = await import("../whatsapp/send");
+      const { handleWhatsAppKBIntake } = await import("../whatsapp/kbIntake");
+
+      // Promise that resolves when sendWhatsAppMessage fires for fakePhone
+      let capturedReply = "";
+      const replyPromise = new Promise<string>((resolve) => {
+        registerTestInterceptor(fakePhone, (msg) => {
+          capturedReply = msg;
+          clearTestInterceptor(fakePhone);
+          resolve(msg);
+        });
+      });
+
+      const t0 = Date.now();
+      await handleWhatsAppKBIntake({ from: fakePhone, text: message || "(empty)", messageSid: `sim-${Date.now()}` });
+
+      // Wait up to 10 s for the reply to be captured
+      const reply = await Promise.race([
+        replyPromise,
+        new Promise<string>((_, reject) =>
+          setTimeout(() => { clearTestInterceptor(fakePhone); reject(new Error("timeout: no outbound message within 10s")); }, 10_000)
+        ),
+      ]);
+
+      const latencyMs = Date.now() - t0;
+      res.json({ ok: true, reply, latencyMs, phone: fakePhone });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+    }
+  });
 }
