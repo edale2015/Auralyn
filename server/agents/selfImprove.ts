@@ -297,7 +297,24 @@ export async function applyImprovementAction(
   actionId:  number,
   decidedBy: string
 ): Promise<{ applied: boolean; reason: string }> {
-  return db.transaction(async (tx) => {
+  return db.transaction((tx) => _applyActionOnTx(tx, actionId, decidedBy));
+}
+
+/**
+ * Core apply logic, executed on a caller-provided transaction.
+ *
+ * Runs on whatever transaction (and pooled connection) the caller already holds.
+ * Callers that already have an open transaction — e.g. approveAndApplyAction —
+ * MUST call this directly rather than applyImprovementAction(): opening a second
+ * db.transaction would take a different pooled connection and deadlock on the
+ * per-action advisory lock acquired below (pg_advisory_xact_lock is re-entrant
+ * within one session, not across pooled connections).
+ */
+async function _applyActionOnTx(
+  tx:        Parameters<Parameters<typeof db.transaction>[0]>[0],
+  actionId:  number,
+  decidedBy: string
+): Promise<{ applied: boolean; reason: string }> {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTION_LOCK_BASE + actionId})`);
 
     const [action] = await tx
@@ -388,7 +405,6 @@ export async function applyImprovementAction(
     });
 
     return { applied: true, reason: "ok" };
-  });
 }
 
 // ── Reject an action ─────────────────────────────────────────────────────────
@@ -463,10 +479,11 @@ export async function approveAndApplyAction(
       note:     note ?? null,
     });
 
-    // applyImprovementAction uses its own transaction + advisory lock.
-    // Since we already hold the lock here, the inner call will block on the same slot —
-    // but pg_advisory_xact_lock is re-entrant within the same session, so it proceeds.
-    return applyImprovementAction(actionId, reviewerId);
+    // Run the apply logic on THIS transaction (same connection / session) so it
+    // re-uses the advisory lock we already hold. Calling applyImprovementAction()
+    // here would open a second db.transaction on a different pooled connection and
+    // deadlock on the same pg_advisory_xact_lock.
+    return _applyActionOnTx(tx, actionId, reviewerId);
   });
 }
 
