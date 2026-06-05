@@ -28,7 +28,13 @@
       "Bash(git branch *)",
       "Bash(NODE_OPTIONS=\"--max-old-space-size=4096\" npx tsc --noEmit -p tsconfig.json)",
       "Bash(tee /tmp/tsc.log)",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(grep -ao 'GIT_SHA[=\":][^\"]*\\\\|BUILD_SHA[=\":][^\"]*\\\\|buildSha[^,]*\\\\|version[\"\\\\x27: ]*[0-9a-f]\\\\{7,40\\\\}' dist/index.cjs)",
+      "Bash(grep -nA6 \"include\" vitest.config.ts)",
+      "Bash(sed -n '40,60p' server/whatsapp/agent/streamingAgent.ts)",
+      "Bash(sed -n '67,82p' server/whatsapp/agent/streamingAgent.ts)",
+      "Bash(sed -n '159,162p' server/whatsapp/agent/streamingAgent.ts)",
+      "Bash(grep -vE \"^\\\\s*$\")"
     ]
   }
 }
