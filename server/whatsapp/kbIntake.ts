@@ -276,6 +276,15 @@ export function __peekHotSession(threadId: string): HotSession | null {
   return hotGet(threadId);
 }
 
+// Last full pipeline result produced on the red-flag escalation path. Populated
+// by doEscalation() so verification harnesses can confirm an escalated case still
+// completed all pipeline stages with a populated differential. No production
+// callers — read-only test hook.
+let __lastEscalationPipeline: PipelineResult | null = null;
+export function __peekLastEscalation(): PipelineResult | null {
+  return __lastEscalationPipeline;
+}
+
 // Firestore fallback — used only on first message after server restart
 async function firestoreLookup(threadId: string): Promise<HotSession | null> {
   try {
@@ -873,6 +882,35 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   async function doEscalation(updatedAns: Record<string, any>, trigger: string) {
+    // Red flag detected. Detection, the patient 911 message, the physician alert,
+    // and top-of-queue placement all stay intact — but the clinical pipeline now
+    // runs to COMPLETION so the physician receives the full differential / workup /
+    // disposition for this escalated case, not a bare "ESCALATION" stub. The
+    // patient-facing disposition is non-negotiably ER regardless of how the rest
+    // of the pipeline scores.
+    const masterResult = await executePipeline(
+      complaint.slug,
+      updatedAns as Record<string, string | number | boolean>,
+    ).catch((e: any) => {
+      console.error("[WhatsApp] escalation pipeline error:", e?.message);
+      return null as PipelineResult | null;
+    });
+    __lastEscalationPipeline = masterResult;   // verification hook only — no prod callers
+
+    const triage = masterResult
+      ? buildTriageFromPipeline(masterResult)
+      : { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — auto-escalated", rfTriggered: ["ESCALATION"], consistencyFlags: [] };
+    // Escalation stays authoritative: force ER + surface the critical flags fired.
+    triage.disposition = "er_send";
+    triage.confidence  = "HIGH";
+    triage.rfTriggered = (masterResult?.criticalFlagsHit?.length ?? 0) > 0
+      ? masterResult!.criticalFlagsHit
+      : ["ESCALATION"];
+
+    const stageCount   = masterResult?.steps?.length ?? 0;
+    const dxStep       = masterResult?.steps?.find(s => s.ruleType === "diagnosis");
+    const differential = (dxStep?.rulesFired ?? []).slice(0, 8).map((r: any) => r.rule_name ?? r.rule_id);
+
     setImmediate(() => {
       const answerHash = sha256Hex(JSON.stringify(updatedAns));
       import("../firebase").then(({ getFirestore }) => {
@@ -882,10 +920,33 @@ export async function handleWhatsAppKBIntake(params: {
           "answers.answerHash": answerHash,
         }).catch(() => {});
       }).catch(() => {});
-      setTriage(caseId, { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — auto-escalated", rfTriggered: ["ESCALATION"], consistencyFlags: [] } as any, "CLOSED" as any).catch(() => {});
+      // TOP-OF-QUEUE physician review (NEEDS_REVIEW), full pipeline triage attached.
+      setTriage(caseId, {
+        ...triage,
+        escalated: true,
+        priority:  "CRITICAL_TOP",
+        masterPipeline: masterResult ? {
+          finalDisposition: masterResult.finalDisposition,
+          hardStop:         masterResult.hardStop,
+          hardStopReason:   masterResult.hardStopReason,
+          totalRulesFired:  masterResult.totalRulesFired,
+          criticalFlagsHit: masterResult.criticalFlagsHit,
+          stages:           stageCount,
+          differential,
+        } : null,
+      } as any, "NEEDS_REVIEW" as any).catch(() => {});
       endSession(caseId, "er_send" as any).catch(() => {});
-      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: EMERGENCY_MESSAGE, responseText: `escalated=true|trigger=${trigger}` }).catch(() => {});
+      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: EMERGENCY_MESSAGE, responseText: `escalated=true|trigger=${trigger}|disposition=er_send|stages=${stageCount}|rulesFired=${masterResult?.totalRulesFired ?? 0}|differential=${differential.join(";")}` }).catch(() => {});
+      // Full physician review packet (differential/workup enrichment) — non-blocking.
+      runOrchestratorTriage({
+        complaintSlug: complaint.slug,
+        answers: updatedAns,
+        sessionId: caseId,
+        caseId,
+        channel: "whatsapp",
+      }).catch((e: any) => console.warn("[WhatsApp] escalation orchestrator (non-blocking):", e?.message));
     });
+
     await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
     hotDel(threadId);
   }

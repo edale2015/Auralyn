@@ -217,8 +217,12 @@ export async function executePipeline(
     let stepEscalation: string | null = null;
 
     for (const rule of stepRules) {
-      if (hardStop && rule.safety_level !== "CRITICAL") continue; // short-circuit non-critical after hardstop
-
+      // A red-flag hard stop FLAGS the case (hardStop/escalation/finalDisposition
+      // are already recorded above) but must NOT terminate the pipeline. Every
+      // downstream stage still evaluates its rules so the physician receives the
+      // full differential / workup / disposition for an escalated case — not a
+      // bare escalation stub. The hard stop never gets downgraded: finalDisposition
+      // is guarded by `!finalDisposition` and red-flag rules only escalate further.
       const fires = evaluateRule(rule, { ...allOutputs, ...inputs });
       if (fires) {
         firedRules.push({
