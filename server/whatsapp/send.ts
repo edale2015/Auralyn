@@ -2,6 +2,7 @@ import twilio from "twilio";
 import { withRetry } from "../utils/withRetry";
 import { twilioBreaker } from "../utils/circuitBreaker";
 import { logger } from "../utils/logger";
+import { appendEmergencyDisclaimer } from "./disclaimer";
 
 const PHI_PATTERNS_WA = [
   /\b\d{3}-\d{2}-\d{4}\b/g,
@@ -155,14 +156,17 @@ export async function sendWhatsAppMessage(
   opts?: { incomingSid?: string }
 ): Promise<void> {
   const formattedTo = normalizeWhatsAppTo(to);
+  // T025: every patient outbound carries the fixed, universal 911 disclaimer.
+  // Applied here at the single send chokepoint so it can never be forgotten.
+  const withFooter = appendEmergencyDisclaimer(String(body ?? ""));
   // Check for test intercept before touching Twilio
   const e164 = formattedTo.replace(/^whatsapp:/, "");
   const interceptor = _testInterceptors.get(e164);
   if (interceptor) {
-    interceptor(String(body ?? "").trim());
+    interceptor(withFooter.trim());
     return;
   }
-  const { text: sanitized, phiFound } = redactPHI(String(body ?? "").trim());
+  const { text: sanitized, phiFound } = redactPHI(withFooter.trim());
   if (!sanitized) throw new Error("Missing message body");
 
   if (phiFound) {

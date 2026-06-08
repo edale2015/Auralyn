@@ -24,6 +24,9 @@ import {
   type RouterAudit,
 } from "./flows/whatsappFlowRouter";
 import { sendWhatsAppMessage } from "./whatsapp/send";
+import { appendEmergencyDisclaimer } from "./whatsapp/disclaimer";
+import { sendPhysicianAlert } from "./alerts/physicianAlertService";
+import { appendAuditEvent } from "./audit/hashChain";
 import { computeProposalGeneric } from "./rules/computeProposalGeneric";
 import { requireProviderAuth } from "./auth";
 import { validateTwilioSignature } from "./whatsapp/twilioValidation";
@@ -123,6 +126,54 @@ function buildModifiersFromAnswers(a: Record<string, any>) {
     current_meds: a.CURRENT_MEDS ?? null,
     onset_days: Number.isFinite(onsetDays) ? onsetDays : null,
   };
+}
+
+// T025: Flow ids that ARE the deterministic red-flag detection for emergent presentations.
+// Detection is preserved — only the patient-facing referral message is removed.
+const HIGH_RISK_FLOW_IDS = new Set<string>([
+  "EMERG_CRITICAL_V1",
+  "TRAUMA_MAJOR_V1",
+  "UROGYN_VAGINAL_BLEEDING_V1",
+  "UROGYN_TESTICULAR_PAIN_V1",
+  "OPHTH_VISION_LOSS_V1",
+  "NEURO_WEAKNESS_V1",
+]);
+
+/**
+ * T025: On a deterministic red-flag detection along the patient-facing path, route the
+ * signal to the supervising physician instead of referring the patient:
+ *   (a) escalate the encounter to the TOP of the review queue (urgencyLevel "emergent"),
+ *   (b) fire an immediate, PHI-free high-priority physician alert (out-of-band channel),
+ *   (c) append a canonical audit event.
+ * The patient never receives a symptom-specific referral here — only the universal 911
+ * disclaimer footer — until the physician signs off and their disposition is sent.
+ *
+ * Idempotent per encounter: fires once (guarded on urgencyLevel === "emergent"), so the
+ * physician is not re-alerted on every subsequent inbound turn of the same flow.
+ * Best-effort: alert/audit failures are logged and never block the patient flow.
+ */
+async function flagForPhysician(encounter: any, reason: string): Promise<void> {
+  try {
+    if (!encounter?.id || encounter.urgencyLevel === "emergent") return;
+    const caseId = String(encounter.id);
+    await storage.updateEncounter(encounter.id, { urgencyLevel: "emergent" });
+    encounter.urgencyLevel = "emergent"; // reflect in-memory so we fire once per request too
+    await sendPhysicianAlert({
+      type: "high_risk",
+      caseId,
+      priority: "immediate",
+      summary: `Deterministic red flag detected — immediate review required (${reason})`,
+    }).catch(err => console.error("[T025] physician alert failed:", err?.message));
+    await appendAuditEvent({
+      traceId: caseId,
+      step: "RED_FLAG_DETECTED",
+      input: { reason },
+      output: { alerted: true, queuePriority: "emergent" },
+      metadata: { source: "patient_path", entityType: "encounter" },
+    }).catch(err => console.error("[T025] audit append failed:", err?.message));
+  } catch (err: any) {
+    console.error("[T025] flagForPhysician failed:", err?.message);
+  }
 }
 
 // Compute medical proposal based on answers (now uses sheet-driven rules with fallback)
@@ -500,14 +551,14 @@ export async function registerRoutes(
       
       // Confidence rank helper: low=0, medium=1, high=2 (low first for staff review)
       const confRank = (c: string) => (c === "low" ? 0 : c === "medium" ? 1 : 2);
-      
-      // Sort by redFlag desc, urgencyLevel urgent first, low confidence first, then newest
+      // T025: emergent (red-flag escalations) sort above urgent, then routine.
+      const urgencyRank = (u: string) => (u === "emergent" ? 0 : u === "urgent" ? 1 : 2);
+
+      // Sort by redFlag desc, urgency (emergent→urgent→routine), low confidence first, then newest
       enhanced.sort((a, b) => {
         if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
-        if (a.urgencyLevel !== b.urgencyLevel) {
-          if (a.urgencyLevel === "urgent") return -1;
-          if (b.urgencyLevel === "urgent") return 1;
-        }
+        const urgDiff = urgencyRank(a.urgencyLevel) - urgencyRank(b.urgencyLevel);
+        if (urgDiff !== 0) return urgDiff;
         const confDiff = confRank(a.confidence) - confRank(b.confidence);
         if (confDiff !== 0) return confDiff;
         return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
@@ -569,14 +620,14 @@ export async function registerRoutes(
       
       // Confidence rank helper: low=0, medium=1, high=2 (low first for staff review)
       const confRank = (c: string) => (c === "low" ? 0 : c === "medium" ? 1 : 2);
-      
-      // Sort by redFlag desc, urgencyLevel urgent first, low confidence first, then newest
+      // T025: emergent (red-flag escalations) sort above urgent, then routine.
+      const urgencyRank = (u: string) => (u === "emergent" ? 0 : u === "urgent" ? 1 : 2);
+
+      // Sort by redFlag desc, urgency (emergent→urgent→routine), low confidence first, then newest
       enhanced.sort((a, b) => {
         if (a.redFlag !== b.redFlag) return a.redFlag ? -1 : 1;
-        if (a.urgencyLevel !== b.urgencyLevel) {
-          if (a.urgencyLevel === "urgent") return -1;
-          if (b.urgencyLevel === "urgent") return 1;
-        }
+        const urgDiff = urgencyRank(a.urgencyLevel) - urgencyRank(b.urgencyLevel);
+        if (urgDiff !== 0) return urgDiff;
         const confDiff = confRank(a.confidence) - confRank(b.confidence);
         if (confDiff !== 0) return confDiff;
         return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
@@ -1143,28 +1194,14 @@ export async function registerRoutes(
         encounter = await storage.getEncounter(encounter.id) as typeof encounter;
       }
 
-      // Immediate ED warning for EMERG/TRAUMA picks
-      if (encounter.flowId === "EMERG_CRITICAL_V1") {
-        await sendWhatsAppMessage(phoneNumber, "This may be an emergency. If someone is unresponsive, not breathing, or bleeding heavily, call 911 now.");
-      }
-      if (encounter.flowId === "TRAUMA_MAJOR_V1") {
-        await sendWhatsAppMessage(phoneNumber, "This may require urgent emergency evaluation. If severe pain, head injury, bleeding, or confusion, go to the ER now.");
+      // T025: Red-flag flow detection routes to the supervising physician, NOT the patient.
+      // Detection is preserved; the patient receives only the universal 911 disclaimer footer
+      // until the physician signs off. flagForPhysician fires an immediate physician alert and
+      // pushes this encounter to the top of the review queue (idempotent per encounter).
+      if (encounter.flowId && HIGH_RISK_FLOW_IDS.has(encounter.flowId)) {
+        await flagForPhysician(encounter, `flow:${encounter.flowId}`);
       }
 
-      // High-risk flow ED warnings
-      if (encounter.flowId === "UROGYN_VAGINAL_BLEEDING_V1") {
-        await sendWhatsAppMessage(phoneNumber, "If you may be pregnant and have bleeding with pain, dizziness, or heavy bleeding, go to the ER now.");
-      }
-      if (encounter.flowId === "UROGYN_TESTICULAR_PAIN_V1") {
-        await sendWhatsAppMessage(phoneNumber, "Sudden severe testicular pain can be an emergency (torsion). If severe/sudden, go to the ER now.");
-      }
-      if (encounter.flowId === "OPHTH_VISION_LOSS_V1") {
-        await sendWhatsAppMessage(phoneNumber, "Sudden vision loss can be an emergency. If sudden or worsening, go to the ER now.");
-      }
-      if (encounter.flowId === "NEURO_WEAKNESS_V1") {
-        await sendWhatsAppMessage(phoneNumber, "New weakness, facial droop, or trouble speaking can be a stroke. Call 911 or go to the ER now.");
-      }
-      
       // Save incoming message
       await storage.createMessage({
         patientId: patient.id,
@@ -1216,7 +1253,7 @@ export async function registerRoutes(
         
         const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
         
-        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.\n\n⚠️ If you develop trouble breathing, chest pain, confusion, severe bleeding, or can't keep fluids down, seek urgent care or go to the ER now.`;
+        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.`;
       } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
         // Patient requested fallback to WhatsApp Q&A
         const firstQuestion = flow[0];
@@ -1268,9 +1305,13 @@ export async function registerRoutes(
           const physicianSummary = buildPhysicianSummary(answers, proposal);
           const modifiers = buildModifiersFromAnswers(answers);
           
-          // Determine urgency based on red flags
-          const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
-          
+          // Determine urgency based on red flags.
+          // T025: red flag → emergent (top of queue); never downgrade an encounter already
+          // escalated to emergent by an earlier flow-based red-flag detection.
+          const urgencyLevel = proposal.redFlag
+            ? "emergent"
+            : (encounter.urgencyLevel === "emergent" ? "emergent" : "routine");
+
           await storage.updateEncounter(encounter.id, {
             answers: JSON.stringify(answers),
             proposal: JSON.stringify(proposal),
@@ -1312,9 +1353,12 @@ export async function registerRoutes(
             });
           }
           
-          responseMessage = proposal.redFlag
-            ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room. A physician will also review your case."
-            : "Thank you for completing the assessment. Your case has been sent to a physician for review. If you develop trouble breathing, chest pain, confusion, or can't keep fluids down, seek urgent care/ER immediately.";
+          // T025: no symptom-specific referral reaches the patient before physician signoff.
+          // On a red flag, alert the physician and push to top of queue instead.
+          if (proposal.redFlag) {
+            await flagForPhysician(encounter, "intake_red_flag");
+          }
+          responseMessage = "Thank you. Your case has been sent to a physician for review.";
         } else {
           // Ask the next question
           const nextQuestion = flow[flowIndex];
@@ -1601,7 +1645,7 @@ export async function registerRoutes(
         
         const intakeLink = `${BASE_URL}/intake/${intakeToken}`;
         
-        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.\n\n⚠️ If you develop trouble breathing, chest pain, confusion, severe bleeding, or can't keep fluids down, seek urgent care or go to the ER now.`;
+        responseMessage = `Welcome to Med Scribe Triage.\n\nTap the secure link to answer a few quick questions:\n${intakeLink}\n\nAccess code: ${intakeCode}\n\nIf you can't open the link, reply QUESTIONS to answer here.\nTo resend the link, reply LINK.`;
       } else if (msg.toLowerCase() === "questions" || msg.toLowerCase() === "question") {
         // Patient requested fallback to WhatsApp Q&A
         const firstQuestion = flow[0];
@@ -1645,8 +1689,11 @@ export async function registerRoutes(
           const proposal = await computeProposal(answers);
           const physicianSummary = buildPhysicianSummary(answers, proposal);
           const modifiers = buildModifiersFromAnswers(answers);
-          const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
-          
+          // T025: red flag → emergent (top of queue); never downgrade an existing emergent.
+          const urgencyLevel = proposal.redFlag
+            ? "emergent"
+            : (encounter.urgencyLevel === "emergent" ? "emergent" : "routine");
+
           await storage.updateEncounter(encounter.id, {
             answers: JSON.stringify(answers),
             proposal: JSON.stringify(proposal),
@@ -1658,11 +1705,13 @@ export async function registerRoutes(
             aiDiagnosis: physicianSummary.hpi,
             aiDisposition: proposal.disposition,
           });
-          
+
           newStatus = "pending_review";
-          responseMessage = proposal.redFlag
-            ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room."
-            : "Thank you for completing the assessment. Your case has been sent to a physician for review.";
+          // T025: no symptom-specific referral before physician signoff.
+          if (proposal.redFlag) {
+            await flagForPhysician(encounter, "intake_red_flag");
+          }
+          responseMessage = "Thank you. Your case has been sent to a physician for review.";
         } else {
           const nextQuestion = flow[flowIndex];
           responseMessage = nextQuestion.text;
@@ -1682,7 +1731,9 @@ export async function registerRoutes(
       });
       
       const responseData: any = {
-        response: responseMessage,
+        // T025: web-intake responses are returned as JSON (not via the WhatsApp send
+        // chokepoint), so append the universal 911 disclaimer footer here.
+        response: appendEmergencyDisclaimer(responseMessage),
         encounterId: encounter.id,
         status: newStatus,
         flowIndex: (encounter.flowIndex ?? 0) + 1,
@@ -1781,7 +1832,10 @@ export async function registerRoutes(
       const proposal = await computeProposal(parsedAnswers);
       const modifiers = buildModifiersFromAnswers(parsedAnswers);
       const physicianSummary = buildPhysicianSummary(parsedAnswers, proposal);
-      const urgencyLevel = proposal.redFlag ? "urgent" : "routine";
+      // T025: red flag → emergent (top of queue); never downgrade an existing emergent.
+      const urgencyLevel = proposal.redFlag
+        ? "emergent"
+        : (encounter.urgencyLevel === "emergent" ? "emergent" : "routine");
 
       // Update encounter
       await storage.updateEncounter(encounter.id, {
@@ -1799,11 +1853,16 @@ export async function registerRoutes(
         intakeExpiresAt: null,
       } as any);
 
-      // Notify patient via WhatsApp
+      // T025: no symptom-specific referral before physician signoff.
+      // On a red flag, alert the physician and push to top of queue instead.
+      if (proposal.redFlag) {
+        await flagForPhysician(encounter, "intake_red_flag");
+      }
+
+      // Notify patient via WhatsApp (neutral confirmation; the universal 911 footer is
+      // appended by sendWhatsAppMessage).
       if (encounter.phoneNumber) {
-        const confirmMsg = proposal.redFlag
-          ? "Thank you. Your symptoms include red flags that need urgent attention. Please seek care at an urgent care or emergency room immediately."
-          : "Thanks! Your answers have been sent to a physician for review. You'll receive a message once they've reviewed your case.";
+        const confirmMsg = "Thanks! Your answers have been sent to a physician for review. You'll receive a message once they've reviewed your case.";
         try {
           await sendWhatsAppMessage(encounter.phoneNumber, confirmMsg);
         } catch (whatsappErr) {

@@ -250,22 +250,22 @@ async function checkRedisReachable(): Promise<CheckResult> {
     ]);
     if (!redis) {
       return {
-        name, ok: false, fatal: ENV.NODE_ENV === "production",
-        detail: "Redis client unavailable after 5s timeout",
+        name, ok: false, fatal: false,
+        detail: "Redis client unavailable after 5s timeout — queue features degraded, in-memory fallback active",
       };
     }
     const pong = await redis.ping();
     if (pong !== "PONG") {
       return {
-        name, ok: false, fatal: ENV.NODE_ENV === "production",
-        detail: `Redis ping returned unexpected response: ${pong}`,
+        name, ok: false, fatal: false,
+        detail: `Redis ping returned unexpected response: ${pong} — queue features degraded`,
       };
     }
     return { name, ok: true, fatal: false, detail: "Redis reachable (PING/PONG)" };
   } catch (err) {
     return {
-      name, ok: false, fatal: ENV.NODE_ENV === "production",
-      detail: `Redis unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      name, ok: false, fatal: false,
+      detail: `Redis unreachable: ${err instanceof Error ? err.message : String(err)} — queue features degraded, in-memory fallback active`,
     };
   }
 }
