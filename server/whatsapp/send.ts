@@ -150,17 +150,44 @@ export function clearTestInterceptor(e164: string): void {
   _testInterceptors.delete(e164);
 }
 
+// Per-patient tracking of whether the universal 911 disclaimer footer has
+// already been shown in the CURRENT conversation. The disclaimer is fixed
+// healthcare boilerplate; the patient only needs to see it once per
+// conversation, not appended to every single outbound turn. markNewConversation()
+// clears the flag at the start of a fresh conversation so the first message of
+// that conversation carries the footer again.
+const _disclaimerShown = new Set<string>();
+
+function toE164(to: string): string {
+  return normalizeWhatsAppTo(to).replace(/^whatsapp:/, "");
+}
+
+/**
+ * Reset the disclaimer state for a patient so the next outbound message — the
+ * first message of a new conversation — carries the universal 911 disclaimer
+ * footer again. Call this whenever a fresh conversation/session begins.
+ */
+export function markNewConversation(to: string): void {
+  _disclaimerShown.delete(toE164(to));
+}
+
 export async function sendWhatsAppMessage(
   to: string,
   body: string,
   opts?: { incomingSid?: string }
 ): Promise<void> {
   const formattedTo = normalizeWhatsAppTo(to);
-  // T025: every patient outbound carries the fixed, universal 911 disclaimer.
-  // Applied here at the single send chokepoint so it can never be forgotten.
-  const withFooter = appendEmergencyDisclaimer(String(body ?? ""));
   // Check for test intercept before touching Twilio
   const e164 = formattedTo.replace(/^whatsapp:/, "");
+  // T025: the fixed, universal 911 disclaimer is shown ONCE per conversation —
+  // on the first outbound message — rather than appended to every turn. The
+  // single send chokepoint still guarantees it is never forgotten on a new
+  // conversation (markNewConversation() resets the flag at conversation start).
+  const showDisclaimer = !_disclaimerShown.has(e164);
+  const withFooter = showDisclaimer
+    ? appendEmergencyDisclaimer(String(body ?? ""))
+    : String(body ?? "").trim();
+  if (showDisclaimer) _disclaimerShown.add(e164);
   const interceptor = _testInterceptors.get(e164);
   if (interceptor) {
     interceptor(withFooter.trim());

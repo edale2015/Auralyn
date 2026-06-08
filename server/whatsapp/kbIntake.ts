@@ -1,4 +1,4 @@
-import { sendWhatsAppMessage } from "./send";
+import { sendWhatsAppMessage, markNewConversation } from "./send";
 import {
   createCase,
   appendMessage,
@@ -251,6 +251,12 @@ interface HotSession {
   // Incremented after each scripted-phase turn. When questionIndex reaches
   // MIN_QUESTIONS_BEFORE_DISPOSITION - 1, the engine switches to GPT extraction.
   questionIndex?:  number;
+  // True once an engine-detected red flag has fired the physician alert + pushed
+  // this case to the top of the review queue. The patient interview continues
+  // after a red flag (the physician owns the disposition), so the rule engine
+  // re-flags on every later turn — this guard keeps the alert/queue placement
+  // idempotent (fires exactly once per session).
+  redFlagFlagged?: boolean;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -640,6 +646,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
     hotDel(threadId);
     clearSurveyState("whatsapp", threadId).catch(() => {});
+    markNewConversation(cleanFrom);   // fresh conversation → show 911 disclaimer once
     await sendWhatsAppMessage(cleanFrom, buildIntroMessage());
     return true;
   }
@@ -652,6 +659,7 @@ export async function handleWhatsAppKBIntake(params: {
     }
     hotDel(threadId);
     clearSurveyState("whatsapp", threadId).catch(() => {});
+    markNewConversation(cleanFrom);   // fresh conversation → show 911 disclaimer once
     await sendWhatsAppMessage(cleanFrom, "Session cleared. Send your symptom or 'hi' to start again.");
     return true;
   }
@@ -733,6 +741,7 @@ export async function handleWhatsAppKBIntake(params: {
 
   // ── New session — complaint selection ───────────────────────────────────────
   if (!session) {
+    markNewConversation(cleanFrom);   // fresh conversation → show 911 disclaimer once
     const complaints = (listEnabledComplaints() as any[]).slice(0, 20);
     const byNumber = Number(rawText.trim()) - 1;
     let match: { slug: string; display: string } | null = null;
@@ -852,7 +861,11 @@ export async function handleWhatsAppKBIntake(params: {
   }
 
   // ── Existing session — conversational answer handling ──────────────────────
-  const { caseId, complaint, answers } = session;
+  // Non-null alias: `session` is narrowed to non-null here, but TypeScript does
+  // not carry that narrowing into the nested helper closures below, so they
+  // reference `activeSession` (a non-null const) instead of `session`.
+  const activeSession = session;
+  const { caseId, complaint, answers } = activeSession;
 
   // Background audit writes (never block the patient)
   setImmediate(() => {
@@ -951,6 +964,89 @@ export async function handleWhatsAppKBIntake(params: {
     hotDel(threadId);
   }
 
+  // ── Red-flag handoff that does NOT terminate the patient conversation ──────
+  //
+  // When the rule engine detects a red flag mid-interview, detection stays
+  // fully intact: the full clinical pipeline runs to completion, the physician
+  // is alerted, and the case is pushed to the TOP of the review queue
+  // (NEEDS_REVIEW). The deterministic ER disposition is recorded for the
+  // physician and never downgraded. What this does NOT do — unlike
+  // doEscalation() — is send the patient a "go to the ER" message or close the
+  // session. The patient keeps answering questions and the interview flows
+  // through every pipeline stage; the physician owns the patient-facing
+  // disposition. Idempotent: the alert + queue placement fire once per session
+  // even though the engine re-flags on every subsequent turn.
+  async function flagRedFlagForPhysician(updatedAns: Record<string, any>, trigger: string) {
+    if (activeSession.redFlagFlagged) return;
+    activeSession.redFlagFlagged = true;
+    hotSet(threadId, activeSession);
+
+    // Full clinical pipeline runs to completion so the physician review packet
+    // carries the differential / workup, not a bare escalation stub.
+    const masterResult = await executePipeline(
+      complaint.slug,
+      updatedAns as Record<string, string | number | boolean>,
+    ).catch((e: any) => {
+      console.error("[WhatsApp] red-flag pipeline error:", e?.message);
+      return null as PipelineResult | null;
+    });
+    __lastEscalationPipeline = masterResult;   // verification hook only — no prod callers
+
+    const triage = masterResult
+      ? buildTriageFromPipeline(masterResult)
+      : { disposition: "er_send", confidence: "HIGH", topCluster: "Critical red flag — auto-escalated", rfTriggered: ["ESCALATION"], consistencyFlags: [] };
+    // Escalation stays authoritative for the physician: force ER + critical
+    // flags. Deterministic HIGH/CRITICAL risk is never downgraded.
+    triage.disposition = "er_send";
+    triage.confidence  = "HIGH";
+    triage.rfTriggered = (masterResult?.criticalFlagsHit?.length ?? 0) > 0
+      ? masterResult!.criticalFlagsHit
+      : ["ESCALATION"];
+
+    const stageCount   = masterResult?.steps?.length ?? 0;
+    const dxStep       = masterResult?.steps?.find(s => s.ruleType === "diagnosis");
+    const differential = (dxStep?.rulesFired ?? []).slice(0, 8).map((r: any) => r.rule_name ?? r.rule_id);
+
+    console.log(`[WhatsApp] 🚩 Red flag → physician alert + top-of-queue (trigger=${trigger}, stages=${stageCount}); patient interview continues`);
+
+    setImmediate(() => {
+      const answerHash = sha256Hex(JSON.stringify(updatedAns));
+      import("../firebase").then(({ getFirestore }) => {
+        getFirestore().collection("cases").doc(caseId).update({
+          updatedAt: new Date().toISOString(),
+          "answers.structured": updatedAns,
+          "answers.answerHash": answerHash,
+        }).catch(() => {});
+      }).catch(() => {});
+      // TOP-OF-QUEUE physician review (NEEDS_REVIEW), full pipeline triage
+      // attached. NOTE: no endSession — the patient conversation is still open.
+      setTriage(caseId, {
+        ...triage,
+        escalated: true,
+        priority:  "CRITICAL_TOP",
+        masterPipeline: masterResult ? {
+          finalDisposition: masterResult.finalDisposition,
+          hardStop:         masterResult.hardStop,
+          hardStopReason:   masterResult.hardStopReason,
+          totalRulesFired:  masterResult.totalRulesFired,
+          criticalFlagsHit: masterResult.criticalFlagsHit,
+          stages:           stageCount,
+          differential,
+        } : null,
+      } as any, "NEEDS_REVIEW" as any).catch(() => {});
+      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_redflag_alert", messageText: "[physician alerted — patient interview continues]", responseText: `escalated=true|trigger=${trigger}|disposition=er_send|stages=${stageCount}|rulesFired=${masterResult?.totalRulesFired ?? 0}|differential=${differential.join(";")}` }).catch(() => {});
+      // Full physician review packet (differential/workup enrichment) — non-blocking.
+      runOrchestratorTriage({
+        complaintSlug: complaint.slug,
+        answers: updatedAns,
+        sessionId: caseId,
+        caseId,
+        channel: "whatsapp",
+      }).catch((e: any) => console.warn("[WhatsApp] red-flag orchestrator (non-blocking):", e?.message));
+    });
+    // NO patient EMERGENCY_MESSAGE, NO hotDel — the interview continues.
+  }
+
   // ── Step 1: Pre-LLM keyword safety scan — short-circuits the LLM call ─────
   const CRITICAL_PHRASES = [
     "can't breathe", "cannot breathe", "unable to breathe", "worst headache of my life",
@@ -1034,12 +1130,16 @@ export async function handleWhatsAppKBIntake(params: {
     session.pendingSafetyAsk = null;          // safety gate resets each scripted turn
     persistState(updatedAnswers);
 
-    // Safety check — always runs regardless of scripted phase
+    // Safety check — always runs regardless of scripted phase.
+    // A red flag fires the physician alert + top-of-queue review (idempotent)
+    // and runs the full pipeline, but it does NOT terminate the conversation:
+    // we fall through and keep asking questions so the interview flows through
+    // every pipeline stage. The physician owns the patient-facing disposition.
     const shouldEscalateS = await checkEscalation(complaint.slug, updatedAnswers);
     if (shouldEscalateS) {
-      console.log(`[WhatsApp] 🚨 Safety escalation in scripted phase for ${complaint.slug}`);
-      await doEscalation(updatedAnswers, "engine");
-      return true;
+      console.log(`[WhatsApp] 🚩 Red flag in scripted phase for ${complaint.slug} — alerting physician, interview continues`);
+      await flagRedFlagForPhysician(updatedAnswers, "engine");
+      // intentionally NO return — continue to the next scripted question
     }
 
     const completeS = isComplete(complaint.slug, updatedFields);
@@ -1100,10 +1200,13 @@ export async function handleWhatsAppKBIntake(params: {
   const complete       = isComplete(complaint.slug, updatedFields);
   const shouldEscalate = await checkEscalation(complaint.slug, updatedAnswers);
 
+  // Red flag → physician alert + top-of-queue + full pipeline (idempotent), but
+  // the conversation continues through every stage rather than terminating with
+  // a patient-facing "go to the ER". The physician owns the disposition.
   if (shouldEscalate) {
-    console.log(`[WhatsApp] 🚨 Safety escalation triggered for ${complaint.slug}`);
-    await doEscalation(updatedAnswers, "engine");
-    return true;
+    console.log(`[WhatsApp] 🚩 Red flag for ${complaint.slug} — alerting physician, interview continues`);
+    await flagRedFlagForPhysician(updatedAnswers, "engine");
+    // intentionally NO return — fall through to completion / next-question
   }
 
   // ── Step 4: Interview complete → closing message + triage ─────────────────
