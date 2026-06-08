@@ -271,6 +271,11 @@ function hotDel(threadId: string): void {
   hotSessions.delete(hotKey(threadId));
 }
 
+// Read-only accessor for verification/repro harnesses. No production callers.
+export function __peekHotSession(threadId: string): HotSession | null {
+  return hotGet(threadId);
+}
+
 // Firestore fallback — used only on first message after server restart
 async function firestoreLookup(threadId: string): Promise<HotSession | null> {
   try {
@@ -698,11 +703,18 @@ export async function handleWhatsAppKBIntake(params: {
   if (session) {
     const isExpired      = Date.now() - (session.createdAt ?? 0) > SESSION_MAX_AGE_MS;
     const incomingMatch  = matchComplaintFromText(rawText);
-    const isNewComplaint = incomingMatch !== null;
-    if (isExpired || isNewComplaint) {
+    // Only a switch to a DIFFERENT chief complaint starts a fresh session.
+    // Re-mentioning the active complaint inside an answer ("the chest pain is
+    // squeezing", "the pain in my chest spreads…") matches the same slug and
+    // must NOT reset — doing so dropped all collected answers and re-asked Q0
+    // every turn, so the complaint never locked and the conversation looped.
+    // Stale resumes with the same complaint are still closed by the 4h expiry.
+    const isComplaintSwitch =
+      incomingMatch !== null && incomingMatch.slug !== session.complaint.slug;
+    if (isExpired || isComplaintSwitch) {
       const reason = isExpired
         ? "expired (>4h)"
-        : `new chief complaint matched (${incomingMatch!.slug}); was ${session.complaint.slug}`;
+        : `chief complaint switched (${incomingMatch!.slug}); was ${session.complaint.slug}`;
       console.log(`[Session] Closing prior session: ${reason}`);
       setImmediate(() => setCaseState(session!.caseId, "CLOSED").catch(() => {}));
       hotDel(threadId);
