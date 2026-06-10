@@ -51,6 +51,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: ROUTES.ORCHESTRATION,          label: "Live Rooms",             icon: LayoutGrid      },
       { path: ROUTES.HOSPITAL,              label: "Hospital Layer",           icon: Hospital        },
       { path: "/simulation-lab",             label: "Simulation Lab",         icon: FlaskConical    },
+      { path: "/complaint-test-lab",         label: "Complaint Testing Lab",  icon: FlaskConical    },
       { path: "/clinical-improvement-lab",   label: "Clinical Improvement",   icon: FlaskConical    },
       { path: "/care-pathway-optimizer",     label: "Care Pathway Optimizer", icon: GitBranch       },
       { path: ROUTES.AGENT_SYSTEM,           label: "Agent System",           icon: ShieldCheck     },

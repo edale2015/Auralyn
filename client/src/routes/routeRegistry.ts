@@ -58,4 +58,5 @@ export const ROUTES = {
   LIVE_MONITOR:              "/live-monitor",
   COMMAND_CENTER:            "/command-center",
   LONGEVITY_INTELLIGENCE:    "/longevity-intelligence",
+  COMPLAINT_TEST_LAB:        "/complaint-test-lab",
 };
