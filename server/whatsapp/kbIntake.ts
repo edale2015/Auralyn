@@ -346,48 +346,70 @@ function mapMasterDisposition(disp: string | null): string | null {
 }
 
 function formatTriageResult(triage: any, masterResult?: PipelineResult | null): string {
-  const emoji: Record<string, string> = {
-    er_send: "🔴", urgent_care: "🟠", pcp: "🟡", self_care: "🟢",
-  };
-  const label: Record<string, string> = {
-    er_send: "Emergency — Go to ER immediately",
-    urgent_care: "Go to Urgent Care today",
-    pcp: "See Your Doctor this week",
-    self_care: "Self-Care at Home",
-  };
-  const e = emoji[triage.disposition] ?? "🔵";
-  const l = label[triage.disposition] ?? triage.disposition;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // POLICY: This message goes directly to the patient before any physician
+  // review. It must NEVER instruct the patient to go to the ER, call 911, or
+  // characterise urgency. The physician decides and sends the actual disposition
+  // (via physicianPacket.ts → patientDispositionMessage) after reviewing.
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const lines = [
-    `✅ *Assessment complete*`, ``,
-    `${e} *${l}*`,
-    `📋 Top finding: ${triage.topCluster ?? "—"}`,
-    `📊 Confidence: ${triage.confidence}`,
+    `✅ *Your assessment is complete.*`, ``,
+    `🩺 *Your care team has been notified and a physician is reviewing your case.*`,
+    ``,
+    `We will send you an update once your physician has reviewed your information.`,
   ];
 
-  if (masterResult?.hardStop && masterResult.hardStopReason) {
-    const flagName = masterResult.hardStopReason.split(":")[0].trim();
-    lines.push(``, `🚨 *Critical alert: ${flagName}*`, `_Seek emergency care immediately._`);
-  } else if ((triage.rfTriggered?.length ?? 0) > 0) {
-    lines.push(``, `⚠️ *Red flag(s) noted — seek care promptly.*`);
+  // Surface what we found without prescribing next steps
+  const topCluster = triage.topCluster ?? "—";
+  if (topCluster && topCluster !== "—") {
+    lines.push(``, `📋 *Clinical summary:* ${topCluster}`);
+  }
+
+  if ((triage.rfTriggered?.length ?? 0) > 0) {
+    lines.push(``, `⚠️ *Some of your symptoms require prompt physician review — your case has been prioritised.*`);
   }
 
   if (masterResult && masterResult.totalRulesFired > 0) {
-    const rfCount = masterResult.criticalFlagsHit?.length ?? 0;
-    lines.push(``, `🧠 *${masterResult.totalRulesFired} clinical rules evaluated*${rfCount > 0 ? ` · ${rfCount} critical flag(s)` : ""}`);
+    lines.push(``, `🧠 *${masterResult.totalRulesFired} clinical rules evaluated*`);
   }
 
-  lines.push(``, `_AI-assisted decision support only. Not a substitute for physician evaluation._`);
+  lines.push(``, `_Please do not drive or engage in strenuous activity while you wait for the physician's response._`);
+  lines.push(`_AI-assisted intake only — your physician makes all clinical decisions._`);
   return lines.join("\n");
 }
 
-// ── Safety escalation ──────────────────────────────────────────────────────────
-// Sent and session closed the moment ANY answer triggers a critical disposition.
+// ── Safety escalation messages ─────────────────────────────────────────────────
+//
+// TWO separate messages serve two separate scenarios:
+//
+// EMERGENCY_MESSAGE — explicit patient-typed emergency bypass ONLY.
+//   Used when the patient's own words contain an imminent-danger phrase
+//   ("I can't breathe", "I'm unconscious", etc.) and no physician loop is
+//   possible. This is the ONLY place in the platform that tells a patient to
+//   call 911 — because the session ends immediately and no physician can act
+//   faster than the patient calling 911 themselves.
+//
+// PHYSICIAN_ESCALATION_MESSAGE — rule-engine escalation mid-intake.
+//   Used when the 13-step clinical pipeline detects a critical flag while the
+//   patient is still answering questions. The physician receives the full
+//   differential/workup and owns the disposition — we do NOT pre-empt them
+//   by telling the patient to go to the ER. Instead we inform the patient
+//   that their case has been prioritised and a physician is reviewing urgently.
 const EMERGENCY_MESSAGE =
-  `🚨 *Based on your symptoms, you need emergency care immediately.*\n\n` +
-  `Please call 911 or go to your nearest emergency room right now.\n\n` +
+  `🚨 *Based on what you've shared, this sounds like an immediate emergency.*\n\n` +
+  `Please call 911 or have someone take you to the nearest emergency room right now.\n\n` +
   `Do not wait. If you cannot get there safely, call 911 and they will come to you.\n\n` +
   `_Stay safe — Auralyn_`;
+
+// Sent to the patient when the rule engine fires a critical flag mid-intake.
+// Does NOT prescribe ER or 911 — the physician reviews and decides.
+const PHYSICIAN_ESCALATION_MESSAGE =
+  `⚠️ *Important update from Auralyn*\n\n` +
+  `Based on your answers, we are flagging your case for *immediate physician review*.\n\n` +
+  `A physician from your care team will be in touch with you shortly with guidance on next steps.\n\n` +
+  `Please keep your phone nearby and do not engage in strenuous activity while you wait.\n\n` +
+  `_Your physician makes all decisions about your care — Auralyn_`;
 
 function isCriticalPipelineResult(result: PipelineResult): boolean {
   if (result.hardStop) return true;
@@ -1150,7 +1172,7 @@ export async function handleWhatsAppKBIntake(params: {
         } : null,
       } as any, "NEEDS_REVIEW" as any).catch(() => {});
       endSession(caseId, "er_send" as any).catch(() => {});
-      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: EMERGENCY_MESSAGE, responseText: `escalated=true|trigger=${trigger}|disposition=er_send|stages=${stageCount}|rulesFired=${masterResult?.totalRulesFired ?? 0}|differential=${differential.join(";")}` }).catch(() => {});
+      logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "outbound", skillName: "safety_escalation", messageText: PHYSICIAN_ESCALATION_MESSAGE, responseText: `escalated=true|trigger=${trigger}|disposition=er_send|stages=${stageCount}|rulesFired=${masterResult?.totalRulesFired ?? 0}|differential=${differential.join(";")}` }).catch(() => {});
       // Full physician review packet (differential/workup enrichment) — non-blocking.
       runOrchestratorTriage({
         complaintSlug: complaint.slug,
@@ -1161,7 +1183,10 @@ export async function handleWhatsAppKBIntake(params: {
       }).catch((e: any) => console.warn("[WhatsApp] escalation orchestrator (non-blocking):", e?.message));
     });
 
-    await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
+    // Policy: physician owns the disposition — patient gets "care team alerted"
+    // not a 911 / ER directive. The EMERGENCY_MESSAGE (911) is reserved only
+    // for the keyword bypass where no physician loop is possible.
+    await sendWhatsAppMessage(cleanFrom, PHYSICIAN_ESCALATION_MESSAGE);
     hotDel(threadId);
   }
 
