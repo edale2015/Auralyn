@@ -21,6 +21,12 @@ import {
   MIN_QUESTIONS_BEFORE_DISPOSITION,
 } from "../conversation/questionSequences";
 import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
+import {
+  startIntake as startChestPainIntake,
+  advanceIntake as advanceChestPainIntake,
+  CHEST_PAIN_INTAKE_CLOSING,
+  type IntakeState,
+} from "./chestPainIntake";
 import { hasSystemPrompt } from "./agent/prompts/registry";
 import {
   startAgentSession,
@@ -257,6 +263,11 @@ interface HotSession {
   // re-flags on every later turn — this guard keeps the alert/queue placement
   // idempotent (fires exactly once per session).
   redFlagFlagged?: boolean;
+  // Deterministic chest-pain intake state (scope: intake questions only). When
+  // present, the conversation is driven by the fixed six-section intake script
+  // in chestPainIntake.ts — no LLM, no rule-engine disposition. Null/absent on
+  // every other pathway, which keeps the legacy flow unchanged.
+  intake?: IntakeState;
 }
 
 const hotSessions = new Map<string, HotSession>();
@@ -810,6 +821,25 @@ export async function handleWhatsAppKBIntake(params: {
       return true;
     }
 
+    // ── Deterministic chest-pain intake (scope: intake questions only) ──────
+    // Six ordered sections (chief complaint → HPI → secondary → modifying →
+    // allergies → medications) driven by a fixed script — zero LLM, no
+    // rule-engine disposition, no escalation during intake. Each answer is
+    // recorded against the question just asked (including plain negatives) and
+    // the cursor only moves forward, so a question can never be re-asked.
+    if (slugToRouter(match.slug) === "chest_pain") {
+      const { state, question } = startChestPainIntake(rawText);
+      session.intake = state;
+      session.exchanges = [
+        { role: "user",      text: rawText },
+        { role: "assistant", text: question.text },
+      ];
+      hotSet(threadId, session);
+      await sendWhatsAppMessage(cleanFrom, question.text);
+      console.log('[T5] chest-pain intake Q0 sent (deterministic)', Date.now());
+      return true;
+    }
+
     // ── Streaming-agent path: ONE LLM call to generate the first question ───
     // The initial complaint message is the first patient turn. We feed it to
     // Claude Sonnet with the loaded system prompt; the assistant's reply is
@@ -873,6 +903,27 @@ export async function handleWhatsAppKBIntake(params: {
     appendMessage(caseId, { ts: new Date().toISOString(), dir: "in", channel: "whatsapp", text: rawText }).catch(() => {});
     logInteraction({ sessionId: caseId, caseId, channel: "whatsapp", direction: "inbound", messageText: rawText, moodLabel: mood.mood, moodScore: mood.score, toneLabel: mood.tone }).catch(() => {});
   });
+
+  // ── Deterministic chest-pain intake turn (scope: intake questions only) ────
+  // Record the answer to the question just asked, then send the next scripted
+  // question. No GPT, no escalation, no disposition — the cursor only advances,
+  // so a question is never re-asked and the flow runs cleanly to medications.
+  if (activeSession.intake) {
+    const { question } = advanceChestPainIntake(activeSession.intake, rawText);
+    hotSet(threadId, activeSession);
+    if (question) {
+      await sendWhatsAppMessage(cleanFrom, question.text);
+      console.log('[T5] chest-pain intake Q sent (deterministic)', Date.now());
+      return true;
+    }
+    // Script exhausted — intake complete. Clean, non-escalating close; the
+    // disposition pipeline is intentionally out of scope here.
+    await sendWhatsAppMessage(cleanFrom, CHEST_PAIN_INTAKE_CLOSING);
+    setImmediate(() => setCaseState(caseId, "CLOSED").catch(() => {}));
+    hotDel(threadId);
+    console.log('[T5] chest-pain intake complete — clean close', Date.now());
+    return true;
+  }
 
   // ── Fix 5: Immediate ack for longer messages ───────────────────────────────
   const wordCount = rawText.trim().split(/\s+/).length;
