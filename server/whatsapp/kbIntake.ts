@@ -540,27 +540,117 @@ async function deliverAgentClose(params: {
 }
 
 // ── Map chest-pain intake answers → rule-engine PipelineInputs ────────────────
-// The intake records yes/no answers as the literal string "yes" or "no".
-// The rule engine evaluates boolean logic on field presence (truthy = present).
-// Severity is stored as a digit string; the engine expects a number.
+// Covers all 3 question levels:
+//   Level 1 HPI  : onset, character, location, severity
+//   Level 2 Sec  : radiation, dyspnea, diaphoresis, nausea, palpitations, syncope
+//   Level 3 Mod  : exertional, pleuritic, worse, better, leg_swelling
+//   Level 3 Demo : age → heart_age_* fields; sex → Q_CCP_ESTROGEN
+//   Level 3 PMH  : pmh_cardiac → prior_cad / heart_history_*;
+//                  pmh_risk (HTN/DM/chol) → risk factor count → HEART score fields
+//                  family_hx, smoking
+// yes/no string → boolean; severity digit string → number; age string → integer.
 function mapChestPainAnswersToInputs(
   answers: Record<string, string>
 ): Record<string, string | number | boolean> {
-  const yesNo = (v?: string) => v === "yes";
-  const num   = (v?: string) => { const n = parseInt(v ?? "5", 10); return isNaN(n) ? 5 : Math.min(Math.max(n, 1), 10); };
+  const yesNo   = (v?: string) => v === "yes";
+  const numSev  = (v?: string) => { const n = parseInt(v ?? "5", 10); return isNaN(n) ? 5 : Math.min(Math.max(n, 1), 10); };
+  const has     = (haystack: string | undefined, ...kw: string[]) => {
+    if (!haystack) return false;
+    const lower = haystack.toLowerCase();
+    return kw.some(k => lower.includes(k));
+  };
+
+  // ── Demographics ────────────────────────────────────────────────────────────
+  const ageRaw  = answers.age ?? "";
+  const ageYears = Math.max(0, parseInt(ageRaw, 10) || 50);
+  const isFemale = has(answers.sex, "female", "woman", "f ");
+
+  // ── Risk-factor parsing from free-text pmh_risk ─────────────────────────────
+  const pmhText   = (answers.pmh_risk ?? "").toLowerCase();
+  const hasHtn    = has(pmhText, "htn", "hypertension", "blood pressure", "high bp", "high blood");
+  const hasDm     = has(pmhText, "diabetes", "diabetic", "dm ", "type 1", "type 2", "sugar", "glucose");
+  const hasChol   = has(pmhText, "cholesterol", "lipid", "hyperlipid", "statin", "triglyceride");
+  const riskCount = [hasHtn, hasDm, hasChol].filter(Boolean).length;
+
   return {
-    radiation:    yesNo(answers.radiation),
-    dyspnea:      yesNo(answers.dyspnea),
-    diaphoresis:  yesNo(answers.diaphoresis),
-    nausea:       yesNo(answers.nausea),
-    severity:     num(answers.severity),
-    onset:        answers.onset      ?? "",
-    character:    answers.character  ?? "",
-    location:     answers.location   ?? "",
-    worse:        answers.worse      ?? "",
-    better:       answers.better     ?? "",
-    allergies:    answers.allergies  ?? "none",
-    medications:  answers.medications ?? "none",
+    // ── Level 1: HPI ────────────────────────────────────────────────────────
+    onset:     answers.onset     ?? "",
+    character: answers.character ?? "",
+    location:  answers.location  ?? "",
+    severity:  numSev(answers.severity),
+
+    // ── Level 2: Secondary / Associated symptoms ────────────────────────────
+    // radiation → also sets radiation_arm/radiation_jaw for red-flag rules
+    radiation:              yesNo(answers.radiation),
+    radiation_arm:          yesNo(answers.radiation),
+    radiation_jaw:          yesNo(answers.radiation),
+    Q_CP_RADIATES:          yesNo(answers.radiation),
+    Q_CCP_RADIATE:          yesNo(answers.radiation),
+    CAR_Q_CP_ARM_RAD:       yesNo(answers.radiation),
+    CAR_Q_CP_BACK_RAD:      yesNo(answers.radiation),
+    dyspnea:                yesNo(answers.dyspnea),
+    Q_CP_SOB:               yesNo(answers.dyspnea),
+    Q_CCP_SOB:              yesNo(answers.dyspnea),
+    Q_PCT_SOB:              yesNo(answers.dyspnea),
+    diaphoresis:            yesNo(answers.diaphoresis),
+    Q_CP_DIAPHORESIS:       yesNo(answers.diaphoresis),
+    Q_CCP_SWEAT:            yesNo(answers.diaphoresis),
+    CAR_Q_CP_SWEATING:      yesNo(answers.diaphoresis),
+    nausea:                 yesNo(answers.nausea),
+    CAR_Q_CP_NAUSEA:        yesNo(answers.nausea),
+    palpitations:           yesNo(answers.palpitations),
+    Q_CP_PALPITATIONS:      yesNo(answers.palpitations),
+    syncope:                yesNo(answers.syncope),
+    Q_CP_SYNCOPE:           yesNo(answers.syncope),
+
+    // ── Level 3a: Symptom modifying factors ────────────────────────────────
+    exertional:             yesNo(answers.exertional),
+    Q_CP_EXERTIONAL:        yesNo(answers.exertional),
+    Q_CCP_EXERT:            yesNo(answers.exertional),
+    Q_PCT_EXERT:            yesNo(answers.exertional),
+    pleuritic:              yesNo(answers.pleuritic),
+    pleuritic_pain:         yesNo(answers.pleuritic),
+    Q_CP_PLEURITIC:         yesNo(answers.pleuritic),
+    Q_CCP_PLEURITIC:        yesNo(answers.pleuritic),
+    worse:                  answers.worse  ?? "",
+    better:                 answers.better ?? "",
+    leg_swelling:           yesNo(answers.leg_swelling),
+    unilateral_leg_swelling: yesNo(answers.leg_swelling),
+    Q_CP_CALF_SWELL:        yesNo(answers.leg_swelling),
+    Q_CCP_LEG_SWELL:        yesNo(answers.leg_swelling),
+
+    // ── Level 3b: Demographics ───────────────────────────────────────────────
+    ageYears,
+    age:                    ageYears,
+    heart_age_45_64:        ageYears >= 45 && ageYears < 65,
+    heart_age_ge_65:        ageYears >= 65,
+    CAR_Q_CP_AGE_GROUP:     ageYears >= 65 ? "elderly" : ageYears >= 45 ? "middle" : "young",
+    Q_CCP_ESTROGEN:         isFemale,
+
+    // ── Level 3c: Past medical history / risk factors ────────────────────────
+    pmh_cardiac:            yesNo(answers.pmh_cardiac),
+    prior_cad:              yesNo(answers.pmh_cardiac),
+    CAR_Q_CP_PM_HX:         yesNo(answers.pmh_cardiac),
+    heart_history_high:     yesNo(answers.pmh_cardiac),
+    heart_history_moderate: yesNo(answers.pmh_cardiac),
+    classic_acs_history:    yesNo(answers.pmh_cardiac),
+    hypertension:           hasHtn,
+    diabetes:               hasDm,
+    hyperlipidemia:         hasChol,
+    heart_risk_factors_1_2: riskCount >= 1 && riskCount < 3,
+    heart_risk_factors_ge3: riskCount >= 3,
+    Q_CCP_RISK:             riskCount >= 2,
+    Q_PCT_RISK:             riskCount >= 2,
+    family_hx:              yesNo(answers.family_hx),
+    family_hx_cad:          yesNo(answers.family_hx),
+    CAR_Q_CP_RISK_FHX:      yesNo(answers.family_hx),
+    smoking:                yesNo(answers.smoking),
+    CAR_Q_CP_RISK_SMOKE:    yesNo(answers.smoking),
+    smokingStatus:          answers.smoking === "yes" ? "current" : "never",
+
+    // ── Allergies / Medications ──────────────────────────────────────────────
+    allergies:   answers.allergies   ?? "none",
+    medications: answers.medications ?? "none",
   };
 }
 

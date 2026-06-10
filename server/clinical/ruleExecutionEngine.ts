@@ -83,11 +83,66 @@ function isTruthy(val: any): boolean {
   return s === "yes" || s === "true" || s === "1" || s === "present";
 }
 
+/**
+ * Parse and evaluate a logic_description string of the form:
+ *   "answers.FIELD == 'yes' && (answers.OTHER == 'yes' || ...) → explanation"
+ *
+ * Returns:
+ *   true/false  — successfully evaluated the expression
+ *   null        — expression could not be parsed (caller falls back)
+ *
+ * Safety: all `answers.FIELD` references are replaced with literal `true`/`false`
+ * before evaluation. The resulting string is validated to contain only boolean
+ * algebra tokens (&&, ||, !, (, ), true, false, whitespace) before execution.
+ */
+function evalLogicDescription(description: string, inputs: PipelineInputs): boolean | null {
+  if (!description || !description.includes("answers.")) return null;
+
+  // Take condition part only (before → which marks the human-readable explanation)
+  let expr = description.split("→")[0].trim();
+
+  // Replace   answers.FIELD == 'yes'  /  == "yes"  /  == true
+  expr = expr.replace(
+    /answers\.(\w+)\s*==\s*['"]?(yes|true)['"?]/g,
+    (_, field) => {
+      const v = inputs[field];
+      return (v === true || v === "yes" || v === "true" || v === 1) ? "true" : "false";
+    }
+  );
+
+  // Replace   answers.FIELD == 'no'  /  == "no"  /  == false
+  expr = expr.replace(
+    /answers\.(\w+)\s*==\s*['"]?(no|false)['"?]/g,
+    (_, field) => {
+      const v = inputs[field];
+      return (!v || v === "no" || v === "false" || v === 0) ? "true" : "false";
+    }
+  );
+
+  // Replace any remaining  answers.FIELD  bare references (treat as truthy check)
+  expr = expr.replace(/answers\.(\w+)/g, (_, field) => {
+    const v = inputs[field];
+    return (v === true || v === "yes" || v === "true" || v === 1) ? "true" : "false";
+  });
+
+  // Validate: only boolean algebra tokens allowed after substitution
+  // chars: t r u e f a l s (for true/false) + & | ! ( ) and whitespace
+  if (/[^truefalse\s&|!()]/.test(expr)) return null;
+
+  try {
+    // eslint-disable-next-line no-new-func
+    return !!new Function(`"use strict"; return (${expr})`)();
+  } catch {
+    return null;
+  }
+}
+
 function evaluateRule(rule: any, inputs: PipelineInputs): boolean {
   const logic = (rule.logic_type ?? "boolean") as string;
   // input_fields is the primary trigger set; fall back to question_dependencies
-  const inputFields: string[] = parseFields(rule.input_fields).length > 0
-    ? parseFields(rule.input_fields)
+  const parsedInputFields: string[] = parseFields(rule.input_fields);
+  const inputFields: string[] = parsedInputFields.length > 0
+    ? parsedInputFields
     : (rule.question_dependencies ?? []);
   const description: string   = rule.logic_description ?? "";
 
@@ -106,8 +161,8 @@ function evaluateRule(rule: any, inputs: PipelineInputs): boolean {
         if (geMatch && Number(val) >= Number(geMatch[1])) return true;
       }
       // Also check query deps
-      const queryDeps: string[] = rule.question_dependencies ?? [];
-      for (const dep of queryDeps) {
+      const queryDepsT: string[] = rule.question_dependencies ?? [];
+      for (const dep of queryDepsT) {
         const val = inputs[dep];
         if (val !== undefined) {
           const m = dep.match(/^([a-z_]+)([<>]=?)([0-9.]+)$/i);
@@ -125,8 +180,28 @@ function evaluateRule(rule: any, inputs: PipelineInputs): boolean {
     }
     case "boolean": {
       const queryDeps: string[] = rule.question_dependencies ?? [];
-      if (queryDeps.length === 0) return true; // unconditional
-      return queryDeps.some(dep => {
+      const hasStructuredDeps = queryDeps.length > 0 || parsedInputFields.length > 0;
+
+      if (!hasStructuredDeps) {
+        // No structured deps — try to evaluate the logic_description expression.
+        // This handles rules that encode their conditions in prose rather than
+        // question_dependencies (e.g. most chest-pain red-flag rules in the DB).
+        const descResult = evalLogicDescription(description, inputs);
+        if (descResult !== null) return descResult;
+
+        // Could not parse — apply safe default:
+        // red_flag / CRITICAL rules MUST NOT fire without evidence (false negative
+        // is safer than a false positive escalation on every patient).
+        if (rule.rule_type === "red_flag" || rule.safety_level === "CRITICAL") return false;
+
+        // Other rule types (diagnosis, workup, medication) fire unconditionally
+        // when underdefined — they are informational, not escalating.
+        return true;
+      }
+
+      // Structured deps exist — evaluate normally
+      const effectiveDeps = parsedInputFields.length > 0 ? parsedInputFields : queryDeps;
+      return effectiveDeps.some(dep => {
         const v = inputs[dep];
         return v === true || v === "yes" || v === "true" || v === 1;
       });
