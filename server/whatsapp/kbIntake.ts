@@ -24,9 +24,9 @@ import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
 import {
   startIntake as startChestPainIntake,
   advanceIntake as advanceChestPainIntake,
-  CHEST_PAIN_INTAKE_CLOSING,
   type IntakeState,
 } from "./chestPainIntake";
+import { addPhysicianCase } from "../physician/physicianController";
 import { hasSystemPrompt } from "./agent/prompts/registry";
 import {
   startAgentSession,
@@ -539,6 +539,31 @@ async function deliverAgentClose(params: {
   hotDel(threadId);
 }
 
+// ── Map chest-pain intake answers → rule-engine PipelineInputs ────────────────
+// The intake records yes/no answers as the literal string "yes" or "no".
+// The rule engine evaluates boolean logic on field presence (truthy = present).
+// Severity is stored as a digit string; the engine expects a number.
+function mapChestPainAnswersToInputs(
+  answers: Record<string, string>
+): Record<string, string | number | boolean> {
+  const yesNo = (v?: string) => v === "yes";
+  const num   = (v?: string) => { const n = parseInt(v ?? "5", 10); return isNaN(n) ? 5 : Math.min(Math.max(n, 1), 10); };
+  return {
+    radiation:    yesNo(answers.radiation),
+    dyspnea:      yesNo(answers.dyspnea),
+    diaphoresis:  yesNo(answers.diaphoresis),
+    nausea:       yesNo(answers.nausea),
+    severity:     num(answers.severity),
+    onset:        answers.onset      ?? "",
+    character:    answers.character  ?? "",
+    location:     answers.location   ?? "",
+    worse:        answers.worse      ?? "",
+    better:       answers.better     ?? "",
+    allergies:    answers.allergies  ?? "none",
+    medications:  answers.medications ?? "none",
+  };
+}
+
 // ── Triage runner (zero LLM — pure rule engine) ────────────────────────────────
 async function runTriageAndSend(params: {
   caseId: string;
@@ -580,6 +605,35 @@ async function runTriageAndSend(params: {
       direction: "outbound", skillName: "triage_result", messageText: resultText,
       responseText: `disposition=${triage.disposition}|confidence=${triage.confidence}|rules=${masterResult?.totalRulesFired ?? 0}`,
     }).catch(() => {});
+
+    // ── Physician queue — push case for signoff ──────────────────────────────
+    // Extract top diagnoses and workup items from the pipeline steps so the
+    // physician dashboard shows a real differential rather than empty arrays.
+    if (masterResult) {
+      try {
+        const dxStep  = masterResult.steps.find(s => s.ruleType === "diagnosis" && (s.rulesFired?.length ?? 0) > 0);
+        const wkStep  = masterResult.steps.find(s => s.ruleType === "workup"    && (s.rulesFired?.length ?? 0) > 0);
+        const differential = (dxStep?.rulesFired ?? []).slice(0, 5).map((r, i) => ({
+          dx:         r.rule_name,
+          likelihood: (i === 0 ? "high" : i <= 2 ? "moderate" : "low") as "high" | "moderate" | "low",
+          reasoning:  String(r.outputs?.description ?? r.outputs?.rationale ?? r.rule_name),
+        }));
+        const workup = (wkStep?.rulesFired ?? []).slice(0, 8).map(r => r.rule_name);
+        if (differential.length > 0) {
+          addPhysicianCase({
+            slug:                params.complaintSlug,
+            fields:              params.answers as Record<string, any>,
+            differential,
+            workup,
+            proposedDisposition: triage.disposition,
+            dispositionReason:   triage.topCluster ?? `${params.complaintSlug} assessment`,
+          });
+          console.log(`[WhatsApp] physician case queued — slug=${params.complaintSlug} dx=${differential[0]?.dx}`);
+        }
+      } catch (e: any) {
+        console.warn("[WhatsApp] addPhysicianCase non-fatal:", e?.message);
+      }
+    }
 
     // LLM enrichment for physician review packet — never blocks patient
     runOrchestratorTriage({
@@ -916,12 +970,18 @@ export async function handleWhatsAppKBIntake(params: {
       console.log('[T5] chest-pain intake Q sent (deterministic)', Date.now());
       return true;
     }
-    // Script exhausted — intake complete. Clean, non-escalating close; the
-    // disposition pipeline is intentionally out of scope here.
-    await sendWhatsAppMessage(cleanFrom, CHEST_PAIN_INTAKE_CLOSING);
-    setImmediate(() => setCaseState(caseId, "CLOSED").catch(() => {}));
-    hotDel(threadId);
-    console.log('[T5] chest-pain intake complete — clean close', Date.now());
+    // Script exhausted — intake complete. Run the full 13-step triage pipeline,
+    // send the patient their assessment, and push a case to the physician queue.
+    // runTriageAndSend handles hotDel + CSAT survey.
+    const pipelineInputs = mapChestPainAnswersToInputs(activeSession.intake.answers);
+    console.log('[T5] chest-pain intake complete — running triage pipeline', Date.now());
+    await runTriageAndSend({
+      caseId,
+      complaintSlug: "chest_pain",
+      answers: pipelineInputs,
+      to: cleanFrom,
+      threadId,
+    });
     return true;
   }
 
