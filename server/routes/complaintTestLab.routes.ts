@@ -27,8 +27,15 @@ function extractTopDiagnoses(steps: any[]): Array<{ label: string; probability?:
   return [];
 }
 
+// Classify priority into L1/L2/L3 based on actual data distribution
+// p33=2, p66=10 across all question rules
+function priorityToLevel(p: number | null): 1 | 2 | 3 {
+  if (!p || p <= 2)  return 1;
+  if (p <= 10)       return 2;
+  return 3;
+}
+
 // ── GET /systems ─────────────────────────────────────────────────────────────
-// All 1,025 complaints grouped by medical system, alphabetical within each system
 
 router.get("/systems", async (_req, res) => {
   try {
@@ -44,7 +51,6 @@ router.get("/systems", async (_req, res) => {
       ORDER BY complaint_id
     `);
 
-    // Group by system
     const bySystem: Record<string, { id: string; totalRules: number; questionCount: number; redFlagCount: number }[]> = {};
     for (const r of rows as any[]) {
       const sys = classifyComplaint(r.complaint_id as string);
@@ -56,8 +62,6 @@ router.get("/systems", async (_req, res) => {
         redFlagCount:  Number(r.red_flag_count),
       });
     }
-
-    // Sort each system's complaints alphabetically
     for (const sys of Object.keys(bySystem)) {
       bySystem[sys].sort((a, b) => a.id.localeCompare(b.id));
     }
@@ -75,7 +79,6 @@ router.get("/systems", async (_req, res) => {
 });
 
 // ── GET /questions/:complaintId ───────────────────────────────────────────────
-// All question rules for a complaint, organised into L1 / L2 / L3
 
 router.get("/questions/:complaintId", async (req, res) => {
   try {
@@ -88,7 +91,7 @@ router.get("/questions/:complaintId", async (req, res) => {
       WHERE complaint_id = ${complaintId}
         AND rule_type     = 'question'
         AND active        = true
-      ORDER BY priority ASC, safety_level DESC
+      ORDER BY priority ASC NULLS LAST, rule_id ASC
     `);
 
     const l1: QuestionRule[] = [];
@@ -96,18 +99,19 @@ router.get("/questions/:complaintId", async (req, res) => {
     const l3: QuestionRule[] = [];
 
     for (const r of rows as any[]) {
-      const p = Number(r.priority);
+      const p   = r.priority != null ? Number(r.priority) : null;
+      const lvl = priorityToLevel(p);
       const q: QuestionRule = {
         rule_id:               r.rule_id,
         rule_name:             r.rule_name,
         logic_description:     r.logic_description,
         question_dependencies: r.question_dependencies,
-        safety_level:          r.safety_level,
-        priority:              p,
+        safety_level:          r.safety_level ?? "STANDARD",
+        priority:              p ?? 99,
         complaint_id:          r.complaint_id,
       };
-      if (p <= 3) l1.push(q);
-      else if (p <= 6) l2.push(q);
+      if (lvl === 1) l1.push(q);
+      else if (lvl === 2) l2.push(q);
       else l3.push(q);
     }
 
@@ -123,8 +127,133 @@ router.get("/questions/:complaintId", async (req, res) => {
   }
 });
 
+// ── POST /question ─────────────────────────────────────────────────────────────
+// Create a new question rule for a complaint
+
+router.post("/question", async (req, res) => {
+  try {
+    const {
+      complaint_id,
+      rule_name,
+      logic_description,
+      question_dependencies,
+      safety_level = "STANDARD",
+      level = 2,
+    } = req.body as {
+      complaint_id:          string;
+      rule_name:             string;
+      logic_description?:    string;
+      question_dependencies?: string;
+      safety_level?:         string;
+      level?:                1 | 2 | 3;
+    };
+
+    if (!complaint_id || !rule_name) {
+      return res.status(400).json({ ok: false, error: "complaint_id and rule_name required" });
+    }
+
+    // Generate a new rule_id
+    const prefix = complaint_id.toUpperCase().replace(/[^A-Z0-9]/g, "_").slice(0, 10);
+    const { rows: existing } = await db.execute(sql`
+      SELECT rule_id FROM kb_master_rules
+      WHERE complaint_id = ${complaint_id} AND rule_type = 'question'
+      ORDER BY priority DESC NULLS LAST LIMIT 1
+    `);
+
+    // Pick a priority in the target level range
+    const basePriority = level === 1 ? 1 : level === 2 ? 5 : 15;
+    const { rows: maxRow } = await db.execute(sql`
+      SELECT MAX(priority) as max_p FROM kb_master_rules
+      WHERE complaint_id = ${complaint_id} AND rule_type = 'question'
+        AND priority BETWEEN ${level === 1 ? 1 : level === 2 ? 3 : 11}
+                         AND ${level === 1 ? 2 : level === 2 ? 10 : 999}
+    `);
+    const maxPriority = maxRow[0] ? (Number((maxRow[0] as any).max_p) || basePriority - 1) : basePriority - 1;
+    const newPriority = maxPriority + 1;
+
+    // Generate unique rule_id
+    const timestamp = Date.now().toString(36).toUpperCase().slice(-4);
+    const newRuleId = `MR_Q_${prefix}_${timestamp}`;
+
+    await db.execute(sql`
+      INSERT INTO kb_master_rules (
+        rule_id, complaint_id, rule_type, rule_name, logic_description,
+        question_dependencies, safety_level, priority, active,
+        created_at, last_updated
+      ) VALUES (
+        ${newRuleId}, ${complaint_id}, 'question', ${rule_name},
+        ${logic_description ?? rule_name},
+        ${question_dependencies ?? null},
+        ${safety_level}, ${newPriority}, true,
+        NOW(), NOW()
+      )
+    `);
+
+    const { rows } = await db.execute(sql`
+      SELECT rule_id, rule_name, logic_description, question_dependencies,
+             safety_level, priority, complaint_id
+      FROM kb_master_rules WHERE rule_id = ${newRuleId}
+    `);
+
+    res.json({ ok: true, rule: rows[0] ?? null });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── PATCH /question/:ruleId ───────────────────────────────────────────────────
+
+router.patch("/question/:ruleId", async (req, res) => {
+  try {
+    const { ruleId } = req.params;
+    const {
+      logic_description,
+      rule_name,
+      question_dependencies,
+      priority,
+      safety_level,
+    } = req.body;
+
+    await db.execute(sql`
+      UPDATE kb_master_rules
+      SET
+        logic_description     = COALESCE(${logic_description     ?? null}, logic_description),
+        rule_name             = COALESCE(${rule_name             ?? null}, rule_name),
+        question_dependencies = COALESCE(${question_dependencies ?? null}, question_dependencies),
+        priority              = COALESCE(${priority              ?? null}, priority),
+        safety_level          = COALESCE(${safety_level          ?? null}, safety_level),
+        last_updated          = NOW()
+      WHERE rule_id = ${ruleId}
+    `);
+
+    const { rows } = await db.execute(sql`
+      SELECT rule_id, rule_name, logic_description, question_dependencies,
+             safety_level, priority, complaint_id
+      FROM kb_master_rules WHERE rule_id = ${ruleId}
+    `);
+
+    res.json({ ok: true, rule: rows[0] ?? null });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── DELETE /question/:ruleId ──────────────────────────────────────────────────
+
+router.delete("/question/:ruleId", async (req, res) => {
+  try {
+    const { ruleId } = req.params;
+    await db.execute(sql`
+      UPDATE kb_master_rules SET active = false, last_updated = NOW()
+      WHERE rule_id = ${ruleId} AND rule_type = 'question'
+    `);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ── POST /simulate ────────────────────────────────────────────────────────────
-// Simulate patient responses + run 13-step pipeline
 
 router.post("/simulate", async (req, res) => {
   try {
@@ -136,7 +265,6 @@ router.post("/simulate", async (req, res) => {
 
     if (!complaintId) return res.status(400).json({ ok: false, error: "complaintId required" });
 
-    // 1. Fetch questions
     const { rows } = await db.execute(sql`
       SELECT rule_id, rule_name, logic_description, question_dependencies,
              safety_level, priority, complaint_id
@@ -148,14 +276,9 @@ router.post("/simulate", async (req, res) => {
     `);
 
     const questions = rows as unknown as QuestionRule[];
-
-    // 2. Simulate patient answers (MedDialog / HealthCareMagic patterns)
-    const answers = simulateAnswers(questions, scenario, customAnswers);
-
-    // 3. Build pipeline inputs from answers
+    const answers   = simulateAnswers(questions, scenario, customAnswers);
     const derivedInputs = buildPipelineInputs(answers);
 
-    // 4. Add persona-level context
     const persona = PERSONAS[scenario];
     const inputs  = {
       ...derivedInputs,
@@ -168,7 +291,6 @@ router.post("/simulate", async (req, res) => {
       hasHyperlipid: persona.pmh.includes("hyperlipidemia"),
     };
 
-    // 5. Run pipeline
     const started = Date.now();
     let pipelineResult: any = null;
     let hardStop = false;
@@ -179,21 +301,15 @@ router.post("/simulate", async (req, res) => {
     } catch (e: any) {
       if (e?.type === "FORCED_ESCALATION" || e?.reason) {
         hardStop = true;
-        pipelineResult = {
-          escalated: true,
-          disposition: "ER_NOW",
-          reason: e.reason ?? "FORCED_ESCALATION",
-        };
+        pipelineResult = { escalated: true, disposition: "ER_NOW", reason: e.reason ?? "FORCED_ESCALATION" };
       } else {
         errorMsg = e.message;
       }
     }
 
     const durationMs = Date.now() - started;
-
-    // 6. Extract summary
     const result = pipelineResult ?? {};
-    // Extract from PipelineResult shape: finalDisposition, totalRulesFired, criticalFlagsHit
+
     const firedRules: string[] = [];
     let rulesEvaluated = 0;
     if (Array.isArray(result.steps)) {
@@ -204,170 +320,83 @@ router.post("/simulate", async (req, res) => {
     }
 
     const summary = {
-      disposition:     result.finalDisposition ?? result.disposition ?? (hardStop ? "ER_NOW" : "UNKNOWN"),
-      hardStop:        result.hardStop ?? hardStop,
-      escalated:       result.hardStop ?? hardStop,
-      stepsExecuted:   Array.isArray(result.steps) ? result.steps.length : 0,
+      disposition:    result.finalDisposition ?? result.disposition ?? (hardStop ? "ER_NOW" : "UNKNOWN"),
+      hardStop:       result.hardStop ?? hardStop,
+      escalated:      result.hardStop ?? hardStop,
+      stepsExecuted:  Array.isArray(result.steps) ? result.steps.length : 0,
       rulesEvaluated,
-      rulesFired:      result.totalRulesFired ?? firedRules.length,
-      topDiagnoses:    extractTopDiagnoses(result.steps ?? []),
-      redFlagsHit:     result.criticalFlagsHit ?? [],
-      confidence:      result.confidence ?? null,
+      rulesFired:     result.totalRulesFired ?? firedRules.length,
+      topDiagnoses:   extractTopDiagnoses(result.steps ?? []),
+      redFlagsHit:    result.criticalFlagsHit ?? [],
+      confidence:     result.confidence ?? null,
       durationMs,
     };
 
-    res.json({
-      ok: true,
-      complaintId,
-      scenario,
-      persona,
-      answers,
-      inputs,
-      pipelineResult: result,
-      summary,
-      error: errorMsg,
-    });
+    res.json({ ok: true, complaintId, scenario, persona, answers, inputs, pipelineResult: result, summary, error: errorMsg });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
 // ── POST /run-system ──────────────────────────────────────────────────────────
-// Run all complaints in a system, return aggregate pass rates
 
 router.post("/run-system", async (req, res) => {
   try {
-    const { systemKey, scenario = "high_risk" } = req.body as {
-      systemKey: string;
-      scenario:  Scenario;
-    };
-
+    const { systemKey, scenario = "high_risk" } = req.body as { systemKey: string; scenario: Scenario };
     if (!systemKey) return res.status(400).json({ ok: false, error: "systemKey required" });
 
-    // Get all complaints in this system
     const { rows: allComplaints } = await db.execute(sql`
       SELECT DISTINCT complaint_id FROM kb_master_rules
-      WHERE complaint_id IS NOT NULL
-      ORDER BY complaint_id
+      WHERE complaint_id IS NOT NULL ORDER BY complaint_id
     `);
 
     const inSystem = (allComplaints as any[])
       .map(r => r.complaint_id as string)
       .filter(id => classifyComplaint(id) === systemKey);
 
-    const results: Array<{
-      complaintId:  string;
-      disposition:  string;
-      hardStop:     boolean;
-      rulesFired:   number;
-      durationMs:   number;
-      error?:       string;
-    }> = [];
+    const results: Array<{ complaintId: string; disposition: string; hardStop: boolean; rulesFired: number; durationMs: number; error?: string }> = [];
 
     for (const complaintId of inSystem) {
       const { rows: qRows } = await db.execute(sql`
         SELECT rule_id, rule_name, logic_description, question_dependencies,
                safety_level, priority, complaint_id
         FROM kb_master_rules
-        WHERE complaint_id = ${complaintId}
-          AND rule_type     = 'question'
-          AND active        = true
+        WHERE complaint_id = ${complaintId} AND rule_type = 'question' AND active = true
         ORDER BY priority ASC
       `);
 
-      const answers = simulateAnswers(qRows as unknown as QuestionRule[], scenario);
-      const inputs  = buildPipelineInputs(answers);
-      const persona = PERSONAS[scenario];
-      const fullInputs = {
-        ...inputs,
-        patientAge: persona.age,
-        patientSex: persona.sex,
-        smoker:     persona.smoker,
-      };
+      const answers    = simulateAnswers(qRows as unknown as QuestionRule[], scenario);
+      const inputs     = buildPipelineInputs(answers);
+      const persona    = PERSONAS[scenario];
+      const fullInputs = { ...inputs, patientAge: persona.age, patientSex: persona.sex, smoker: persona.smoker };
 
       const started = Date.now();
       try {
         const r = await executePipeline(complaintId, fullInputs as any);
         results.push({
           complaintId,
-          disposition: (r as any).disposition ?? "UNKNOWN",
-          hardStop:    false,
-          rulesFired:  (r as any).rulesFired ?? 0,
+          disposition: (r as any).finalDisposition ?? (r as any).disposition ?? "UNKNOWN",
+          hardStop:    (r as any).hardStop ?? false,
+          rulesFired:  (r as any).totalRulesFired ?? 0,
           durationMs:  Date.now() - started,
         });
       } catch (e: any) {
         if (e?.type === "FORCED_ESCALATION" || e?.reason) {
-          results.push({
-            complaintId,
-            disposition: "ER_NOW",
-            hardStop:    true,
-            rulesFired:  0,
-            durationMs:  Date.now() - started,
-          });
+          results.push({ complaintId, disposition: "ER_NOW", hardStop: true, rulesFired: 0, durationMs: Date.now() - started });
         } else {
-          results.push({
-            complaintId,
-            disposition: "ERROR",
-            hardStop:    false,
-            rulesFired:  0,
-            durationMs:  Date.now() - started,
-            error:       e.message,
-          });
+          results.push({ complaintId, disposition: "ERROR", hardStop: false, rulesFired: 0, durationMs: Date.now() - started, error: e.message });
         }
       }
     }
 
-    const erNow    = results.filter(r => r.disposition === "ER_NOW").length;
-    const homeCare = results.filter(r => r.disposition === "HOME_CARE").length;
-    const errors   = results.filter(r => r.error).length;
-
     res.json({
-      ok: true,
-      systemKey,
-      scenario,
-      total:     results.length,
-      erNow,
-      homeCare,
-      errors,
+      ok: true, systemKey, scenario,
+      total:    results.length,
+      erNow:    results.filter(r => r.disposition === "ER_NOW").length,
+      homeCare: results.filter(r => r.disposition === "HOME_CARE").length,
+      errors:   results.filter(r => r.error).length,
       results,
     });
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ── PATCH /question/:ruleId ───────────────────────────────────────────────────
-// Update question text or dependencies inline
-
-router.patch("/question/:ruleId", async (req, res) => {
-  try {
-    const { ruleId } = req.params;
-    const {
-      logic_description,
-      question_dependencies,
-      priority,
-      safety_level,
-    } = req.body;
-
-    await db.execute(sql`
-      UPDATE kb_master_rules
-      SET
-        logic_description     = COALESCE(${logic_description     ?? null}, logic_description),
-        question_dependencies = COALESCE(${question_dependencies ?? null}, question_dependencies),
-        priority              = COALESCE(${priority              ?? null}, priority),
-        safety_level          = COALESCE(${safety_level          ?? null}, safety_level),
-        last_updated          = NOW()
-      WHERE rule_id = ${ruleId}
-    `);
-
-    const { rows } = await db.execute(sql`
-      SELECT rule_id, rule_name, logic_description, question_dependencies,
-             safety_level, priority, complaint_id
-      FROM kb_master_rules
-      WHERE rule_id = ${ruleId}
-    `);
-
-    res.json({ ok: true, rule: rows[0] ?? null });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
