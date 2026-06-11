@@ -104,6 +104,7 @@ import MasterRuleMapPage          from "@/pages/MasterRuleMapPage";
 import ClinicalKBEditorPage       from "@/pages/ClinicalKBEditorPage";
 import EncounterSimulatorPage     from "@/pages/EncounterSimulatorPage";
 import ComplaintsReviewPage       from "@/pages/ComplaintsReviewPage";
+import DifferentialDispositionPage from "@/pages/DifferentialDispositionPage";
 import IntentAnalyticsDashboard   from "@/pages/IntentAnalyticsDashboard";
 import SkillMapPage from "@/pages/SkillMapPage";
 import SkillIntelligenceLabPage from "@/pages/SkillIntelligenceLabPage";
@@ -260,6 +261,7 @@ function WorkbenchRouter() {
         <Route path="/kb-editor">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ClinicalKBEditorPage /></RoleGuard>}</Route>
         <Route path="/encounter">{() => <RoleGuard allowedRoles={["admin", "physician"]}><EncounterSimulatorPage /></RoleGuard>}</Route>
         <Route path="/complaints-review">{() => <RoleGuard allowedRoles={["admin", "physician"]}><ComplaintsReviewPage /></RoleGuard>}</Route>
+        <Route path="/diff-disposition">{() => <RoleGuard allowedRoles={["admin", "physician"]}><DifferentialDispositionPage /></RoleGuard>}</Route>
         <Route path="/intent-analytics">{() => <RoleGuard allowedRoles={["admin"]}><IntentAnalyticsDashboard /></RoleGuard>}</Route>
         <Route path="/scope-command-center"  component={ScopeCommandCenter} />
         <Route path="/command-wall"          component={CommandWall} />

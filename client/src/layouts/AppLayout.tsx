@@ -6,7 +6,7 @@ import {
   Smartphone, LayoutGrid, Radio, MonitorDot, FlaskConical,
   FileCheck, CreditCard, Globe2, Phone, GitBranch, ShieldCheck,
   Hospital, LayoutDashboard, Brain, Database, BarChart3,
-  Landmark, Package, Radar, GraduationCap, ClipboardCheck, Map, List, Dna,
+  Landmark, Package, Radar, GraduationCap, ClipboardCheck, Map, List, Dna, Layers,
 } from "lucide-react";
 
 // ── Nav structure: grouped sections ──────────────────────────────────────────
@@ -35,6 +35,7 @@ const NAV_SECTIONS: NavSection[] = [
       { path: ROUTES.KNOWLEDGE_OPS,          label: "KB Ops Dashboard",       icon: BarChart3       },
       { path: ROUTES.TEST_BENCH,             label: "Test Bench",             icon: FlaskConical    },
       { path: "/complaint-test-lab",         label: "Complaint Testing Lab",  icon: FlaskConical    },
+      { path: "/diff-disposition",           label: "Differential Disposition", icon: Layers          },
       { path: ROUTES.AUTONOMOUS_LEARNING,    label: "Learning Console",       icon: Brain           },
       { path: ROUTES.AUTONOMOUS_BRAIN,       label: "Autonomous Brain",       icon: Zap             },
       { path: ROUTES.COGNITIVE_BRAIN,        label: "Cognitive Brain v2",     icon: BrainCircuit    },

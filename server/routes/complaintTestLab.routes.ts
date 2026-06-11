@@ -498,4 +498,98 @@ router.get("/intake-prompts", (_req, res) => {
   res.json({ ok: true, prompts: INTAKE_PROMPTS });
 });
 
+// ── GET /diff-disposition/summary ─────────────────────────────────────────────
+router.get("/diff-disposition/summary", async (_req, res) => {
+  try {
+    const rows = await db.execute(sql`
+      SELECT
+        complaint_id,
+        COUNT(*) FILTER (WHERE rule_type='diagnosis')    AS dx_count,
+        COUNT(*) FILTER (WHERE rule_type='disposition')  AS disp_count,
+        COUNT(*) FILTER (WHERE rule_type='red_flag')     AS red_flag_count,
+        COUNT(*) FILTER (WHERE rule_type='medication')   AS med_count,
+        COUNT(*) FILTER (WHERE rule_type='workup')       AS workup_count,
+        COUNT(*) FILTER (WHERE rule_type='question')     AS question_count,
+        COUNT(*) FILTER (WHERE rule_type='diagnosis' AND safety_level='CRITICAL')                          AS critical_dx,
+        COUNT(*) FILTER (WHERE rule_type='diagnosis' AND safety_level='HIGH')                              AS high_dx,
+        COUNT(*) FILTER (WHERE rule_type='diagnosis' AND (outputs->>'cannot_miss')::boolean = true)        AS cannot_miss_count,
+        COUNT(*) FILTER (WHERE rule_type='disposition' AND diagnosis_id IS NOT NULL AND diagnosis_id != '') AS linked_disp_count,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT CASE WHEN rule_type='disposition' AND disposition_impact IS NOT NULL AND disposition_impact != '' THEN disposition_impact END), NULL) AS dispositions
+      FROM kb_master_rules
+      WHERE complaint_id != 'ALL'
+      GROUP BY complaint_id
+      ORDER BY (COUNT(*) FILTER (WHERE rule_type='diagnosis'))::int DESC, complaint_id ASC
+    `);
+    res.json({ ok: true, complaints: rows.rows, total: rows.rows.length });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── GET /diff-disposition/:complaintId ────────────────────────────────────────
+router.get("/diff-disposition/:complaintId", async (req, res) => {
+  try {
+    const { complaintId } = req.params;
+
+    const dxRows = await db.execute(sql`
+      SELECT
+        d.rule_id,
+        d.rule_name,
+        d.diagnosis_id,
+        d.icd10,
+        d.safety_level,
+        d.confidence_weight,
+        d.outputs->>'cannot_miss'     AS cannot_miss,
+        d.outputs->>'base_probability' AS base_probability,
+        d.diagnostic_criteria,
+        d.key_questions,
+        disp.disposition_impact        AS disposition,
+        disp.outputs->>'when'          AS trigger_condition,
+        disp.safety_level              AS disp_safety
+      FROM kb_master_rules d
+      LEFT JOIN kb_master_rules disp
+        ON  disp.complaint_id  = d.complaint_id
+        AND disp.diagnosis_id  = d.diagnosis_id
+        AND disp.rule_type     = 'disposition'
+      WHERE d.rule_type    = 'diagnosis'
+        AND d.complaint_id = ${complaintId}
+      ORDER BY
+        CASE d.safety_level WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MODERATE' THEN 3 ELSE 4 END,
+        d.confidence_weight DESC
+    `);
+
+    const dispRows = await db.execute(sql`
+      SELECT rule_id, rule_name, disposition_impact, safety_level, outputs, priority
+      FROM kb_master_rules
+      WHERE rule_type    = 'disposition'
+        AND complaint_id = ${complaintId}
+        AND (diagnosis_id IS NULL OR diagnosis_id = '')
+      ORDER BY priority ASC
+    `);
+
+    const countsRow = await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE rule_type='diagnosis')   AS dx_count,
+        COUNT(*) FILTER (WHERE rule_type='disposition') AS disp_count,
+        COUNT(*) FILTER (WHERE rule_type='red_flag')    AS red_flag_count,
+        COUNT(*) FILTER (WHERE rule_type='medication')  AS med_count,
+        COUNT(*) FILTER (WHERE rule_type='workup')      AS workup_count,
+        COUNT(*) FILTER (WHERE rule_type='question')    AS question_count,
+        COUNT(*) FILTER (WHERE rule_type='plan')        AS plan_count
+      FROM kb_master_rules
+      WHERE complaint_id = ${complaintId}
+    `);
+
+    res.json({
+      ok: true,
+      complaintId,
+      differentials: dxRows.rows,
+      dispositions:  dispRows.rows,
+      stageCounts:   countsRow.rows[0] ?? {},
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 export default router;
