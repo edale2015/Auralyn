@@ -11,6 +11,7 @@ import {
   type Scenario,
   type QuestionRule,
 } from "../test/patientResponseSimulator";
+import { runNarrativeIntake, getIntakePrompt, INTAKE_PROMPTS } from "../clinical/narrativeIntakeEngine";
 
 const router = Router();
 
@@ -400,6 +401,101 @@ router.post("/run-system", async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ── POST /narrative-intake ────────────────────────────────────────────────────
+// Pass a free-text patient narrative; get back structured clinical entities,
+// complaint detection, and a map of which questions are already answered.
+
+router.post("/narrative-intake", async (req, res) => {
+  try {
+    const { narrative, complaintId } = req.body as {
+      narrative:    string;
+      complaintId?: string;
+    };
+    if (!narrative?.trim()) {
+      return res.status(400).json({ ok: false, error: "narrative is required" });
+    }
+    const extraction = await runNarrativeIntake(narrative.trim(), complaintId);
+    res.json({ ok: true, extraction });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── POST /narrative-run ───────────────────────────────────────────────────────
+// Extract from narrative AND immediately run the 13-step pipeline with
+// the pre-filled inputs. Returns extraction + full pipeline result.
+
+router.post("/narrative-run", async (req, res) => {
+  try {
+    const { narrative, complaintId } = req.body as {
+      narrative:    string;
+      complaintId?: string;
+    };
+    if (!narrative?.trim()) {
+      return res.status(400).json({ ok: false, error: "narrative is required" });
+    }
+
+    const extraction = await runNarrativeIntake(narrative.trim(), complaintId);
+    const targetId   = extraction.detectedComplaint;
+
+    const started = Date.now();
+    let pipelineResult: any = null;
+    let hardStop = false;
+    let errorMsg: string | null = null;
+
+    try {
+      pipelineResult = await executePipeline(targetId, extraction.pipelineInputs as any);
+    } catch (e: any) {
+      if (e?.type === "FORCED_ESCALATION" || e?.reason) {
+        hardStop = true;
+        pipelineResult = { finalDisposition: "ER_NOW", hardStop: true };
+      } else {
+        errorMsg = e.message;
+      }
+    }
+
+    const durationMs = Date.now() - started;
+    const result     = pipelineResult ?? {};
+
+    const firedRules: string[] = [];
+    let rulesEvaluated = 0;
+    if (Array.isArray(result.steps)) {
+      for (const step of result.steps) {
+        rulesEvaluated += step.rulesEvaluated ?? 0;
+        if (Array.isArray(step.firedRules)) {
+          firedRules.push(...step.firedRules.map((r: any) => r.rule_id ?? r));
+        }
+      }
+    }
+
+    const summary = {
+      disposition:    result.finalDisposition ?? (hardStop ? "ER_NOW" : "UNKNOWN"),
+      hardStop:       result.hardStop ?? hardStop,
+      stepsExecuted:  Array.isArray(result.steps) ? result.steps.length : 0,
+      rulesEvaluated,
+      rulesFired:     result.totalRulesFired ?? firedRules.length,
+      topDiagnoses:   extractTopDiagnoses(result.steps ?? []),
+      redFlagsHit:    result.criticalFlagsHit ?? [],
+      pipelineDurationMs: durationMs,
+    };
+
+    res.json({
+      ok: true,
+      extraction,
+      summary,
+      pipelineResult: result,
+      error: errorMsg,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── GET /intake-prompts ───────────────────────────────────────────────────────
+router.get("/intake-prompts", (_req, res) => {
+  res.json({ ok: true, prompts: INTAKE_PROMPTS });
 });
 
 export default router;

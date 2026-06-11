@@ -1,4 +1,5 @@
 - [Rule engine logic_description parsing](rule-engine-desc-parse.md) — boolean rules with null deps encode their condition in logic_description; must parse it or red_flags fire on every patient.
-- [question_dependencies DB type](question-deps-type.md) — kb_master_rules.question_dependencies is a real PG array (string[]), not a string; always handle both forms.
+- [question_dependencies DB type](question-deps-type.md) — kb_master_rules.question_dependencies is a real PG array (string[]); always handle both forms.
 - [PipelineResult shape](pipeline-result-shape.md) — executePipeline returns finalDisposition/totalRulesFired/criticalFlagsHit (not disposition/rulesFired/redFlagsHit).
 - [Complaint test lab](complaint-test-lab.md) — lab at /complaint-test-lab; 14 medical systems, patient simulator, 3-level question editor, API at /api/complaint-test-lab/*.
+- [Narrative Intake Engine](narrative-intake-engine.md) — Pass 1 GPT entity extraction + Pass 2 deterministic regex matching; never use GPT for Pass 2 (JSON wrapping bug + 15s latency).
