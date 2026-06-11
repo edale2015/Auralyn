@@ -1,0 +1,132 @@
+=== V030 — Turn-by-turn robustness (LIVE conversational path via /api/test/kb-sim) ===
+entry point: POST /api/test/kb-sim -> handleWhatsAppKBIntake (NOT /narrative-run)
+sample: 17 complaints × 4 answer sets = 68 conversations
+chest-pain family included: chest_pain, cardio_chest_pain, chest_pain_cardiac, card_chest_pain
+V029 NO_DATA complaints in sample: card_chest_pain, headache, back_pain, shortness_of_breath, fever, shoulder_pain
+
+[PASS] chest_pain × all_no (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain × all_yes (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain × mixed (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain × nl_neg (24 turns) — PASS: completed at turn 24
+[PASS] cardio_chest_pain × all_no (24 turns) — PASS: completed at turn 24
+[PASS] cardio_chest_pain × all_yes (24 turns) — PASS: completed at turn 24
+[PASS] cardio_chest_pain × mixed (24 turns) — PASS: completed at turn 24
+[PASS] cardio_chest_pain × nl_neg (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain_cardiac × all_no (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain_cardiac × all_yes (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain_cardiac × mixed (24 turns) — PASS: completed at turn 24
+[PASS] chest_pain_cardiac × nl_neg (24 turns) — PASS: completed at turn 24
+[PASS] card_chest_pain [NO_DATA] × all_no (24 turns) — PASS: completed at turn 24
+[PASS] card_chest_pain [NO_DATA] × all_yes (24 turns) — PASS: completed at turn 24
+[PASS] card_chest_pain [NO_DATA] × mixed (24 turns) — PASS: completed at turn 24
+[PASS] card_chest_pain [NO_DATA] × nl_neg (24 turns) — PASS: completed at turn 24
+[FAIL] cough × all_no (2 turns) — FAIL REPEAT: question asked twice at turn 2: "How long have you been experiencing the cough?"
+[FAIL] cough × all_yes (3 turns) — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing the cough?"
+[FAIL] cough × mixed (4 turns) — FAIL REPEAT: question asked twice at turn 4: "How long have you been coughing?"
+[FAIL] cough × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[PASS] headache [NO_DATA] × all_no (6 turns) — PASS: conversation ended (no further reply) after turn 5 — graceful stop
+[PASS] headache [NO_DATA] × all_yes (7 turns) — PASS: conversation ended (no further reply) after turn 6 — graceful stop
+[PASS] headache [NO_DATA] × mixed (6 turns) — PASS: conversation ended (no further reply) after turn 5 — graceful stop
+[FAIL] headache [NO_DATA] × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[FAIL] sore_throat × all_no (2 turns) — FAIL REPEAT: question asked twice at turn 2: "How long have you had the sore throat?"
+[FAIL] sore_throat × all_yes (4 turns) — FAIL REPEAT: question asked twice at turn 4: "Have you had any trouble swallowing?"
+[FAIL] sore_throat × mixed (7 turns) — FAIL RESET: re-greeted mid-conversation at turn 7: "Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?"
+[FAIL] sore_throat × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[PASS] abdominal_pain × all_no (9 turns) — PASS: conversation ended (no further reply) after turn 8 — graceful stop
+[FAIL] abdominal_pain × all_yes (2 turns) — FAIL REPEAT: question asked twice at turn 2: "Can you tell me where the pain is located?"
+[FAIL] abdominal_pain × mixed (4 turns) — FAIL REPEAT: question asked twice at turn 4: "Can you describe where the pain is located?"
+[FAIL] abdominal_pain × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[FAIL] back_pain [NO_DATA] × all_no (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] back_pain [NO_DATA] × all_yes (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] back_pain [NO_DATA] × mixed (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] back_pain [NO_DATA] × nl_neg (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] dizziness × all_no (4 turns) — FAIL REPEAT: question asked twice at turn 4: "Is your dizziness more like spinning or lightheadedness?"
+[FAIL] dizziness × all_yes (2 turns) — FAIL REPEAT: question asked twice at turn 2: "How long does each episode of dizziness last?"
+[FAIL] dizziness × mixed (2 turns) — FAIL REPEAT: question asked twice at turn 2: "How long does each episode of dizziness last?"
+[FAIL] dizziness × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[FAIL] shortness_of_breath [NO_DATA] × all_no (5 turns) — FAIL REPEAT: question asked twice at turn 5: "I'm here to help. Can you share how long you've felt this way?"
+[FAIL] shortness_of_breath [NO_DATA] × all_yes (4 turns) — FAIL REPEAT: question asked twice at turn 4: "How long have you been feeling this way?"
+[FAIL] shortness_of_breath [NO_DATA] × mixed (5 turns) — FAIL REPEAT: question asked twice at turn 5: "How long have you been experiencing shortness of breath?"
+[FAIL] shortness_of_breath [NO_DATA] × nl_neg (2 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 2: "Got it…"
+[FAIL] fever [NO_DATA] × all_no (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] fever [NO_DATA] × all_yes (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] fever [NO_DATA] × mixed (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] fever [NO_DATA] × nl_neg (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] skin_rash × all_no (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] skin_rash × all_yes (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] skin_rash × mixed (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] skin_rash × nl_neg (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] ear_pain × all_no (6 turns) — FAIL REPEAT: question asked twice at turn 6: "How long have you been experiencing the earache?"
+[FAIL] ear_pain × all_yes (3 turns) — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing the earache?"
+[FAIL] ear_pain × mixed (2 turns) — FAIL REPEAT: question asked twice at turn 2: "How long have you been experiencing the earache?"
+[FAIL] ear_pain × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[FAIL] sinus_pressure × all_no (4 turns) — FAIL REPEAT: question asked twice at turn 4: "How long have you had the sinus pressure?"
+[FAIL] sinus_pressure × all_yes (3 turns) — FAIL REPEAT: question asked twice at turn 3: "How long have you had the sinus pressure?"
+[FAIL] sinus_pressure × mixed (3 turns) — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing sinus pressure?"
+[FAIL] sinus_pressure × nl_neg (3 turns) — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+[FAIL] palpitations × all_no (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] palpitations × all_yes (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] palpitations × mixed (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] palpitations × nl_neg (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] shoulder_pain [NO_DATA] × all_no (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] shoulder_pain [NO_DATA] × all_yes (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] shoulder_pain [NO_DATA] × mixed (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+[FAIL] shoulder_pain [NO_DATA] × nl_neg (1 turns) — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+
+=== FAILURE BREAKDOWN ===
+  REPEAT: 19
+  STALL: 8
+  RESET: 21
+  --- failing conversations ---
+  FAIL REPEAT: cough × all_no — FAIL REPEAT: question asked twice at turn 2: "How long have you been experiencing the cough?"
+  FAIL REPEAT: cough × all_yes — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing the cough?"
+  FAIL REPEAT: cough × mixed — FAIL REPEAT: question asked twice at turn 4: "How long have you been coughing?"
+  FAIL STALL: cough × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL STALL: headache × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL REPEAT: sore_throat × all_no — FAIL REPEAT: question asked twice at turn 2: "How long have you had the sore throat?"
+  FAIL REPEAT: sore_throat × all_yes — FAIL REPEAT: question asked twice at turn 4: "Have you had any trouble swallowing?"
+  FAIL RESET: sore_throat × mixed — FAIL RESET: re-greeted mid-conversation at turn 7: "Hi, I'm Auralyn, your urgent care assistant. What's bringing you in today?"
+  FAIL STALL: sore_throat × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL REPEAT: abdominal_pain × all_yes — FAIL REPEAT: question asked twice at turn 2: "Can you tell me where the pain is located?"
+  FAIL REPEAT: abdominal_pain × mixed — FAIL REPEAT: question asked twice at turn 4: "Can you describe where the pain is located?"
+  FAIL STALL: abdominal_pain × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL RESET: back_pain × all_no — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: back_pain × all_yes — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: back_pain × mixed — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: back_pain × nl_neg — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL REPEAT: dizziness × all_no — FAIL REPEAT: question asked twice at turn 4: "Is your dizziness more like spinning or lightheadedness?"
+  FAIL REPEAT: dizziness × all_yes — FAIL REPEAT: question asked twice at turn 2: "How long does each episode of dizziness last?"
+  FAIL REPEAT: dizziness × mixed — FAIL REPEAT: question asked twice at turn 2: "How long does each episode of dizziness last?"
+  FAIL STALL: dizziness × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL REPEAT: shortness_of_breath × all_no — FAIL REPEAT: question asked twice at turn 5: "I'm here to help. Can you share how long you've felt this way?"
+  FAIL REPEAT: shortness_of_breath × all_yes — FAIL REPEAT: question asked twice at turn 4: "How long have you been feeling this way?"
+  FAIL REPEAT: shortness_of_breath × mixed — FAIL REPEAT: question asked twice at turn 5: "How long have you been experiencing shortness of breath?"
+  FAIL STALL: shortness_of_breath × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 2: "Got it…"
+  FAIL RESET: fever × all_no — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: fever × all_yes — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: fever × mixed — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: fever × nl_neg — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: skin_rash × all_no — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: skin_rash × all_yes — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: skin_rash × mixed — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: skin_rash × nl_neg — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL REPEAT: ear_pain × all_no — FAIL REPEAT: question asked twice at turn 6: "How long have you been experiencing the earache?"
+  FAIL REPEAT: ear_pain × all_yes — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing the earache?"
+  FAIL REPEAT: ear_pain × mixed — FAIL REPEAT: question asked twice at turn 2: "How long have you been experiencing the earache?"
+  FAIL STALL: ear_pain × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL REPEAT: sinus_pressure × all_no — FAIL REPEAT: question asked twice at turn 4: "How long have you had the sinus pressure?"
+  FAIL REPEAT: sinus_pressure × all_yes — FAIL REPEAT: question asked twice at turn 3: "How long have you had the sinus pressure?"
+  FAIL REPEAT: sinus_pressure × mixed — FAIL REPEAT: question asked twice at turn 3: "How long have you been experiencing sinus pressure?"
+  FAIL STALL: sinus_pressure × nl_neg — FAIL STALL: conversation stalled — repeated non-question reply with no advance at turn 3: "Got it…"
+  FAIL RESET: palpitations × all_no — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: palpitations × all_yes — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: palpitations × mixed — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: palpitations × nl_neg — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: shoulder_pain × all_no — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: shoulder_pain × all_yes — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: shoulder_pain × mixed — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+  FAIL RESET: shoulder_pain × nl_neg — FAIL RESET: complaint not recognized — greeted at opener; intake never started (would re-greet forever)
+
+=== FINAL TALLY ===
+conversations: 68  PASS: 20  FAIL: 48
+total turns driven: 526  wall-clock: 243.0s
