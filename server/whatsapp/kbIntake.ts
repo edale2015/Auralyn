@@ -22,6 +22,12 @@ import {
 } from "../conversation/questionSequences";
 import { getComplaintBundle, type ComplaintBundle } from "./complaintBundle";
 import {
+  loadSession,
+  saveSession,
+  deleteSession,
+  type PersistedSession,
+} from "./sessionStore";
+import {
   startIntake as startChestPainIntake,
   advanceIntake as advanceChestPainIntake,
   type IntakeState,
@@ -229,7 +235,7 @@ function buildListenAck(extracted: Record<string, any>): string {
 // Firestore writes are fire-and-forget background persistence — patient reply
 // is never gated on them.  On server restart, the Firestore fallback in
 // getActiveCaseId restores any in-progress sessions automatically.
-interface HotSession {
+export interface HotSession {
   caseId:          string;
   complaint:       { slug: string; display: string };
   answers:         Record<string, any>;         // Q_ID → value (safety pipeline)
@@ -288,6 +294,22 @@ function hotDel(threadId: string): void {
   hotSessions.delete(hotKey(threadId));
 }
 
+// ── Durable persistence wrappers ────────────────────────────────────────────────
+// hotSet/hotDel update only the per-process cache. These mirror the write to the
+// shared Firestore-backed store (sessionStore.ts) so a follow-up message handled
+// by another autoscale instance — or by this instance after a cold start —
+// resumes the SAME conversation (full agent history + question progress) instead
+// of re-greeting. Best-effort: a store failure degrades to in-memory-only
+// behavior and never crashes a patient turn.
+async function persistSession(threadId: string, session: HotSession): Promise<void> {
+  hotSet(threadId, session);
+  await saveSession(threadId, session);
+}
+async function dropSession(threadId: string): Promise<void> {
+  hotDel(threadId);
+  await deleteSession(threadId);
+}
+
 // Read-only accessor for verification/repro harnesses. No production callers.
 export function __peekHotSession(threadId: string): HotSession | null {
   return hotGet(threadId);
@@ -318,7 +340,7 @@ async function firestoreLookup(threadId: string): Promise<HotSession | null> {
       state:     doc.state,
       createdAt: Date.now(),
     };
-    hotSet(threadId, session);        // warm the cache for future messages
+    await persistSession(threadId, session);        // warm the cache for future messages
     return session;
   } catch {
     return null;
@@ -519,7 +541,7 @@ async function deliverAgentClose(params: {
   const packet = buildPhysicianPacket({ caseId, session });
   if (!packet) {
     console.warn(`[WhatsApp] no physician packet built for slug ${session.slug} (no knowledge registered)`);
-    hotDel(threadId);
+    await dropSession(threadId);
     return;
   }
 
@@ -558,7 +580,7 @@ async function deliverAgentClose(params: {
     }).catch(() => {});
   });
 
-  hotDel(threadId);
+  await dropSession(threadId);
 }
 
 // ── Map chest-pain intake answers → rule-engine PipelineInputs ────────────────
@@ -760,7 +782,7 @@ async function runTriageAndSend(params: {
   });
 
   // Clear hot session
-  hotDel(params.threadId);
+  await dropSession(params.threadId);
 
   setTimeout(async () => {
     const surveyText = `📋 *Quick feedback*\n\nHow would you rate your experience today?\n\n5️⃣ Excellent  4️⃣ Good  3️⃣ Okay  2️⃣ Poor  1️⃣ Very poor\n\nReply 1–5`;
@@ -821,7 +843,7 @@ export async function handleWhatsAppKBIntake(params: {
       // Background: close old Firestore case
       setImmediate(() => setCaseState(existing.caseId, "CLOSED").catch(() => {}));
     }
-    hotDel(threadId);
+    await dropSession(threadId);
     clearSurveyState("whatsapp", threadId).catch(() => {});
     markNewConversation(cleanFrom);   // fresh conversation → show 911 disclaimer once
     await sendWhatsAppMessage(cleanFrom, buildIntroMessage());
@@ -834,7 +856,7 @@ export async function handleWhatsAppKBIntake(params: {
     if (existing) {
       setImmediate(() => setCaseState(existing.caseId, "CLOSED").catch(() => {}));
     }
-    hotDel(threadId);
+    await dropSession(threadId);
     clearSurveyState("whatsapp", threadId).catch(() => {});
     markNewConversation(cleanFrom);   // fresh conversation → show 911 disclaimer once
     await sendWhatsAppMessage(cleanFrom, "Session cleared. Send your symptom or 'hi' to start again.");
@@ -878,11 +900,29 @@ export async function handleWhatsAppKBIntake(params: {
   // 1. Hot cache (in-memory, instant)
   // 2. Firestore fallback with 2s hard timeout (only on first message after restart)
   let session = hotGet(threadId);
+  // 2. Durable cross-instance restore. Survives autoscale instance boundaries
+  //    and cold starts — carries the FULL session (incl. agent history). The
+  //    derived bundle is not persisted, so re-resolve it from the slug here.
+  if (!session) {
+    const restored = await Promise.race([
+      loadSession(threadId),
+      new Promise<PersistedSession | null>(r => setTimeout(() => r(null), 2000)),
+    ]);
+    if (restored) {
+      const hydrated = restored as HotSession;
+      if (!hydrated.bundle && hydrated.complaint?.slug) {
+        try { hydrated.bundle = getComplaintBundle(hydrated.complaint.slug); } catch {}
+      }
+      hotSet(threadId, hydrated); // warm local cache (already durable — no re-write)
+      session = hydrated;
+    }
+  }
+  // 3. Legacy partial fallback (case doc only) — used if no durable record exists.
   if (!session) session = await Promise.race([
     firestoreLookup(threadId),
     new Promise<null>(r => setTimeout(() => r(null), 2000)),
   ]);
-  console.log('[T3] firestoreLookup done', Date.now(), session ? `caseId=${session.caseId}` : "no session");
+  console.log('[T3] session lookup done', Date.now(), session ? `caseId=${session.caseId}` : "no session");
 
   // ── Session reset: any new complaint match closes the prior session ────────
   //
@@ -911,7 +951,7 @@ export async function handleWhatsAppKBIntake(params: {
         : `chief complaint switched (${incomingMatch!.slug}); was ${session.complaint.slug}`;
       console.log(`[Session] Closing prior session: ${reason}`);
       setImmediate(() => setCaseState(session!.caseId, "CLOSED").catch(() => {}));
-      hotDel(threadId);
+      await dropSession(threadId);
       session = null;
     }
   }
@@ -954,7 +994,7 @@ export async function handleWhatsAppKBIntake(params: {
       // extractAndRespond call so the system prompt skeleton is reused.
       bundle: getComplaintBundle(match.slug),
     };
-    hotSet(threadId, session);
+    await persistSession(threadId, session);
 
     // ── Background: persist to Firestore + audit (never blocks patient) ──────
     setImmediate(() => {
@@ -983,7 +1023,7 @@ export async function handleWhatsAppKBIntake(params: {
         endSession(caseId, "er_send" as any).catch(() => {});
       });
       await sendWhatsAppMessage(cleanFrom, EMERGENCY_MESSAGE);
-      hotDel(threadId);
+      await dropSession(threadId);
       return true;
     }
 
@@ -1000,7 +1040,7 @@ export async function handleWhatsAppKBIntake(params: {
         { role: "user",      text: rawText },
         { role: "assistant", text: question.text },
       ];
-      hotSet(threadId, session);
+      await persistSession(threadId, session);
       await sendWhatsAppMessage(cleanFrom, question.text);
       console.log('[T5] chest-pain intake Q0 sent (deterministic)', Date.now());
       return true;
@@ -1016,7 +1056,7 @@ export async function handleWhatsAppKBIntake(params: {
         { role: "user",      text: rawText    },
         { role: "assistant", text: reply.text },
       ];
-      hotSet(threadId, session);
+      await persistSession(threadId, session);
       await sendWhatsAppMessage(cleanFrom, reply.text);
       console.log('[T5] sendWhatsAppMessage done', Date.now(), `agent latency=${reply.latencyMs}ms`);
 
@@ -1049,7 +1089,7 @@ export async function handleWhatsAppKBIntake(params: {
       { role: "assistant", text: q0      },
     ];
     session.pendingSafetyAsk = null;
-    hotSet(threadId, session);
+    await persistSession(threadId, session);
 
     await sendWhatsAppMessage(cleanFrom, q0);
     console.log('[T5] sendWhatsAppMessage done', Date.now());
@@ -1076,7 +1116,7 @@ export async function handleWhatsAppKBIntake(params: {
   // so a question is never re-asked and the flow runs cleanly to medications.
   if (activeSession.intake) {
     const { question } = advanceChestPainIntake(activeSession.intake, rawText);
-    hotSet(threadId, activeSession);
+    await persistSession(threadId, activeSession);
     if (question) {
       await sendWhatsAppMessage(cleanFrom, question.text);
       console.log('[T5] chest-pain intake Q sent (deterministic)', Date.now());
@@ -1187,7 +1227,7 @@ export async function handleWhatsAppKBIntake(params: {
     // not a 911 / ER directive. The EMERGENCY_MESSAGE (911) is reserved only
     // for the keyword bypass where no physician loop is possible.
     await sendWhatsAppMessage(cleanFrom, PHYSICIAN_ESCALATION_MESSAGE);
-    hotDel(threadId);
+    await dropSession(threadId);
   }
 
   // ── Red-flag handoff that does NOT terminate the patient conversation ──────
@@ -1205,7 +1245,7 @@ export async function handleWhatsAppKBIntake(params: {
   async function flagRedFlagForPhysician(updatedAns: Record<string, any>, trigger: string) {
     if (activeSession.redFlagFlagged) return;
     activeSession.redFlagFlagged = true;
-    hotSet(threadId, activeSession);
+    await persistSession(threadId, activeSession);
 
     // Full clinical pipeline runs to completion so the physician review packet
     // carries the differential / workup, not a bare escalation stub.
@@ -1298,7 +1338,7 @@ export async function handleWhatsAppKBIntake(params: {
       { role: "user",      text: rawText    },
       { role: "assistant", text: reply.text },
     ].slice(-40);
-    hotSet(threadId, session);
+    await persistSession(threadId, session);
     await sendWhatsAppMessage(cleanFrom, reply.text);
     console.log('[T5] sendWhatsAppMessage done', Date.now(), `agent latency=${reply.latencyMs}ms closed=${reply.closed}`);
 
@@ -1389,7 +1429,7 @@ export async function handleWhatsAppKBIntake(params: {
       { role: "user",      text: rawText },
       { role: "assistant", text: reply   },
     ].slice(-10);
-    hotSet(threadId, session);
+    await persistSession(threadId, session);
 
     await sendWhatsAppMessage(cleanFrom, reply);
     console.log('[T5] sendWhatsAppMessage done (scripted)', Date.now());
@@ -1452,7 +1492,7 @@ export async function handleWhatsAppKBIntake(params: {
     { role: "user",      text: rawText           },
     { role: "assistant", text: combined.response },
   ].slice(-10);
-  hotSet(threadId, session);
+  await persistSession(threadId, session);
 
   await sendWhatsAppMessage(cleanFrom, combined.response);
   console.log('[T5] sendWhatsAppMessage done', Date.now());
