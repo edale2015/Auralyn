@@ -63,10 +63,42 @@ function loadRegistry(): RegistryRow[] {
   return CACHE;
 }
 
+// Continuation markers: a message updating an ALREADY-discussed symptom
+// ("my head still hurts", "it aches again") is a follow-up, not a fresh chief
+// complaint. The old unanchored substring match re-fired on these and reset the
+// interview mid-conversation. Emergency phrasing is handled upstream
+// (matchesEmergencyBypass / hasInstantEscalationInText in kbIntake), so a more
+// conservative matcher here only falls back to the complaint menu — it never
+// bypasses red-flag/escalation handling.
+const CONTINUATION_MARKERS = /\b(still|again)\b/;
+
+// Does `alias` appear in `t` as a NEW-complaint mention, not an embedded
+// fragment or an anaphoric reference?
+//   - Left word boundary: rejects mid-word hits (e.g. alias "ache" in "headache").
+//     A trailing suffix is allowed so "headache" still matches "headaches".
+//   - Not preceded by "the ": "the headache is on the left" refers back to a
+//     headache already under discussion, so it is not a new chief complaint.
+function aliasMatches(t: string, alias: string): boolean {
+  let from = 0;
+  for (;;) {
+    const i = t.indexOf(alias, from);
+    if (i < 0) return false;
+    const prev = i > 0 ? t[i - 1] : "";
+    const leftBoundary = !prev || !/[a-z0-9]/.test(prev);
+    const anaphoric = i >= 4 && t.slice(i - 4, i) === "the ";
+    if (leftBoundary && !anaphoric) return true;
+    from = i + 1;
+  }
+}
+
 export function matchComplaintFromText(
   text: string
 ): { slug: string; display: string } | null {
   const t = text.toLowerCase().trim();
+
+  // A symptom echo / refinement is not a new chief complaint.
+  if (CONTINUATION_MARKERS.test(t)) return null;
+
   const rows = loadRegistry();
 
   for (const r of rows) {
@@ -75,7 +107,7 @@ export function matchComplaintFromText(
       .filter(Boolean);
 
     for (const a of aliases) {
-      if (t.includes(a)) {
+      if (aliasMatches(t, a)) {
         return { slug: r.CC_ID, display: r.LABEL || r.CC_ID };
       }
     }
@@ -83,7 +115,7 @@ export function matchComplaintFromText(
 
   for (const r of rows) {
     const slug = r.CC_ID.replaceAll("_", " ");
-    if (t.includes(slug)) {
+    if (aliasMatches(t, slug)) {
       return { slug: r.CC_ID, display: r.LABEL || r.CC_ID };
     }
   }
