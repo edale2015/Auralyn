@@ -11,9 +11,15 @@ interface BufferedLog {
 
 const buffer: BufferedLog[] = [];
 const FLUSH_SIZE = 50;
-const FLUSH_INTERVAL_MS = 5_000;
+const FLUSH_INTERVAL_MS = 10_000;
+const MAX_BUFFER_SIZE = 500;
+
+const MAX_BACKOFF_MS = 120_000;
+const BASE_BACKOFF_MS = 10_000;
 
 let flushTimer: ReturnType<typeof setInterval> | null = null;
+let consecutiveFailures = 0;
+let backoffUntil = 0;
 
 function startFlushTimer(): void {
   if (flushTimer) return;
@@ -23,7 +29,12 @@ function startFlushTimer(): void {
 
 export async function flushBuffer(): Promise<void> {
   if (buffer.length === 0) return;
-  const batch = buffer.splice(0, buffer.length);
+
+  if (Date.now() < backoffUntil) {
+    return;
+  }
+
+  const batch = buffer.splice(0, Math.min(buffer.length, FLUSH_SIZE));
 
   try {
     await db.insert(engineLogs).values(
@@ -35,20 +46,29 @@ export async function flushBuffer(): Promise<void> {
         createdAt: row.createdAt,
       }))
     );
+    consecutiveFailures = 0;
+    backoffUntil = 0;
   } catch (e: any) {
-    console.error("[WriteBuffer] Flush error:", e?.message);
-    for (const row of batch.slice(0, 10)) {
-      buffer.unshift(row);
+    consecutiveFailures++;
+    const backoffMs = Math.min(BASE_BACKOFF_MS * Math.pow(2, consecutiveFailures - 1), MAX_BACKOFF_MS);
+    backoffUntil = Date.now() + backoffMs;
+    console.error(`[WriteBuffer] Flush error (failure #${consecutiveFailures}, backing off ${backoffMs}ms):`, e?.message);
+    const kept = batch.slice(0, 10);
+    for (let i = kept.length - 1; i >= 0; i--) {
+      buffer.unshift(kept[i]);
     }
   }
 }
 
 export function bufferedInsert(log: BufferedLog): void {
+  if (buffer.length >= MAX_BUFFER_SIZE) {
+    buffer.shift();
+  }
   buffer.push(log);
   startFlushTimer();
 
-  if (buffer.length >= FLUSH_SIZE) {
-    flushBuffer().catch(console.error);
+  if (buffer.length >= FLUSH_SIZE && Date.now() >= backoffUntil) {
+    flushBuffer().catch(() => {});
   }
 }
 
@@ -57,6 +77,8 @@ export function getBufferStats() {
     bufferSize: buffer.length,
     flushSize: FLUSH_SIZE,
     flushIntervalMs: FLUSH_INTERVAL_MS,
+    consecutiveFailures,
+    backoffUntil: backoffUntil > Date.now() ? new Date(backoffUntil).toISOString() : null,
   };
 }
 

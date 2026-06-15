@@ -6,7 +6,7 @@ const STATEMENT_TIMEOUT_MS = 10_000;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL ?? undefined,
-  max: 20,
+  max: parseInt(process.env.PG_POOL_MAX || "5", 10),
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   ssl: process.env.NODE_ENV === "production"

@@ -1602,8 +1602,8 @@ app.use((req, res, next) => {
       startAnomalyEngine(5000);
       startAlertEngine(10_000);
       startGovernanceLoop(15_000);
-      startTwinSync(1_000);
-      startPredictiveLoop(5_000);
+      startTwinSync(30_000);
+      startPredictiveLoop(60_000);
       scheduleContextMetricsAggregate();
       const flags = getProductionFlags();
       if (flags.CHAOS_ENGINEERING_ENABLED) {
@@ -1635,7 +1635,7 @@ app.use((req, res, next) => {
       registerLoop("autonomousLoop", "Unified learning + drift detection", 300_000);
       startSelfLearningLoop(300_000); // 5 min — was 60 s
       startGoldenMonitor(300_000);
-      startAgentExecutor(1_000);
+      startAgentExecutor(30_000);
       startEvolutionLoop(600_000);
       startGlobalSyncLoop(600_000);
       if (process.env.NODE_ENV === "production") startSecretRotation();

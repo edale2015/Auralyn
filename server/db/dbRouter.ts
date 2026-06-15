@@ -9,7 +9,7 @@ function createPool(url: string, label: string) {
   if (!url) throw new Error(`[DbRouter] Missing connection string for ${label}`);
   return new Pool({
     connectionString: url,
-    max: 20,
+    max: parseInt(process.env.PG_POOL_MAX || "5", 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   });

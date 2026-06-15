@@ -10,7 +10,7 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 20,
+  max: parseInt(process.env.PG_POOL_MAX || "5", 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });
