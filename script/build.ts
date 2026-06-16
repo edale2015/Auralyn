@@ -1,6 +1,19 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import { execSync } from "child_process";
+
+// Resolve the commit being built so /health can report exactly what shipped.
+// Prefer the live git checkout; fall back to a deploy-provided env var; else "unknown".
+function resolveCommit(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return process.env.GIT_COMMIT_SHA || "unknown";
+  }
+}
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -39,6 +52,8 @@ async function buildAll() {
   await viteBuild();
 
   console.log("building server...");
+  const commit = resolveCommit();
+  console.log(`build commit: ${commit}`);
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
   const allDeps = [
     ...Object.keys(pkg.dependencies || {}),
@@ -54,6 +69,7 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      "process.env.BUILD_COMMIT": JSON.stringify(commit),
     },
     minify: true,
     external: externals,

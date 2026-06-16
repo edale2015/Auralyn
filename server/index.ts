@@ -484,7 +484,10 @@ declare module "http" {
 // Zero dependencies, instant 200. Used by UptimeRobot / external ping services
 // to prevent Cloud Run cold starts. Ping https://auralyn.tech/health every 5 min.
 app.get("/health", (_req, res) => {
-  res.status(200).json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
+  // BUILD_COMMIT is baked in at build time (script/build.ts); env/"dev" fallbacks
+  // cover deploy-provided SHAs and local `npm run dev`.
+  const commit = process.env.BUILD_COMMIT || process.env.GIT_COMMIT_SHA || "dev";
+  res.status(200).json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()), commit });
 });
 
 app.use(cookieParser());
