@@ -1,0 +1,171 @@
+1. Add AGENTS.md
+
+Put this in the root:
+
+# Auralyn Agent Rules
+
+You are working on Auralyn, a medical AI triage and documentation system.
+
+## Absolute rules
+
+Do not push directly to main.
+Always create a branch and pull request.
+Do not remove tests.
+Do not weaken safety checks.
+Do not change red-flag, emergency, medication, or disposition logic without explicit human approval.
+
+## Required before PR completion
+
+Run:
+npm install
+npm run lint --if-present
+npm run test --if-present
+npm run build --if-present
+
+## PR must include
+
+- Summary of changes
+- Files changed
+- Tests run
+- Clinical safety impact
+- Rollback instructions
+
+## Clinical safety zones
+
+Green zone:
+- UI
+- layout
+- copy
+- logs
+- dashboards
+- documentation
+- test fixtures
+
+Yellow zone:
+- scoring display
+- differential display
+- follow-up question wording
+- non-emergency logic
+
+Red zone:
+- emergency routing
+- red flags
+- medication safety
+- disposition logic
+- pediatric escalation logic
+
+Red-zone changes require explicit Dale approval.
+2. Add GitHub Actions test file
+
+Create:
+
+.github/workflows/test.yml
+
+Content:
+
+name: Auralyn Test Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm run test --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+This is the moat around the castle. Nothing merges unless it survives the little robot gauntlet. 🛡️
+
+Phase 2: Make GitHub Issues your iPhone command panel
+
+Create labels in GitHub:
+
+agent:frontend
+agent:backend
+agent:tests
+agent:clinical-review
+agent:docs
+zone:green
+zone:yellow
+zone:red
+priority:now
+priority:later
+
+Then from your iPhone, you can create issues like:
+
+Title:
+Add persistent cough smoke test
+
+Body:
+Create a test for the persistent cough flow.
+
+Rules:
+- Do not change clinical logic.
+- Do not edit red flags.
+- Only add tests.
+- Create a PR.
+- Include tests run and rollback notes.
+
+Labels:
+agent:tests
+zone:green
+priority:now
+Phase 3: First safe task
+
+Start with a tiny task. Do not begin with asthma scoring or disposition logic.
+
+Use this first issue:
+
+Title:
+Add Auralyn repo health check
+
+Body:
+Add or update documentation explaining how to run the Auralyn project locally.
+
+Include:
+- install command
+- dev command
+- test command
+- build command
+- environment variables needed, but do not expose secrets
+- how to verify the app is running
+
+Do not change clinical logic.
+Do not change backend behavior.
+Create a pull request.
+
+Labels:
+agent:docs
+zone:green
+priority:now
+What I need from you next
+
+Tell me what your GitHub repo uses:
+
+React/Vite?
+Next.js?
+Express?
+Node?
+TypeScript?
+Python?

@@ -195,3 +195,74 @@ pediatric_fever, copd_exacerbation, leg_swelling (DVT screen),
 medication_refill, rash (allergic vs infectious), back_pain,
 headache (migraine vs red flag), shortness_of_breath,
 decompensated_heart_failure, thyroid_symptoms
+
+---
+
+## GITHUB WORKFLOW RULES
+
+### Branch & PR policy
+
+- Do not push directly to main.
+- Always create a branch and pull request.
+- Do not remove tests.
+- Do not weaken safety checks.
+- Do not change red-flag, emergency, medication, or disposition logic without explicit Dale approval.
+
+### Required before PR completion
+
+Run:
+```
+npm install
+npm run lint --if-present
+npm run test --if-present
+npm run build --if-present
+```
+
+### Every PR must include
+
+- Summary of changes
+- Files changed
+- Tests run
+- Clinical safety impact (Green / Yellow / Red zone)
+- Rollback instructions
+
+---
+
+## CLINICAL SAFETY ZONES
+
+### 🟢 Green zone — safe to change freely
+- UI, layout, copy
+- Logs, dashboards, documentation
+- Test fixtures
+
+### 🟡 Yellow zone — change with care
+- Scoring display
+- Differential display
+- Follow-up question wording
+- Non-emergency logic
+
+### 🔴 Red zone — requires explicit Dale approval
+- Emergency routing
+- Red flags
+- Medication safety
+- Disposition logic
+- Pediatric escalation logic
+
+---
+
+## GITHUB ISSUE LABELS
+
+Use these labels on every issue:
+
+| Label | Meaning |
+|---|---|
+| `agent:frontend` | UI / frontend work |
+| `agent:backend` | API / backend work |
+| `agent:tests` | Test additions or fixes |
+| `agent:clinical-review` | Requires clinical review |
+| `agent:docs` | Documentation only |
+| `zone:green` | Safe changes |
+| `zone:yellow` | Caution required |
+| `zone:red` | Needs Dale approval |
+| `priority:now` | Do next |
+| `priority:later` | Backlog |
