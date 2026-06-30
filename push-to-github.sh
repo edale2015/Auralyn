@@ -1,25 +1,26 @@
 #!/bin/bash
 set -e
 
-REPO="https://github.com/edale2015/Auralyn.git"
+echo ""
+echo "Paste your GitHub token (ghp_...) and press Enter:"
+read -rs TOKEN
+echo ""
 
-if [ -z "$GITHUB_TOKEN" ]; then
-  echo ""
-  echo "Enter your GitHub token (ghp_...):"
-  read -rs GITHUB_TOKEN
-  echo ""
+if [ -z "$TOKEN" ]; then
+  echo "No token entered. Exiting."
+  exit 1
 fi
 
-REMOTE_URL="https://edale2015:${GITHUB_TOKEN}@github.com/edale2015/Auralyn.git"
+REMOTE_URL="https://edale2015:${TOKEN}@github.com/edale2015/Auralyn.git"
 
 git remote remove github 2>/dev/null || true
 git remote add github "$REMOTE_URL"
 
 echo "Pushing to GitHub..."
-GIT_ASKPASS=/bin/true git push github main 2>&1
+GIT_ASKPASS=/bin/true git push github main
 
 echo ""
-echo "Done! Cleaning up credentials..."
+echo "Cleaning up credentials..."
 git remote remove github
-git remote add github "$REPO"
-echo "Pushed successfully. Credentials removed from remote config."
+git remote add github "https://github.com/edale2015/Auralyn.git"
+echo "Success! Your code is on GitHub."
